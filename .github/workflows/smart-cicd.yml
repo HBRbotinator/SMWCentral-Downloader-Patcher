@@ -388,28 +388,28 @@ jobs:
       with:
         name: ${{ steps.windows_package.outputs.ARTIFACT_NAME }}
         path: ${{ steps.windows_package.outputs.ARTIFACT_NAME }}
-        retention-days: 30
+        retention-days: 5
     - name: Upload macOS artifact
       if: github.event_name != 'pull_request' && matrix.os == 'macos-latest'
       uses: actions/upload-artifact@v4
       with:
         name: ${{ steps.macos_package.outputs.ARTIFACT_NAME }}
         path: ${{ steps.macos_package.outputs.ARTIFACT_NAME }}
-        retention-days: 30
+        retention-days: 5
     - name: Upload Linux tar.gz artifact
       if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v4
       with:
         name: ${{ steps.linux_package.outputs.TARBALL_NAME }}
         path: ${{ steps.linux_package.outputs.TARBALL_NAME }}
-        retention-days: 30
+        retention-days: 5
     - name: Upload Linux AppImage artifact
       if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v4
       with:
         name: ${{ steps.linux_package.outputs.APPIMAGE_NAME }}
         path: ${{ steps.linux_package.outputs.APPIMAGE_NAME }}
-        retention-days: 30
+        retention-days: 5
   # Create pre-release when merging to main
   create-prerelease:
     needs: build-and-test
