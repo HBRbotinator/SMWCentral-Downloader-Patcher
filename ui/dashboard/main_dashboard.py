@@ -37,9 +37,11 @@ class DashboardPage:
         
     def create(self):
         """Create the dashboard page UI with proper scrolling"""
-        # Main frame with standardized padding
-        self.frame = ttk.Frame(self.parent_frame, padding=get_page_padding())
-        
+        # No padding here so the canvas/scrollbar fill the frame and the
+        # scrollbar sits flush to the window edge. Page padding lives on the
+        # inner scrollable_frame (see _create_scrollable_container).
+        self.frame = ttk.Frame(self.parent_frame)
+
         # Create scrollable container
         self._create_scrollable_container()
         

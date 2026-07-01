@@ -4,6 +4,21 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+## [5.1] - 2026-07-01
+
+### Added
+- **Save Data Sync**: New Settings utility to sync completion status from your emulator/console save files
+  - Point it at a folder of `.srm`/`.sav` battery saves; matching hacks in your collection are marked completed
+  - Completion is detected by reading the SMW SRAM collected-exit count (byte `0x8C`) and comparing it to each hack's total `exits` — or optionally marking every matched save as completed via a toggle
+  - `completed_date` is taken from each save file's last-modified timestamp
+  - `.srm` and `.sav` files are read identically (same raw SMW SRAM layout); play time is not stored in SNES saves, so `time_to_beat` is left untouched
+  - Preview & confirm dialog lists every proposed change with per-row checkboxes; unmatched files are shown in a readable, scrollable list and nothing is written until you apply
+  - Garbage/oversized reads (e.g. FXPak-padded files) are flagged "uncertain" rather than falsely completed
+  - **Import from SMWC**: unmatched saves can be looked up on SMWCentral by name and imported as full collection entries — keyed by the real SMWC ID (with difficulty/type/exits/authors/date), so a later download or update merges into the same entry instead of creating a duplicate. Ambiguous or no-match lookups are reported, never guessed; saves that resolve to a hack already in your collection just update its completion.
+
+### Fixed
+- **Settings page now scrolls**: the Settings page is wrapped in a scrollable container so content (including the log window) is never clipped on smaller/minimum-size windows. The mouse wheel scrolls the page, except over the log area where it scrolls the log's own contents.
+
 ## [5.0] - 2026-03-15
 
 ### Added

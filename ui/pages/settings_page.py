@@ -112,15 +112,38 @@ class SettingsPage:
 
     def create(self):
         """Create the settings page"""
-        self.frame = ttk.Frame(self.parent, padding=get_page_padding())
+        # No padding here: the canvas/scrollbar fill the frame so the scrollbar
+        # sits flush to the window edge. Page padding lives on `content` below.
+        self.frame = ttk.Frame(self.parent)
         
         # Configure styles
         style = ttk.Style()
         for widget in ("TCheckbutton", "TRadiobutton", "TButton", "TCombobox", "TLabel"):
             style.configure(f"Custom.{widget}", font=self.font)
 
+        # Scrollable container so the page is never cut off on smaller windows.
+        # All page content lives in `content`; the log widget keeps its own inner
+        # scrollbar for log lines, while this canvas scrolls the page as a whole.
+        try:
+            canvas_bg = style.lookup("TFrame", "background") or None
+        except Exception:
+            canvas_bg = None
+        self._scroll_canvas = tk.Canvas(
+            self.frame, highlightthickness=0,
+            **({"bg": canvas_bg} if canvas_bg else {})
+        )
+        scrollbar = ttk.Scrollbar(self.frame, orient="vertical", command=self._scroll_canvas.yview)
+        self._scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        self._scroll_canvas.pack(side="left", fill="both", expand=True)
+
+        # Padding lives on the inner content frame so the sections stay inset
+        # from the scrollbar (no overlap) while the scrollbar itself is flush right.
+        content = ttk.Frame(self._scroll_canvas, padding=get_page_padding())
+        self._scroll_window = self._scroll_canvas.create_window((0, 0), window=content, anchor="nw")
+
         # Top row: Setup section on left, Multi-type options on right - EQUAL WIDTHS
-        top_row_frame = ttk.Frame(self.frame)
+        top_row_frame = ttk.Frame(content)
         top_row_frame.pack(fill="x", pady=(0, 20))
         
         # Setup section (left side) - equal width, no extra wrapper
@@ -214,7 +237,7 @@ class SettingsPage:
         self._load_auto_check_setting()
 
         # Second row: Emulator and Difficulty Migration side by side
-        second_row_frame = ttk.Frame(self.frame)
+        second_row_frame = ttk.Frame(content)
         second_row_frame.pack(fill="x", pady=(5, 20))
         
         # Emulator Configuration Section (left side)
@@ -339,8 +362,71 @@ class SettingsPage:
         )
         self.fetch_metadata_button.pack(side="left")
 
+        # Save Data Sync Section (full-width row)
+        save_sync_frame = ttk.LabelFrame(content, text="Save Data Sync", padding=(15, 10, 15, 15))
+        save_sync_frame.pack(fill="x", pady=(0, 20))
+
+        ttk.Label(
+            save_sync_frame,
+            text="Point this at your emulator/console SAVE folder (.srm or .sav files). Matching hacks in "
+                 "your collection are marked completed, with the completion date taken from each save's "
+                 "last-modified time. Play time is not stored in SNES saves, so it is left untouched.",
+            style="Custom.TLabel",
+            wraplength=760
+        ).pack(anchor="w", pady=(0, 10))
+
+        # Directory picker row
+        save_dir_frame = ttk.Frame(save_sync_frame)
+        save_dir_frame.pack(fill="x", pady=(0, 8))
+
+        ttk.Label(save_dir_frame, text="Save Directory:", style="Custom.TLabel").pack(side="left", padx=(0, 10))
+
+        self.save_sync_dir_entry = ttk.Entry(save_dir_frame, width=50)
+        self.save_sync_dir_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        ttk.Button(
+            save_dir_frame,
+            text="Browse",
+            command=self._browse_save_dir,
+            style="Custom.TButton"
+        ).pack(side="left")
+
+        # Mark-all toggle
+        self.save_sync_mark_all_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            save_sync_frame,
+            text="Mark ALL matched saves as completed "
+                 "(off: only when collected exits ≥ the hack's exit count)",
+            variable=self.save_sync_mark_all_var,
+            style="Custom.TCheckbutton",
+            command=self._save_save_sync_settings
+        ).pack(anchor="w", pady=(0, 8))
+
+        # Scan button + status
+        scan_row = ttk.Frame(save_sync_frame)
+        scan_row.pack(fill="x")
+
+        self.scan_saves_button = ttk.Button(
+            scan_row,
+            text="Scan Saves",
+            command=self._scan_saves,
+            style="Accent.TButton"
+        )
+        self.scan_saves_button.pack(side="left")
+
+        self.save_sync_status_label = ttk.Label(
+            scan_row,
+            text="",
+            style="Custom.TLabel"
+        )
+        self.save_sync_status_label.pack(side="left", padx=(12, 0))
+
+        # Load persisted save-sync settings
+        self._load_save_sync_settings()
+        self.save_sync_dir_entry.bind("<FocusOut>", self._save_save_sync_settings)
+
         # Log section with level dropdown and clear button
-        log_header_frame = ttk.Frame(self.frame)
+        log_header_frame = ttk.Frame(content)
         log_header_frame.pack(fill="x", pady=(0, 5))
         
         # Log level dropdown (left side)
@@ -367,15 +453,56 @@ class SettingsPage:
         ).pack(side="right")
         
         # Log text area - takes remaining space to bottom
-        log_text = self.logger.setup(self.frame)
+        log_text = self.logger.setup(content)
         log_text.pack(fill="both", expand=True, pady=(2, 5))
-        
+
         # Store reference for theme toggling
         root = self.parent.winfo_toplevel()
         root.log_text = log_text
-        
+
+        # Wire up scrolling now that all content exists.
+        self._setup_page_scrolling(content, log_text)
+
         return self.frame
     
+    def _setup_page_scrolling(self, content, log_text):
+        """Make the settings page scroll vertically and keep the log usable.
+
+        The whole page lives inside a canvas so nothing is clipped on small
+        windows. The mouse wheel scrolls the page everywhere except over the log
+        text area, where it keeps scrolling the log's own contents.
+        """
+        canvas = self._scroll_canvas
+
+        def _update_scrollregion(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _fit_width(event):
+            # Match the inner frame to the canvas width; let it grow to fill the
+            # viewport height so the log still expands when there is spare room.
+            canvas.itemconfigure(self._scroll_window, width=event.width)
+            req_h = content.winfo_reqheight()
+            canvas.itemconfigure(self._scroll_window, height=max(req_h, event.height))
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        content.bind("<Configure>", _update_scrollregion)
+        canvas.bind("<Configure>", _fit_width)
+
+        def _on_wheel(event):
+            canvas.yview_scroll(int(-event.delta / 120), "units")
+            return "break"
+
+        def _bind_wheel(widget):
+            for child in widget.winfo_children():
+                # Skip the log's own Text widget so the wheel scrolls log lines.
+                if isinstance(child, tk.Text):
+                    continue
+                child.bind("<MouseWheel>", _on_wheel)
+                _bind_wheel(child)
+
+        canvas.bind("<MouseWheel>", _on_wheel)
+        _bind_wheel(content)
+
     def _on_log_level_changed(self, event=None):
         """Handle log level change"""
         if self.log_level_combo:
@@ -1087,3 +1214,124 @@ class SettingsPage:
         state = "normal" if enabled else "disabled"
         self.emulator_args_entry.config(state=state)
         self._save_emulator_settings()
+
+    # ------------------------------------------------------------------ #
+    # Save Data Sync
+    # ------------------------------------------------------------------ #
+
+    def _load_save_sync_settings(self):
+        """Load save-sync settings from config into the widgets."""
+        try:
+            config = self.setup_section.config
+            self.save_sync_dir_entry.delete(0, tk.END)
+            self.save_sync_dir_entry.insert(0, config.get("save_sync_dir", ""))
+            self.save_sync_mark_all_var.set(config.get("save_sync_mark_all", False))
+        except Exception as e:
+            print(f"Error loading save sync settings: {e}")
+
+    def _save_save_sync_settings(self, event=None):
+        """Persist save-sync settings to config."""
+        try:
+            config = self.setup_section.config
+            config.set("save_sync_dir", self.save_sync_dir_entry.get().strip())
+            config.set("save_sync_mark_all", self.save_sync_mark_all_var.get())
+            config.save()
+        except Exception as e:
+            print(f"Error saving save sync settings: {e}")
+
+    def _browse_save_dir(self):
+        """Browse for the emulator/console save directory."""
+        try:
+            from platform_utils import pick_directory
+            current = self.save_sync_dir_entry.get().strip()
+            selected = pick_directory(
+                title="Select Save Directory",
+                initial_dir=current if current and os.path.isdir(current) else None,
+            )
+            if not selected:
+                return
+            self.save_sync_dir_entry.delete(0, tk.END)
+            self.save_sync_dir_entry.insert(0, selected)
+            self._save_save_sync_settings()
+        except Exception as e:
+            messagebox.showerror("Save Data Sync", f"Failed to pick directory: {e}")
+
+    def _scan_saves(self):
+        """Scan the save directory and open the review dialog."""
+        directory = self.save_sync_dir_entry.get().strip()
+        if not directory or not os.path.isdir(directory):
+            messagebox.showerror(
+                "Save Data Sync",
+                "Please select a valid save directory first."
+            )
+            return
+
+        data_manager = getattr(self, "data_manager", None)
+        if data_manager is None:
+            messagebox.showerror(
+                "Save Data Sync",
+                "Collection data is not available yet. Open the Collection tab once, then try again."
+            )
+            return
+
+        self._save_save_sync_settings()
+        mark_all = self.save_sync_mark_all_var.get()
+
+        self.scan_saves_button.config(state="disabled", text="Scanning...")
+        self.save_sync_status_label.config(text="⏳ Scanning saves...", foreground=STATUS_COLOR_INFO)
+        self.frame.update_idletasks()
+
+        def worker():
+            error = None
+            candidates = []
+            try:
+                import save_sync
+                hacks = data_manager.get_all_hacks(include_obsolete=False)
+                candidates = save_sync.scan_saves(directory, hacks, mark_all=mark_all)
+            except Exception as e:
+                error = e
+
+            # Marshal results back to the Tk main thread.
+            self.frame.after(0, lambda: self._on_scan_complete(candidates, error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_scan_complete(self, candidates, error):
+        """Handle scan results on the main thread and show the review dialog."""
+        self.scan_saves_button.config(state="normal", text="Scan Saves")
+
+        if error is not None:
+            self.save_sync_status_label.config(text="❌ Scan failed", foreground=STATUS_COLOR_ERROR)
+            messagebox.showerror("Save Data Sync", f"Failed to scan saves:\n{error}")
+            if self.logger:
+                self.logger.log(f"Save data scan failed: {error}", "Error")
+            return
+
+        if not candidates:
+            self.save_sync_status_label.config(
+                text="No .srm/.sav files found", foreground=STATUS_COLOR_WARNING
+            )
+            messagebox.showinfo(
+                "Save Data Sync",
+                "No .srm or .sav files were found in that directory."
+            )
+            return
+
+        matched = [c for c in candidates if c.hack_id]
+        unmatched = [c for c in candidates if not c.hack_id]
+        self.save_sync_status_label.config(
+            text=f"{len(matched)} matched · {len(unmatched)} unmatched",
+            foreground=STATUS_COLOR_SUCCESS
+        )
+
+        from ui.save_sync_dialog import SaveSyncDialog
+        reload_cb = getattr(self, "reload_collection_callback", None)
+        dialog = SaveSyncDialog(
+            self.frame,
+            candidates,
+            self.data_manager,
+            logger=self.logger,
+            on_applied=reload_cb,
+            mark_all=self.save_sync_mark_all_var.get(),
+        )
+        dialog.show()

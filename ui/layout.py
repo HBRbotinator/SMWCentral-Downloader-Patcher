@@ -113,6 +113,10 @@ class MainLayout:
         # Register reload callback for metadata migration
         self.settings_page.reload_collection_callback = self.collection_page._refresh_data_and_table
 
+        # Share the collection page's data manager so Save Data Sync writes through
+        # the same in-memory source of truth (avoids dual-manager save conflicts).
+        self.settings_page.data_manager = self.collection_page.data_manager
+
         # Wire up emulator settings callback so setting/changing the emulator path
         # immediately refreshes the play icon column in the collection table.
         self.settings_page.emulator_settings_callback = self.collection_page.refresh_emulator_cache
