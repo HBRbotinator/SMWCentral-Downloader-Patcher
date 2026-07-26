@@ -1,10 +1,13 @@
-requests
-patch
-pywinstyles>=1.0.0; sys_platform == "win32"
-sv-ttk
-pillow>=8.0.0
-ips_util
-python-bps
-packaging
-customtkinter
+# Runtime dependencies for SMWC Downloader & Patcher.
+# Keep direct dependencies exactly constrained so local and CI installs use
+# the same reviewed versions. Platform-specific dependencies use PEP 508 markers.
+requests==2.34.2
+patch==1.16
+pywinstyles==1.8; sys_platform == "win32"
+sv-ttk==2.6.1
+pillow==12.3.0
+ips-util==1.0
+python-bps==5
+packaging==26.2
+customtkinter==5.2.2
 websockets==12.0
