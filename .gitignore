@@ -9,6 +9,7 @@ venv/
 dist/
 build/
 release/
+artifacts/
 *.exe
 *.zip
 *.spec.backup
