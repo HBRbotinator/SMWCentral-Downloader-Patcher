@@ -408,7 +408,7 @@ def build_candidate(target_name: str) -> dict[str, Any]:
     application_spec, updater_spec = _specs(target_name)
     environment = os.environ.copy()
     environment["SMWC_BUILD_TARGET"] = target_name
-    common_arguments = [
+    common_arguments: list[str | os.PathLike[str]] = [
         sys.executable,
         "-m",
         "PyInstaller",
