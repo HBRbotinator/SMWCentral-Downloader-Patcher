@@ -26,6 +26,11 @@ PADDING_GUIDE.md
 # Development files
 *.log
 *.tmp
+.coverage
+coverage.json
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 .DS_Store
 test_canvas.py
 
