@@ -20,6 +20,7 @@ from tkinter import ttk
 from api_pipeline import run_pipeline
 from ui import setup_ui, update_log_colors
 from utils import resource_path
+from product_identity import PRODUCT_DISPLAY_NAME, VERSION
 import sv_ttk
 
 # Multiple approaches to suppress threading cleanup errors
@@ -50,8 +51,6 @@ try:
         pywinstyles = None
 except ImportError:
     pywinstyles = None
-
-VERSION = "v5.1"
 
 
 def apply_theme_to_titlebar(root):
@@ -816,7 +815,7 @@ def main():
         set_difficulty_lookup(difficulty_lookup)
         
         root = tk.Tk()
-        root.title("SMWC Downloader & Patcher")
+        root.title(PRODUCT_DISPLAY_NAME)
 
         # Set responsive window geometry based on screen size
         screen_width = root.winfo_screenwidth()

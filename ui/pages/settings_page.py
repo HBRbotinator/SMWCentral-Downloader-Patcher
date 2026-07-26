@@ -9,6 +9,7 @@ import platform
 # Add path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+from product_identity import VERSION
 from utils import TYPE_KEYMAP
 from ui_constants import get_page_padding, get_section_padding, STATUS_COLOR_INFO, STATUS_COLOR_SUCCESS, STATUS_COLOR_WARNING, STATUS_COLOR_ERROR
 
@@ -559,7 +560,6 @@ class SettingsPage:
         try:
             # Import here to avoid circular imports
             from updater import Updater, UpdateDialog
-            from main import VERSION
             
             # Disable button during check
             self.check_updates_button.config(state="disabled", text="Checking...")

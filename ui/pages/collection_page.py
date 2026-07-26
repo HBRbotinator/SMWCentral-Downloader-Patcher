@@ -23,12 +23,7 @@ HOVER_CURSOR = "pointinghand" if platform.system() == "Darwin" else "hand2"
 from utils import get_sorted_folder_name, move_hack_to_new_difficulty, get_primary_type, format_types_display
 from colors import get_colors
 
-# Import VERSION from main module
-try:
-    from main import VERSION
-except ImportError:
-    from version_manager import get_version
-    VERSION = get_version()
+from product_identity import VERSION
 
 class CollectionPage:
     """Simplified hack collection page with extracted components"""
