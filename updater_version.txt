@@ -16,11 +16,11 @@ VSVersionInfo(
         u'040904B0',
         [
           StringStruct(u'CompanyName', u'iamtheratio and contributors'),
-          StringStruct(u'FileDescription', u'SMWC Downloader & Patcher'),
+          StringStruct(u'FileDescription', u'SMWC Downloader & Patcher Updater'),
           StringStruct(u'FileVersion', u'5.1.0-dev.1'),
-          StringStruct(u'InternalName', u'SMWC Downloader'),
+          StringStruct(u'InternalName', u'SMWC Updater'),
           StringStruct(u'LegalCopyright', u'Copyright (c) 2025-2026 iamtheratio and contributors'),
-          StringStruct(u'OriginalFilename', u'SMWC Downloader.exe'),
+          StringStruct(u'OriginalFilename', u'SMWC Updater.exe'),
           StringStruct(u'ProductName', u'SMWC Downloader & Patcher'),
           StringStruct(u'ProductVersion', u'5.1.0-dev.1')
         ]
