@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 import struct
 import tarfile
 import tempfile
@@ -239,6 +240,52 @@ class CandidateVerificationTests(unittest.TestCase):
             / "SMWC Downloader",
             build_candidate._main_binary("macos-arm64"),
         )
+
+    def test_windows_metadata_uses_environment_for_paths_with_spaces(self):
+        binary = Path(r"D:\candidate files\SMWC Downloader.exe")
+        metadata = {
+            "ProductName": "SMWC Downloader & Patcher",
+            "ProductVersion": "5.1.0-dev.1",
+            "FileVersion": "5.1.0-dev.1",
+            "OriginalFilename": "SMWC Downloader.exe",
+        }
+        completed = subprocess.CompletedProcess(
+            args=["powershell"],
+            returncode=0,
+            stdout=json.dumps(metadata),
+            stderr="",
+        )
+        with patch.object(
+            build_candidate.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            result = build_candidate._validate_windows_metadata(binary)
+
+        command = run.call_args.args[0]
+        environment = run.call_args.kwargs["env"]
+        self.assertIn("$env:SMWC_CANDIDATE_BINARY", command[-1])
+        self.assertNotIn("$args[0]", command[-1])
+        self.assertEqual(str(binary), environment["SMWC_CANDIDATE_BINARY"])
+        self.assertEqual(metadata, result["windows_version_info"])
+
+    def test_windows_metadata_failure_includes_powershell_details(self):
+        binary = Path(r"D:\candidate files\SMWC Downloader.exe")
+        failure = subprocess.CalledProcessError(
+            1,
+            ["powershell"],
+            stderr="Get-Item could not find the candidate executable",
+        )
+        with patch.object(
+            build_candidate.subprocess,
+            "run",
+            side_effect=failure,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Get-Item could not find the candidate executable",
+            ):
+                build_candidate._validate_windows_metadata(binary)
 
     def test_windows_package_contains_application_updater_and_identity(self):
         with tempfile.TemporaryDirectory() as temporary:

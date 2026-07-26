@@ -344,14 +344,29 @@ def _validate_windows_metadata(binary: Path) -> dict[str, Any]:
         "-NonInteractive",
         "-Command",
         (
-            "$v=(Get-Item -LiteralPath $args[0]).VersionInfo; "
+            "$ErrorActionPreference='Stop'; "
+            "$v=(Get-Item -LiteralPath $env:SMWC_CANDIDATE_BINARY).VersionInfo; "
             "@{ProductName=$v.ProductName;ProductVersion=$v.ProductVersion;"
             "FileVersion=$v.FileVersion;OriginalFilename=$v.OriginalFilename}"
             "|ConvertTo-Json -Compress"
         ),
-        str(binary),
     ]
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
+    environment = os.environ.copy()
+    environment["SMWC_CANDIDATE_BINARY"] = str(binary)
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or "").strip()
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(
+            f"Unable to read Windows version metadata for {binary}{suffix}"
+        ) from error
     payload = json.loads(result.stdout.strip())
     if payload.get("ProductName") != PRODUCT_DISPLAY_NAME:
         raise RuntimeError(
