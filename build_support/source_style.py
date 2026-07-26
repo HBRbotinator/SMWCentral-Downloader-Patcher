@@ -17,6 +17,8 @@ DEFAULT_PATHS = (
     "test_candidate_verification.py",
     "test_dependency_constraints.py",
     "test_quality_gate.py",
+    "test_ci_workflow.py",
+    "test_release_gate.py",
 )
 
 

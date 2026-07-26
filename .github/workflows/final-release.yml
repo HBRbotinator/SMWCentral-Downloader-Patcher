@@ -1,148 +1,162 @@
 name: Final Release
 
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable release tag, for example v5.1.0
+        required: true
+        type: string
+
 permissions:
   contents: write
   actions: read
 
-on:
-  push:
-    tags:
-      - 'v*.*.*'
-      - 'v*.*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (e.g., v4.4.0)'
-        required: true
-        type: string
+concurrency:
+  group: final-release-${{ github.repository }}
+  cancel-in-progress: false
+
 env:
-  PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.13.14"
+
 jobs:
-  promote-to-release:
-    runs-on: ubuntu-latest
+  publish-verified-release:
+    name: Publish complete verified release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    - name: Get version and tag
-      id: get_version
-      run: |
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          TAG="${{ github.event.inputs.tag }}"
-        else
-          TAG=${GITHUB_REF#refs/tags/}
-        fi
-        VERSION=$(echo $TAG | sed 's/^v//')
-        echo "TAG=$TAG" >> $GITHUB_OUTPUT
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "Final release version: $VERSION"
-    # Check if a pre-release already exists for this version
-    - name: Find existing pre-release
-      id: find_prerelease
-      run: |
-        # Use v prefix for pre-release tag (e.g., v4.4-pre)
-        PRE_TAG="v${{ steps.get_version.outputs.VERSION }}-pre"
-        echo "Looking for pre-release tag: $PRE_TAG"
-        # Check if pre-release exists
-        PRERELEASE_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/${{ github.repository }}/releases/tags/$PRE_TAG" \
-          | jq -r '.id // "null"')
-        echo "PRERELEASE_ID=$PRERELEASE_ID" >> $GITHUB_OUTPUT
-        echo "PRE_TAG=$PRE_TAG" >> $GITHUB_OUTPUT
-        echo "Pre-release ID: $PRERELEASE_ID"
-    # Extract changelog for current version from README
-    - name: Extract changelog
-      id: changelog
-      run: |
-        VERSION="${{ steps.get_version.outputs.VERSION }}"
-        # Extract the changelog section for current version from README.md
-        # Look for "### v4.4.0" pattern and extract until next "### v" or end
-        CHANGELOG=$(awk "/### v${VERSION}\.0/{flag=1; next} /### v[0-9]/{flag=0} flag" README.md)
-        # If no changelog found, create a generic one
-        if [ -z "$CHANGELOG" ]; then
-          CHANGELOG="- Latest release with improvements and bug fixes"
-        fi
-        # Format the changelog for release notes
-        echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-        echo "### What's New in $VERSION:" >> $GITHUB_OUTPUT
-        echo "$CHANGELOG" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        echo "Extracted changelog:"
-        echo "$CHANGELOG"
-    # If pre-release exists, promote it to final release
-    - name: Promote pre-release to final release
-      if: steps.find_prerelease.outputs.PRERELEASE_ID != 'null'
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        echo "Promoting pre-release ${{ steps.find_prerelease.outputs.PRE_TAG }} to final release ${{ steps.get_version.outputs.TAG }}"
-        
-        # Use GitHub CLI to update the release (avoids JSON escaping issues)
-        gh release edit "${{ steps.find_prerelease.outputs.PRE_TAG }}" \
-          --tag "${{ steps.get_version.outputs.TAG }}" \
-          --title "SMWC Downloader & Patcher ${{ steps.get_version.outputs.VERSION }}" \
-          --notes "## SMWC Downloader & Patcher ${{ steps.get_version.outputs.VERSION }}
+      - name: Resolve requested tag
+        id: requested
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-        🎮 **Multi-platform ROM hack downloader and patcher for Super Mario World Central**
+      - name: Checkout tagged source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.requested.outputs.tag }}
+          fetch-depth: 0
 
-        ### Platform Support:
-        - ✅ **Windows 10/11** (x64)  
-        - ✅ **macOS** (Universal: Intel + Apple Silicon)
-        - ✅ **Linux** (x64)
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
-        ${{ steps.changelog.outputs.CHANGELOG }}
+      - name: Validate tag and manifest identity
+        id: identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.requested.outputs.tag }}
+        run: |
+          set -euo pipefail
+          revision="$(git rev-parse HEAD)"
+          python - "$RELEASE_TAG" <<'PY'
+          import sys
+          from build_support.release_gate import validate_release_tag
+          validate_release_tag(sys.argv[1])
+          PY
+          version="$(python -c 'from product_identity import PRODUCT_VERSION; print(PRODUCT_VERSION)')"
+          product="$(python -c 'from product_identity import PRODUCT_DISPLAY_NAME; print(PRODUCT_DISPLAY_NAME)')"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "product=$product" >> "$GITHUB_OUTPUT"
 
-        ### Installation Instructions:
+      - name: Locate successful same-revision Candidate CI run
+        id: candidate
+        shell: bash
+        env:
+          REVISION: ${{ steps.identity.outputs.revision }}
+        run: |
+          set -euo pipefail
+          gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/smart-cicd.yml/runs" \
+            -f head_sha="$REVISION" \
+            -f status=success \
+            -f event=push \
+            -f per_page=100 > candidate-runs.json
+          run_id="$(jq -r --arg revision "$REVISION" --arg repository "$GITHUB_REPOSITORY" \
+            '[.workflow_runs[] | select(.head_sha == $revision and .conclusion == "success" and .event == "push" and .head_repository.full_name == $repository)] | sort_by(.created_at) | last | .id // empty' \
+            candidate-runs.json)"
+          if [[ -z "$run_id" ]]; then
+            echo "No successful Candidate CI run exists for source revision $REVISION" >&2
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
 
-        **Windows:**
-        1. Download \`SMWC-Downloader-${{ steps.get_version.outputs.VERSION }}-Windows-x64.zip\`
-        2. Extract the ZIP file
-        3. Run \`SMWC Downloader.exe\`
+      - name: Download every native candidate evidence set
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.candidate.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mapfile -t targets < <(python -m build_support.release_gate --print-targets)
+          download_args=()
+          for target in "${targets[@]}"; do
+            download_args+=(--name "$target")
+          done
+          gh run download "$RUN_ID" "${download_args[@]}" --dir release-input
 
-        **macOS:**
-        1. Download \`SMWC-Downloader-${{ steps.get_version.outputs.VERSION }}-macOS-Universal.dmg\`
-        2. Mount the DMG file and drag to Applications folder
-        3. Right-click → Open (first time only to bypass Gatekeeper)
+      - name: Require complete verified same-revision artifacts
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.requested.outputs.tag }}
+          REVISION: ${{ steps.identity.outputs.revision }}
+        run: |
+          set -euo pipefail
+          python -m build_support.release_gate \
+            --artifacts-dir release-input \
+            --expected-revision "$REVISION" \
+            --expected-tag "$RELEASE_TAG" \
+            --output release-input/release-manifest.json
 
-        **Linux:**
-        1. Download \`SMWC-Downloader-${{ steps.get_version.outputs.VERSION }}-Linux-x64.tar.gz\` (traditional) or \`SMWC-Downloader-${{ steps.get_version.outputs.VERSION }}-x86_64.AppImage\` (portable)
-        2. **tar.gz**: Extract and run \`./install.sh\` for system integration
-        3. **AppImage**: Make executable (\`chmod +x\`) and run directly
-        
-        > **Security Note**: These executables may trigger antivirus warnings due to PyInstaller packaging. This is a common false positive." \
-          --draft=false \
-          --prerelease=false
-        
-        echo "✅ Promoted pre-release to final release"
-    # If no pre-release exists, create a new final release (fallback)
-    - name: Create new final release
-      if: steps.find_prerelease.outputs.PRERELEASE_ID == 'null'
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        echo "⚠️ No pre-release found for version ${{ steps.get_version.outputs.VERSION }}"
-        echo "Creating new final release with README changelog..."
-        
-        # Use GitHub CLI instead of curl to avoid JSON escaping issues
-        gh release create "${{ steps.get_version.outputs.TAG }}" \
-          --title "SMWC Downloader & Patcher ${{ steps.get_version.outputs.VERSION }}" \
-          --notes "## SMWC Downloader & Patcher ${{ steps.get_version.outputs.VERSION }}
+      - name: Refuse to replace an existing release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.requested.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to replace it" >&2
+            exit 1
+          fi
 
-        🎮 **Multi-platform ROM hack downloader and patcher for Super Mario World Central**
+      - name: Publish verified release assets
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.requested.outputs.tag }}
+          PRODUCT: ${{ steps.identity.outputs.product }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          REVISION: ${{ steps.identity.outputs.revision }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          ## $PRODUCT $VERSION
 
-        ⚠️ **Note**: This release was created without a pre-release stage. Please ensure all builds are tested.
+          Native packages for Windows x64, Linux x64, macOS Apple Silicon,
+          and macOS Intel were built and frozen-smoke-tested by Candidate CI.
 
-        ### Platform Support:
-        - ✅ **Windows 10/11** (x64)
-        - ✅ **macOS** (Universal: Intel + Apple Silicon)
-        - ✅ **Linux** (x64)
+          Source revision: \`$REVISION\`
 
-        ${{ steps.changelog.outputs.CHANGELOG }}
-
-        ### Installation Instructions:
-        Please download the appropriate package for your platform and follow the installation guide in the README.
-
-        > **Note**: If you see this message, consider using the pre-release workflow for better testing." \
-          --draft=false \
-          --prerelease=false
-        
-        echo "✅ Created new final release with README changelog"
+          Checksums, smoke reports, verification reports, and the consolidated
+          release manifest are attached with the packages.
+          EOF
+          mapfile -t assets < <(find release-input -type f -print | sort)
+          if [[ "${#assets[@]}" -eq 0 ]]; then
+            echo "No validated release assets were found" >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" "${assets[@]}" \
+            --verify-tag \
+            --title "$PRODUCT $VERSION" \
+            --notes-file release-notes.md

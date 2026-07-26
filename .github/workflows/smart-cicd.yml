@@ -69,7 +69,8 @@ jobs:
         with:
           name: source-quality-coverage
           path: .coverage
-          if-no-files-found: warn
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 30
 
   candidate-build:

@@ -95,6 +95,13 @@ class CandidateWorkflowTests(unittest.TestCase):
         self.assertNotIn("pip install pyinstaller", self.text.casefold())
         self.assertNotIn("pip install --upgrade pip", self.text.casefold())
 
+    def test_hidden_coverage_database_is_uploaded_as_required_evidence(self) -> None:
+        self.assertIn("path: .coverage", self.text)
+        self.assertIn("include-hidden-files: true", self.text)
+        coverage_block = self.text.split("name: source-quality-coverage", 1)[1]
+        coverage_block = coverage_block.split("candidate-build:", 1)[0]
+        self.assertIn("if-no-files-found: error", coverage_block)
+
     def test_verified_outputs_are_uploaded_for_each_target(self) -> None:
         self.assertIn("artifacts/${{ matrix.artifact_name }}", self.text)
         self.assertIn("artifacts/${{ matrix.artifact_name }}.sha256", self.text)
