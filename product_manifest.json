@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "product": {
+    "id": "smwc-downloader",
+    "display_name": "SMWC Downloader & Patcher",
+    "version": "5.1.0-dev.1",
+    "pep440_version": "5.1.0.dev1",
+    "release_channel": "development",
+    "publisher": "iamtheratio and contributors",
+    "copyright": "Copyright (c) 2025-2026 iamtheratio and contributors",
+    "python_requires": ">=3.11,<3.14"
+  },
+  "versions": {
+    "windows_numeric": [
+      5,
+      1,
+      0,
+      1
+    ],
+    "macos_short": "5.1.0",
+    "macos_bundle": "5.1.0.1"
+  },
+  "components": {
+    "application": {
+      "entry_point": "main.py",
+      "windows_name": "SMWC Downloader",
+      "linux_name": "smwc-downloader",
+      "macos_bundle_name": "SMWC Downloader.app",
+      "macos_bundle_identifier": "com.iamtheratio.smwc-downloader"
+    },
+    "updater": {
+      "entry_point": "standalone_updater.py",
+      "windows_name": "SMWC Updater",
+      "linux_name": "smwc-updater",
+      "macos_bundle_name": "SMWC Updater.app",
+      "macos_bundle_identifier": "com.iamtheratio.smwc-updater",
+      "product_id": "smwc-downloader",
+      "release_channel": "development"
+    }
+  },
+  "targets": {
+    "windows-x86_64": {
+      "platform": "windows",
+      "architecture": "x86_64",
+      "runner": "windows-latest",
+      "artifact_type": "zip",
+      "artifact_name": "SMWC-Downloader-5.1.0-dev.1-Windows-x64.zip"
+    },
+    "linux-x86_64": {
+      "platform": "linux",
+      "architecture": "x86_64",
+      "runner": "ubuntu-24.04",
+      "artifact_type": "tar.gz",
+      "artifact_name": "SMWC-Downloader-5.1.0-dev.1-Linux-x64.tar.gz"
+    },
+    "macos-arm64": {
+      "platform": "macos",
+      "architecture": "arm64",
+      "runner": "macos-15",
+      "artifact_type": "dmg",
+      "artifact_name": "SMWC-Downloader-5.1.0-dev.1-macOS-arm64.dmg"
+    },
+    "macos-x86_64": {
+      "platform": "macos",
+      "architecture": "x86_64",
+      "runner": "macos-15-intel",
+      "artifact_type": "dmg",
+      "artifact_name": "SMWC-Downloader-5.1.0-dev.1-macOS-x86_64.dmg"
+    }
+  }
+}
