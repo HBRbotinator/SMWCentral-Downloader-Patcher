@@ -23,6 +23,32 @@ def _component_name(component_name: str) -> str:
     return component_name
 
 
+def canonical_machine(value: str | None = None) -> str:
+    """Normalize common architecture aliases used by Python and build tools."""
+
+    raw = (value or platform.machine()).strip().casefold()
+    aliases = {
+        "amd64": "x86_64",
+        "x64": "x86_64",
+        "x86-64": "x86_64",
+        "aarch64": "arm64",
+    }
+    return aliases.get(raw, raw)
+
+
+def canonical_platform(value: str | None = None) -> str:
+    """Normalize ``sys.platform``/``platform.system`` style names."""
+
+    raw = (value or sys.platform).strip().casefold()
+    if raw.startswith("win"):
+        return "windows"
+    if raw == "darwin" or raw.startswith("mac"):
+        return "macos"
+    if raw.startswith("linux"):
+        return "linux"
+    return raw
+
+
 def target_config(target_name: str) -> dict[str, Any]:
     """Return an isolated build-target definition."""
 
@@ -30,6 +56,31 @@ def target_config(target_name: str) -> dict[str, Any]:
     if not isinstance(target, dict):
         raise ProductManifestError(f"Unknown build target: {target_name}")
     return deepcopy(target)
+
+
+def _string_list(value: object, context: str) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ProductManifestError(f"{context} must contain strings")
+    return list(value)
+
+
+def _package_resource_list(value: object, context: str) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise ProductManifestError(f"{context} must be a list")
+
+    normalized: list[dict[str, str]] = []
+    for index, item in enumerate(value):
+        item_context = f"{context}[{index}]"
+        if not isinstance(item, Mapping):
+            raise ProductManifestError(f"{item_context} must be an object")
+        package_name = item.get("package")
+        suffix = item.get("suffix")
+        if not isinstance(package_name, str) or not package_name:
+            raise ProductManifestError(f"{item_context}.package must be a non-empty string")
+        if not isinstance(suffix, str) or not suffix:
+            raise ProductManifestError(f"{item_context}.suffix must be a non-empty string")
+        normalized.append({"package": package_name, "suffix": suffix})
+    return normalized
 
 
 def component_build_config(component_name: str) -> dict[str, Any]:
@@ -45,22 +96,27 @@ def component_build_config(component_name: str) -> dict[str, Any]:
 
     console = config.get("console")
     resources = config.get("resources")
-    hidden = config.get("hidden_imports")
-    package_data = config.get("package_data")
     if not isinstance(console, bool):
         raise ProductManifestError(f"build.{component_name}.console must be a boolean")
     if not isinstance(resources, list):
         raise ProductManifestError(f"build.{component_name}.resources must be a list")
-    if not isinstance(hidden, list) or any(not isinstance(value, str) for value in hidden):
-        raise ProductManifestError(
-            f"build.{component_name}.hidden_imports must contain strings"
-        )
-    if not isinstance(package_data, list) or any(
-        not isinstance(value, str) for value in package_data
-    ):
-        raise ProductManifestError(
-            f"build.{component_name}.package_data must contain strings"
-        )
+
+    hidden = _string_list(
+        config.get("hidden_imports"),
+        f"build.{component_name}.hidden_imports",
+    )
+    package_data = _string_list(
+        config.get("package_data"),
+        f"build.{component_name}.package_data",
+    )
+    required_runtime_resources = _string_list(
+        config.get("required_runtime_resources", []),
+        f"build.{component_name}.required_runtime_resources",
+    )
+    required_package_resources = _package_resource_list(
+        config.get("required_package_resources", []),
+        f"build.{component_name}.required_package_resources",
+    )
 
     normalized_resources: list[dict[str, str]] = []
     for index, resource in enumerate(resources):
@@ -90,8 +146,10 @@ def component_build_config(component_name: str) -> dict[str, Any]:
     return {
         "console": console,
         "resources": normalized_resources,
-        "hidden_imports": list(hidden),
-        "package_data": list(package_data),
+        "hidden_imports": hidden,
+        "package_data": package_data,
+        "required_runtime_resources": required_runtime_resources,
+        "required_package_resources": required_package_resources,
     }
 
 
@@ -116,39 +174,27 @@ def component_console(component_name: str) -> bool:
     return bool(component_build_config(component_name)["console"])
 
 
+def required_runtime_resources(component_name: str) -> list[str]:
+    return list(component_build_config(component_name)["required_runtime_resources"])
+
+
+def required_package_resources(component_name: str) -> list[dict[str, str]]:
+    return deepcopy(component_build_config(component_name)["required_package_resources"])
+
+
 def auto_target(
     platform_name: str | None = None,
     machine_name: str | None = None,
 ) -> str:
     """Resolve the supported native target for the current host."""
 
-    platform_value = (platform_name or sys.platform).casefold()
-    machine_value = (machine_name or platform.machine()).casefold()
-    if platform_value.startswith("win"):
-        target = "windows-x86_64"
-    elif platform_value.startswith("linux"):
-        target = "linux-x86_64"
-    elif platform_value.startswith("darwin") or platform_value.startswith("mac"):
-        if machine_value in {"arm64", "aarch64"}:
-            target = "macos-arm64"
-        elif machine_value in {"x86_64", "amd64"}:
-            target = "macos-x86_64"
-        else:
-            raise ProductManifestError(
-                f"Unsupported macOS build architecture: {machine_value or '<empty>'}"
-            )
-    else:
-        raise ProductManifestError(f"Unsupported build platform: {platform_value}")
-
-    declared = target_config(target)
-    expected_machine = str(declared["architecture"])
-    normalized_machine = "x86_64" if machine_value == "amd64" else machine_value
-    if target.startswith(("windows-", "linux-")) and normalized_machine not in {
-        "x86_64",
-        "amd64",
-    }:
+    platform_value = canonical_platform(platform_name)
+    machine_value = canonical_machine(machine_name)
+    target = f"{platform_value}-{machine_value}"
+    if target not in SUPPORTED_TARGETS:
         raise ProductManifestError(
-            f"Target {target} requires {expected_machine}, detected {machine_value}"
+            f"This host does not map to a supported build target: {target}. "
+            f"Supported targets: {', '.join(SUPPORTED_TARGETS)}"
         )
     return target
 

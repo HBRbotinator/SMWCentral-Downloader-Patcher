@@ -100,10 +100,23 @@
         "PIL.Image",
         "PIL.ImageTk",
         "PIL.ImageDraw",
-        "PIL.ImageFont"
+        "PIL.ImageFont",
+        "build_support.runtime_smoke"
       ],
       "package_data": [
         "sv_ttk"
+      ],
+      "required_runtime_resources": [
+        "product_manifest.json",
+        "assets/icon.ico",
+        "assets/icon.icns",
+        "assets/moon.png"
+      ],
+      "required_package_resources": [
+        {
+          "package": "sv_ttk",
+          "suffix": ".tcl"
+        }
       ]
     },
     "updater": {
@@ -118,7 +131,11 @@
       "hidden_imports": [
         "product_identity"
       ],
-      "package_data": []
+      "package_data": [],
+      "required_runtime_resources": [
+        "product_manifest.json"
+      ],
+      "required_package_resources": []
     }
   }
 }

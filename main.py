@@ -994,4 +994,8 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--smoke-test" in sys.argv:
+        from build_support.runtime_smoke import run_runtime_smoke
+
+        raise SystemExit(run_runtime_smoke())
     main()

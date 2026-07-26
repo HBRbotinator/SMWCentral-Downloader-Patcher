@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import sys
 from copy import deepcopy
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 MANIFEST_FILENAME = "product_manifest.json"
+BUILD_IDENTITY_FILENAME = "build_identity.json"
 _REQUIRED_TARGETS = {
     "windows-x86_64": ("windows", "x86_64"),
     "linux-x86_64": ("linux", "x86_64"),
@@ -277,3 +279,120 @@ def get_target(target_name: str) -> dict[str, Any]:
     if not isinstance(target, dict):
         raise ProductManifestError(f"Unknown build target: {target_name}")
     return deepcopy(target)
+
+
+def resolve_runtime_resource(relative_path: str) -> Path:
+    """Resolve a packaged resource beside the source or frozen application."""
+
+    return _runtime_root() / Path(relative_path)
+
+
+def get_required_runtime_resources(component_name: str = "application") -> tuple[str, ...]:
+    """Return the manifest-owned runtime resource contract for a component."""
+
+    build = PRODUCT_MANIFEST.get("build")
+    if not isinstance(build, Mapping):
+        raise ProductManifestError("manifest.build must be an object")
+    component = build.get(component_name)
+    if not isinstance(component, Mapping):
+        raise ProductManifestError(f"manifest.build.{component_name} must be an object")
+    values = component.get("required_runtime_resources", [])
+    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        raise ProductManifestError(
+            f"build.{component_name}.required_runtime_resources must contain strings"
+        )
+    return tuple(values)
+
+
+def validate_runtime_resources(component_name: str = "application") -> list[str]:
+    """Fail when a required runtime resource is absent from the package."""
+
+    required = get_required_runtime_resources(component_name)
+    missing = [value for value in required if not resolve_runtime_resource(value).exists()]
+    if missing:
+        raise ProductManifestError(
+            "Required runtime resources are missing: " + ", ".join(sorted(missing))
+        )
+    return list(required)
+
+
+def _source_build_identity() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "product_id": PRODUCT_ID,
+        "product_name": PRODUCT_DISPLAY_NAME,
+        "version": PRODUCT_VERSION,
+        "release_channel": RELEASE_CHANNEL,
+        "target": "source",
+        "platform": platform.system().casefold(),
+        "architecture": platform.machine().casefold(),
+        "source_revision": "unknown",
+        "source_dirty": None,
+        "frozen": False,
+    }
+
+
+def load_build_identity(
+    path: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Load and validate target identity embedded into a candidate package."""
+
+    identity_path = (
+        Path(path) if path is not None else _runtime_root() / BUILD_IDENTITY_FILENAME
+    )
+    if identity_path.exists():
+        payload = _read_json(identity_path)
+    elif path is not None or bool(getattr(sys, "frozen", False)):
+        raise ProductManifestError(f"Required build identity is missing: {identity_path}")
+    else:
+        payload = _source_build_identity()
+
+    if payload.get("schema_version") != 1:
+        raise ProductManifestError(
+            f"Unsupported build identity schema: {payload.get('schema_version')!r}"
+        )
+
+    expected = {
+        "product_id": PRODUCT_ID,
+        "version": PRODUCT_VERSION,
+        "release_channel": RELEASE_CHANNEL,
+    }
+    for key, expected_value in expected.items():
+        if str(payload.get(key, "")) != expected_value:
+            raise ProductManifestError(
+                f"Build identity {key}={payload.get(key)!r} does not match "
+                f"the product manifest value {expected_value!r}"
+            )
+
+    target_name = str(payload.get("target", ""))
+    if target_name != "source":
+        target = PRODUCT_MANIFEST["targets"].get(target_name)
+        if not isinstance(target, Mapping):
+            raise ProductManifestError(f"Unknown build identity target: {target_name!r}")
+        for key in ("platform", "architecture", "artifact_name"):
+            if str(payload.get(key, "")) != str(target[key]):
+                raise ProductManifestError(
+                    f"Build identity {key} does not match target {target_name!r}"
+                )
+
+    result = deepcopy(payload)
+    result["frozen"] = bool(getattr(sys, "frozen", False))
+    return result
+
+
+def diagnostic_build_identity() -> dict[str, Any]:
+    """Return a privacy-safe product/build block for future diagnostics."""
+
+    identity = load_build_identity()
+    return {
+        "product_id": identity["product_id"],
+        "product_name": identity.get("product_name", PRODUCT_DISPLAY_NAME),
+        "version": identity["version"],
+        "release_channel": identity["release_channel"],
+        "target": identity.get("target", "source"),
+        "platform": identity.get("platform", platform.system().casefold()),
+        "architecture": identity.get("architecture", platform.machine().casefold()),
+        "source_revision": identity.get("source_revision", "unknown"),
+        "source_dirty": identity.get("source_dirty"),
+        "frozen": bool(identity.get("frozen", False)),
+    }

@@ -17,6 +17,7 @@ from build_support.manifest import (
     package_data_packages,
     target_config,
 )
+from build_support.metadata import write_build_identity
 from package_metadata import macos_bundle_metadata
 from product_identity import APPLICATION_IDENTITY, UPDATER_IDENTITY
 
@@ -28,13 +29,14 @@ def _pyinstaller_symbols(namespace: MutableMapping[str, Any]) -> tuple[Any, Any,
         raise RuntimeError("This module must be called from a PyInstaller spec file") from exc
 
 
-def _datas(component_name: str) -> list[tuple[str, str]]:
+def _datas(component_name: str, target_name: str) -> list[tuple[str, str]]:
     values = build_resources(component_name)
     if package_data_packages(component_name):
         from PyInstaller.utils.hooks import collect_data_files
 
         for package_name in package_data_packages(component_name):
             values.extend(collect_data_files(package_name))
+    values.append((str(write_build_identity(target_name)), "."))
     return values
 
 
@@ -58,7 +60,11 @@ def _windows_version_path(component_name: str, platform_name: str) -> str | None
     return str(ROOT / filename)
 
 
-def _analysis(namespace: MutableMapping[str, Any], component_name: str) -> tuple[Any, Any]:
+def _analysis(
+    namespace: MutableMapping[str, Any],
+    component_name: str,
+    target_name: str,
+) -> tuple[Any, Any]:
     Analysis, PYZ, _, _ = _pyinstaller_symbols(namespace)
     identity = (
         APPLICATION_IDENTITY if component_name == "application" else UPDATER_IDENTITY
@@ -67,7 +73,7 @@ def _analysis(namespace: MutableMapping[str, Any], component_name: str) -> tuple
         [str(ROOT / identity["entry_point"])],
         pathex=[str(ROOT)],
         binaries=[],
-        datas=_datas(component_name),
+        datas=_datas(component_name, target_name),
         hiddenimports=hidden_imports(component_name),
         hookspath=[],
         hooksconfig={},
@@ -161,7 +167,7 @@ def build_component(
     """Build a manifest-defined component for one target."""
 
     target_config(target_name)
-    analysis, pyz = _analysis(namespace, component_name)
+    analysis, pyz = _analysis(namespace, component_name, target_name)
     exe = _exe(namespace, component_name, target_name, analysis, pyz)
     _bundle(namespace, component_name, target_name, exe)
 
