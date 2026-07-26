@@ -11,6 +11,8 @@ import shutil
 import argparse
 import platform
 
+from update_policy import current_update_policy
+
 def kill_process_by_name(process_name):
     """Kill processes by name, cross-platform"""
     system = platform.system().lower()
@@ -45,6 +47,14 @@ def start_application(app_path):
         print(f"Warning: Could not start application: {e}")
 
 def main():
+    policy = current_update_policy()
+    if not policy.in_place_updates_enabled:
+        print(
+            policy.reason or "In-place updates are disabled for this build.",
+            file=sys.stderr,
+        )
+        return 2
+
     parser = argparse.ArgumentParser(description='Update SMWCentral Downloader')
     parser.add_argument('--current-exe', required=True, help='Path to current executable')
     parser.add_argument('--update-exe', required=True, help='Path to update executable')

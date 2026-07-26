@@ -28,6 +28,7 @@ class QualityStage:
 _STATIC_SCOPE = (
     "product_identity.py",
     "package_metadata.py",
+    "update_policy.py",
     "build_support",
     "test_product_identity.py",
     "test_runtime_identity.py",
@@ -38,6 +39,7 @@ _STATIC_SCOPE = (
     "test_quality_gate.py",
     "test_ci_workflow.py",
     "test_release_gate.py",
+    "test_update_policy.py",
 )
 
 
@@ -126,6 +128,7 @@ def quality_stages(
                         "--check-untyped-defs",
                         "product_identity.py",
                         "package_metadata.py",
+                        "update_policy.py",
                         "build_support",
                     ),
                 ),

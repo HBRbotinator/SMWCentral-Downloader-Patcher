@@ -21,6 +21,7 @@ from api_pipeline import run_pipeline
 from ui import setup_ui, update_log_colors
 from utils import resource_path
 from product_identity import PRODUCT_DISPLAY_NAME, VERSION
+from update_policy import current_update_policy
 import sv_ttk
 
 # Multiple approaches to suppress threading cleanup errors
@@ -958,6 +959,9 @@ def main():
         # Check for updates in background after UI loads
         def check_for_updates_after_startup():
             """Check for updates after the UI has fully loaded"""
+            if not current_update_policy().checks_enabled:
+                return
+
             try:
                 from config_manager import ConfigManager
                 from updater import check_for_updates_background, show_update_dialog

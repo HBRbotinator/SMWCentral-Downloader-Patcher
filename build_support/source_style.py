@@ -9,6 +9,7 @@ from build_support.manifest import ROOT
 DEFAULT_PATHS = (
     "product_identity.py",
     "package_metadata.py",
+    "update_policy.py",
     "build_support",
     "test_product_identity.py",
     "test_runtime_identity.py",
@@ -19,6 +20,7 @@ DEFAULT_PATHS = (
     "test_quality_gate.py",
     "test_ci_workflow.py",
     "test_release_gate.py",
+    "test_update_policy.py",
 )
 
 

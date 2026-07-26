@@ -23,6 +23,11 @@ from threading import Thread
 import time
 from packaging import version
 
+from update_policy import (
+    current_update_policy,
+    require_in_place_updates_enabled,
+)
+
 try:
     from colors import get_colors
 except ImportError:
@@ -51,7 +56,14 @@ class UpdaterError(Exception):
 class Updater:
     """Handles application updates from GitHub releases"""
     
-    def __init__(self, current_version, repo_owner="iamtheratio", repo_name="SMWCentral-Downloader---Patcher", parent=None):
+    def __init__(
+        self,
+        current_version,
+        repo_owner="iamtheratio",
+        repo_name="SMWCentral-Downloader---Patcher",
+        parent=None,
+        update_policy=None,
+    ):
         self.current_version = current_version
         self.repo_owner = repo_owner
         self.repo_name = repo_name
@@ -59,6 +71,7 @@ class Updater:
         self.check_in_progress = False
         self.update_in_progress = False
         self.parent = parent  # Store parent for logging
+        self.update_policy = update_policy or current_update_policy()
         
     def check_for_updates(self, silent=False):
         """
@@ -70,6 +83,15 @@ class Updater:
         Returns:
             dict: Update information if available, None if no update
         """
+        if not self.update_policy.checks_enabled:
+            if not silent:
+                messagebox.showinfo(
+                    "Updates Disabled",
+                    self.update_policy.reason
+                    or "Updates are disabled for this build.",
+                )
+            return None
+
         if self.check_in_progress:
             return None
             
@@ -182,6 +204,10 @@ class Updater:
         Returns:
             str: Path to downloaded file
         """
+        require_in_place_updates_enabled(
+            "download an update", self.update_policy
+        )
+
         if self.update_in_progress:
             raise UpdaterError("Update already in progress")
         
@@ -240,6 +266,10 @@ class Updater:
             downloaded_file_path (str): Path to downloaded update file
             update_info (dict): Update information
         """
+        require_in_place_updates_enabled(
+            "apply an update", self.update_policy
+        )
+
         try:
             current_exe = None
             
@@ -407,6 +437,10 @@ class Updater:
             downloaded_file_path (str): Path to downloaded update file
             update_info (dict): Update information
         """
+        require_in_place_updates_enabled(
+            "prepare an in-place update", self.update_policy
+        )
+
         try:
             current_exe = None
             
@@ -1798,6 +1832,10 @@ def check_for_updates_background(current_version, callback=None):
         current_version (str): Current application version
         callback (callable): Callback function to handle update info
     """
+    policy = current_update_policy()
+    if not policy.checks_enabled:
+        return None
+
     def check():
         try:
             time.sleep(2)  # Wait a bit for the app to fully load
@@ -1818,8 +1856,10 @@ def check_for_updates_background(current_version, callback=None):
     
     thread = Thread(target=check, daemon=True)
     thread.start()
+    return thread
 
 def show_update_dialog(parent, update_info):
     """Show update dialog"""
+    require_in_place_updates_enabled("show the update dialog")
     dialog = UpdateDialog(parent, update_info)
     return dialog.show()
