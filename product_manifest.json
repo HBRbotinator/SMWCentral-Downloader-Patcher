@@ -67,5 +67,58 @@
       "artifact_type": "dmg",
       "artifact_name": "SMWC-Downloader-5.1.0-dev.1-macOS-x86_64.dmg"
     }
+  },
+  "build": {
+    "application": {
+      "console": false,
+      "resources": [
+        {
+          "source": "assets",
+          "destination": "assets",
+          "kind": "directory"
+        },
+        {
+          "source": "ui",
+          "destination": "ui",
+          "kind": "directory"
+        },
+        {
+          "source": "product_manifest.json",
+          "destination": ".",
+          "kind": "file"
+        }
+      ],
+      "hidden_imports": [
+        "tkinter.filedialog",
+        "tkinter.messagebox",
+        "platform_utils",
+        "difficulty_migration",
+        "difficulty_lookup_manager",
+        "save_sync",
+        "ui.save_sync_dialog",
+        "PIL._tkinter_finder",
+        "PIL.Image",
+        "PIL.ImageTk",
+        "PIL.ImageDraw",
+        "PIL.ImageFont"
+      ],
+      "package_data": [
+        "sv_ttk"
+      ]
+    },
+    "updater": {
+      "console": true,
+      "resources": [
+        {
+          "source": "product_manifest.json",
+          "destination": ".",
+          "kind": "file"
+        }
+      ],
+      "hidden_imports": [
+        "product_identity"
+      ],
+      "package_data": []
+    }
   }
 }
