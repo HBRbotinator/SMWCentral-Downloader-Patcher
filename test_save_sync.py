@@ -771,5 +771,37 @@ class DiagnosticReportTest(unittest.TestCase):
         self.assertIn("save_sync.write_diagnostic_report", source)
         self.assertIn("no absolute paths or raw save bytes", source)
 
+class LegacyEmptySlotPatternTest(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="legacy_fill_")
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _write(self, name, fill):
+        path = self.root / name
+        path.write_bytes(bytes([fill]) * 2048)
+        return path
+
+    def test_repeated_0x60_pattern_is_unknown_for_both_extensions(self):
+        srm = self._write("empty.srm", 0x60)
+        sav = self._write("empty.sav", 0x60)
+        self.assertIsNone(save_sync.read_collected_exits(srm))
+        self.assertEqual(
+            save_sync.read_collected_exits(srm),
+            save_sync.read_collected_exits(sav),
+        )
+
+    def test_scan_does_not_complete_from_repeated_0x60_pattern(self):
+        self._write("Known Hack.srm", 0x60)
+        candidates = save_sync.scan_saves(
+            str(self.root),
+            [{"id": "1", "title": "Known Hack", "exits": 5}],
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertIsNone(candidates[0].collected_exits)
+        self.assertEqual(candidates[0].status, save_sync.STATUS_UNCERTAIN)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

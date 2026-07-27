@@ -5,9 +5,10 @@ slots. A standard SRAM region contains three 143-byte slots and a backup copy
 of each slot. The final two bytes of every copy store a checksum complement for
 the preceding 141 bytes.
 
-When no usable standard slot can be proven, smaller saves fall back to the
-inherited single-byte read at offset ``0x8C``. Expanded SRAM images instead fail
-closed because that byte commonly belongs to an unrelated SA-1/BW-RAM layout.
+When no usable standard slot can be proven, smaller saves may fall back to the
+inherited single-byte read at offset ``0x8C``. Repeated ``0x60`` empty-slot fill
+patterns and expanded SRAM images instead fail closed because that byte is not
+credible progress evidence in those layouts.
 """
 from __future__ import annotations
 
@@ -20,6 +21,9 @@ from typing import Any
 LEGACY_COUNTER_OFFSET = 0x8C
 MIN_LEGACY_SAVE_SIZE = LEGACY_COUNTER_OFFSET + 1
 UNINITIALIZED_BYTE = 0xFF
+LEGACY_EMPTY_SLOT_PATTERN = 0x60
+LEGACY_EMPTY_SLOT_CHECKSUM = 0x6060
+LEGACY_EMPTY_SLOT_MIN_COPIES = 3
 
 # Standard SMW SRAM uses three 143-byte slots followed by three backup copies.
 STANDARD_SLOT_DATA_SIZE = 0x8D
@@ -329,6 +333,22 @@ def _expanded_sram_analysis(
         attempts=prior_attempts + (attempt,),
     )
 
+
+def _empty_slot_pattern_count(
+    prior_attempts: tuple[ProfileAttempt, ...],
+) -> int:
+    """Count checksum-invalid standard copies filled with the 0x60 pattern."""
+
+    return sum(
+        1
+        for attempt in prior_attempts
+        if attempt.profile == PROFILE_STANDARD_SMW_SLOTS
+        and not attempt.accepted
+        and attempt.counter_value == LEGACY_EMPTY_SLOT_PATTERN
+        and attempt.stored_checksum == LEGACY_EMPTY_SLOT_CHECKSUM
+    )
+
+
 def _legacy_analysis(
     absolute: str,
     data: bytes,
@@ -382,6 +402,40 @@ def _legacy_analysis(
             attempts=prior_attempts + (attempt,),
         )
 
+    empty_slot_copies = _empty_slot_pattern_count(prior_attempts)
+    if (
+        value == LEGACY_EMPTY_SLOT_PATTERN
+        and empty_slot_copies >= LEGACY_EMPTY_SLOT_MIN_COPIES
+    ):
+        reason = (
+            "The inherited raw-counter byte is 0x60 and the same empty-slot "
+            f"pattern appears in {empty_slot_copies} checksum-invalid standard "
+            "slot copies; it was retained as evidence but not accepted as "
+            "progress"
+        )
+        attempt = ProfileAttempt(
+            profile=PROFILE_LEGACY_RAW_COUNTER,
+            accepted=False,
+            confidence=CONFIDENCE_NONE,
+            reason=reason,
+            counter_offset=LEGACY_COUNTER_OFFSET,
+            counter_kind=COUNTER_UNKNOWN,
+            counter_value=value,
+        )
+        return SaveAnalysis(
+            path=absolute,
+            size=size,
+            profile=PROFILE_UNKNOWN,
+            confidence=CONFIDENCE_NONE,
+            counter_kind=COUNTER_UNKNOWN,
+            selected_value=None,
+            warnings=(
+                "No usable checksum-valid standard SMW slot was found",
+                reason,
+            ),
+            attempts=prior_attempts + (attempt,),
+        )
+
     warning = (
         "Legacy raw counter at 0x8C is not checksum-validated and may not equal "
         "the hack's advertised exits"
@@ -417,8 +471,9 @@ def analyze_save(path: os.PathLike[str] | str) -> SaveAnalysis:
     """Read *path* and return the strongest supported parser evidence.
 
     Checksum-valid standard SMW slots take precedence. Expanded SRAM images
-    without a proven standard slot suppress the inherited ``0x8C`` byte. Smaller
-    non-standard saves retain that read as low-confidence compatibility evidence.
+    and repeated ``0x60`` empty-slot patterns suppress the inherited ``0x8C``
+    byte. Other smaller non-standard saves retain that read as low-confidence
+    compatibility evidence.
     """
 
     absolute = _absolute(path)

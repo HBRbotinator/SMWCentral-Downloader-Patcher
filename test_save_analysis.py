@@ -70,6 +70,33 @@ class SaveAnalysisReadTest(unittest.TestCase):
         self.assertEqual(result.selected_value, 0)
         self.assertTrue(result.has_value)
 
+    def test_repeated_0x60_empty_slot_pattern_is_rejected(self):
+        image = bytes(
+            [save_analysis.LEGACY_EMPTY_SLOT_PATTERN]
+            * save_analysis.STANDARD_SRAM_SIZE
+        )
+        path = self._write("empty-pattern.srm", image)
+        result = save_analysis.analyze_save(path)
+        self.assertEqual(result.profile, save_analysis.PROFILE_UNKNOWN)
+        self.assertEqual(result.confidence, save_analysis.CONFIDENCE_NONE)
+        self.assertIsNone(result.selected_value)
+        self.assertEqual(
+            result.attempts[-1].counter_value,
+            save_analysis.LEGACY_EMPTY_SLOT_PATTERN,
+        )
+        self.assertFalse(result.attempts[-1].accepted)
+        self.assertIn("empty-slot pattern", result.attempts[-1].reason)
+        self.assertIn("6 checksum-invalid", result.attempts[-1].reason)
+
+    def test_isolated_raw_96_remains_low_confidence_evidence(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        image[save_analysis.LEGACY_COUNTER_OFFSET] = 96
+        path = self._write("isolated-96.srm", bytes(image))
+        result = save_analysis.analyze_save(path)
+        self.assertEqual(result.profile, save_analysis.PROFILE_LEGACY_RAW_COUNTER)
+        self.assertEqual(result.confidence, save_analysis.CONFIDENCE_LOW)
+        self.assertEqual(result.selected_value, 96)
+
     def test_non_ff_byte_is_low_confidence_legacy_evidence(self):
         path = self._write("progress.sav", _blob(17, extra=32))
         result = save_analysis.analyze_save(path)
@@ -270,6 +297,22 @@ class StandardSmwSlotAnalysisTest(unittest.TestCase):
         self.assertEqual(result.selected_slot, "A")
         self.assertEqual(result.selected_copy, save_analysis.COPY_PRIMARY)
         self.assertEqual(result.valid_slots, ("A",))
+
+    def test_checksum_valid_standard_96_is_not_treated_as_fill(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        for copy_kind in (
+            save_analysis.COPY_PRIMARY,
+            save_analysis.COPY_BACKUP,
+        ):
+            _write_standard_copy(
+                image,
+                slot="A",
+                copy_kind=copy_kind,
+                value=96,
+            )
+        result = self._analyze(image)
+        self.assertEqual(result.profile, save_analysis.PROFILE_STANDARD_SMW_SLOTS)
+        self.assertEqual(result.selected_value, 96)
 
     def test_highest_checksum_valid_slot_is_selected(self):
         image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
