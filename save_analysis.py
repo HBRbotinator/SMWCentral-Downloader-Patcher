@@ -5,9 +5,9 @@ slots. A standard SRAM region contains three 143-byte slots and a backup copy
 of each slot. The final two bytes of every copy store a checksum complement for
 the preceding 141 bytes.
 
-When no usable standard slot can be proven, analysis falls back to the
-inherited single-byte read at offset ``0x8C``. That fallback preserves existing
-compatibility without presenting an unvalidated byte as trustworthy progress.
+When no usable standard slot can be proven, smaller saves fall back to the
+inherited single-byte read at offset ``0x8C``. Expanded SRAM images instead fail
+closed because that byte commonly belongs to an unrelated SA-1/BW-RAM layout.
 """
 from __future__ import annotations
 
@@ -28,6 +28,12 @@ STANDARD_EVENT_COUNTER_OFFSET = 0x8C
 STANDARD_CHECKSUM_OFFSET = 0x8D
 STANDARD_CHECKSUM_SEED = 0x5A5A
 STANDARD_SRAM_SIZE = 0x35A
+
+# SA-1/BW-RAM and other expanded SRAM images are commonly 64 KiB or larger.
+# A raw byte at the vanilla 0x8C offset is not meaningful unless a supported
+# layout validates it, so the legacy fallback is suppressed at this boundary.
+EXPANDED_SRAM_MIN_SIZE = 0x10000
+
 STANDARD_SLOT_OFFSETS = (
     ("A", 0x000, 0x1AD),
     ("B", 0x08F, 0x23C),
@@ -41,6 +47,7 @@ CONFIDENCE_MEDIUM = "medium"
 PROFILE_UNREADABLE = "unreadable"
 PROFILE_UNKNOWN = "unknown"
 PROFILE_STANDARD_SMW_SLOTS = "standard_smw_slots"
+PROFILE_EXPANDED_SRAM_UNKNOWN = "expanded_sram_unknown"
 PROFILE_LEGACY_RAW_COUNTER = "legacy_raw_counter"
 
 COUNTER_UNKNOWN = "unknown"
@@ -277,6 +284,51 @@ def _analyze_standard_slots(
     return analysis, tuple(attempts)
 
 
+
+def _expanded_sram_analysis(
+    absolute: str,
+    data: bytes,
+    prior_attempts: tuple[ProfileAttempt, ...],
+) -> SaveAnalysis:
+    """Reject an unvalidated raw counter in an expanded SRAM image.
+
+    Expanded images are used by SA-1/BW-RAM and other non-standard layouts.
+    Unless the standard-slot profile has already succeeded, byte ``0x8C`` is
+    retained only as diagnostic evidence and is not exposed as progress.
+    """
+
+    raw_value = (
+        data[LEGACY_COUNTER_OFFSET]
+        if len(data) > LEGACY_COUNTER_OFFSET
+        else None
+    )
+    reason = (
+        f"Save is {len(data)} bytes, indicating an expanded SRAM layout; "
+        "no checksum-valid standard SMW slot was found, so the inherited "
+        "raw counter at 0x8C was suppressed"
+    )
+    attempt = ProfileAttempt(
+        profile=PROFILE_EXPANDED_SRAM_UNKNOWN,
+        accepted=False,
+        confidence=CONFIDENCE_NONE,
+        reason=reason,
+        counter_offset=(
+            LEGACY_COUNTER_OFFSET if raw_value is not None else None
+        ),
+        counter_kind=COUNTER_UNKNOWN,
+        counter_value=raw_value,
+    )
+    return SaveAnalysis(
+        path=absolute,
+        size=len(data),
+        profile=PROFILE_EXPANDED_SRAM_UNKNOWN,
+        confidence=CONFIDENCE_NONE,
+        counter_kind=COUNTER_UNKNOWN,
+        selected_value=None,
+        warnings=(reason,),
+        attempts=prior_attempts + (attempt,),
+    )
+
 def _legacy_analysis(
     absolute: str,
     data: bytes,
@@ -364,9 +416,9 @@ def _legacy_analysis(
 def analyze_save(path: os.PathLike[str] | str) -> SaveAnalysis:
     """Read *path* and return the strongest supported parser evidence.
 
-    Checksum-valid standard SMW slots take precedence. When no standard slot can
-    be proven, the inherited ``0x8C`` read remains available as low-confidence
-    compatibility evidence.
+    Checksum-valid standard SMW slots take precedence. Expanded SRAM images
+    without a proven standard slot suppress the inherited ``0x8C`` byte. Smaller
+    non-standard saves retain that read as low-confidence compatibility evidence.
     """
 
     absolute = _absolute(path)
@@ -397,4 +449,6 @@ def analyze_save(path: os.PathLike[str] | str) -> SaveAnalysis:
     standard, standard_attempts = _analyze_standard_slots(absolute, data)
     if standard is not None:
         return standard
+    if len(data) >= EXPANDED_SRAM_MIN_SIZE:
+        return _expanded_sram_analysis(absolute, data, standard_attempts)
     return _legacy_analysis(absolute, data, standard_attempts)

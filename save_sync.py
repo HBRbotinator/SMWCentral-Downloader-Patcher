@@ -11,7 +11,8 @@ checks the three standard SMW slots and their backup copies. Checksum-valid
 slots are treated as medium-confidence evidence and the strongest valid
 overworld-event counter is selected. When no standard slot can be proven, the
 inherited byte at 0x8C remains available as low-confidence compatibility
-evidence.
+evidence for smaller saves. Expanded SRAM images without a validated slot
+suppress that raw byte to avoid false progress from unrelated layouts.
 
 An overworld-event counter is still not universally equivalent to a ROM hack's
 advertised exits. Later profiles can provide hack-specific semantics without
@@ -75,8 +76,9 @@ def read_collected_exits(path):
     """Return the strongest supported progress-counter evidence.
 
     Checksum-valid standard SMW slots take precedence. The inherited raw byte at
-    ``0x8C`` remains the low-confidence fallback, preserving compatibility for
-    saves that use non-standard or expanded layouts.
+    ``0x8C`` remains a low-confidence fallback only for smaller non-standard
+    saves. Expanded SRAM images require a validated profile and otherwise return
+    no progress value.
     """
 
     return analyze_save(path).selected_value

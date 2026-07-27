@@ -444,5 +444,91 @@ class StandardSmwSlotAnalysisTest(unittest.TestCase):
         )
 
 
+class ExpandedSramGuardTest(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="expanded_sram_")
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _write(self, name: str, image: bytes | bytearray) -> Path:
+        path = self.root / name
+        path.write_bytes(bytes(image))
+        return path
+
+    def test_expanded_invalid_layout_suppresses_legacy_counter(self):
+        image = bytearray(128 * 1024)
+        image[save_analysis.LEGACY_COUNTER_OFFSET] = 96
+        result = save_analysis.analyze_save(
+            self._write("expanded.srm", image)
+        )
+        self.assertEqual(
+            result.profile,
+            save_analysis.PROFILE_EXPANDED_SRAM_UNKNOWN,
+        )
+        self.assertEqual(result.confidence, save_analysis.CONFIDENCE_NONE)
+        self.assertIsNone(result.selected_value)
+        self.assertEqual(result.attempts[-1].counter_value, 96)
+        self.assertFalse(result.attempts[-1].accepted)
+        self.assertIn("suppressed", result.warnings[0])
+
+    def test_expanded_guard_begins_at_declared_boundary(self):
+        expanded = bytearray(save_analysis.EXPANDED_SRAM_MIN_SIZE)
+        expanded[save_analysis.LEGACY_COUNTER_OFFSET] = 11
+        expanded_result = save_analysis.analyze_save(
+            self._write("boundary.srm", expanded)
+        )
+        self.assertIsNone(expanded_result.selected_value)
+
+        smaller = bytearray(save_analysis.EXPANDED_SRAM_MIN_SIZE - 1)
+        smaller[save_analysis.LEGACY_COUNTER_OFFSET] = 11
+        smaller_result = save_analysis.analyze_save(
+            self._write("smaller.srm", smaller)
+        )
+        self.assertEqual(
+            smaller_result.profile,
+            save_analysis.PROFILE_LEGACY_RAW_COUNTER,
+        )
+        self.assertEqual(smaller_result.selected_value, 11)
+
+    def test_expanded_evidence_keeps_raw_byte_without_selecting_it(self):
+        image = bytearray(128 * 1024)
+        image[save_analysis.LEGACY_COUNTER_OFFSET] = 44
+        result = save_analysis.analyze_save(
+            self._write("evidence.srm", image)
+        )
+        evidence = result.as_dict()
+        self.assertIsNone(evidence["selected_value"])
+        self.assertEqual(evidence["attempts"][-1]["counter_value"], 44)
+        self.assertEqual(
+            evidence["attempts"][-1]["profile"],
+            save_analysis.PROFILE_EXPANDED_SRAM_UNKNOWN,
+        )
+
+    def test_compatibility_reader_returns_none_for_unproven_expanded_layout(self):
+        image = bytearray(128 * 1024)
+        image[save_analysis.LEGACY_COUNTER_OFFSET] = 96
+        path = self._write("reader.srm", image)
+        self.assertIsNone(save_sync.read_collected_exits(path))
+
+    def test_scan_classifies_unproven_expanded_layout_as_uncertain(self):
+        image = bytearray(128 * 1024)
+        image[save_analysis.LEGACY_COUNTER_OFFSET] = 96
+        self._write("Known Hack.srm", image)
+        candidates = save_sync.scan_saves(
+            str(self.root),
+            [{"id": "1", "title": "Known Hack", "exits": 12}],
+        )
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        self.assertIsNone(candidate.collected_exits)
+        self.assertEqual(candidate.status, save_sync.STATUS_UNCERTAIN)
+        self.assertEqual(
+            candidate.profile,
+            save_analysis.PROFILE_EXPANDED_SRAM_UNKNOWN,
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

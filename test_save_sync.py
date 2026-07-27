@@ -74,13 +74,15 @@ class SavSrmParityTest(unittest.TestCase):
             )
 
     def test_parity_across_common_save_sizes(self):
-        """.srm and .sav agree across the real-world SRAM sizes (2K-128K)."""
-        for size in (2048, 4096, 8192, 131072):
+        """Extensions agree while unvalidated expanded saves fail closed."""
+        for size in (2048, 4096, 8192, 65536, 131072):
             blob = _make_srm_bytes(9, size=size)
             srm = self._write(f"s{size}.srm", blob)
             sav = self._write(f"s{size}.sav", blob)
-            self.assertEqual(read_collected_exits(srm), read_collected_exits(sav))
-            self.assertEqual(read_collected_exits(srm), 9)
+            srm_result = read_collected_exits(srm)
+            self.assertEqual(srm_result, read_collected_exits(sav))
+            expected = None if size >= 65536 else 9
+            self.assertEqual(srm_result, expected)
 
 
 class ReadGuardsTest(unittest.TestCase):
