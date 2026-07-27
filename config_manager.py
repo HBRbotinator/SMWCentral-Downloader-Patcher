@@ -81,6 +81,7 @@ class ConfigManager:
             "emulator_args_enabled": False,
             # Save Data Sync settings
             "save_sync_dir": "",
+            "save_sync_dirs": [],
             "save_sync_mark_all": False,
             "save_sync_associations": {},
             # Difficulty lookup cache (automatically populated from SMWC API)
@@ -105,7 +106,7 @@ class ConfigManager:
                         "multi_type_enabled", "multi_type_download_mode", "difficulty_lookup",
                         "emulator_path", "emulator_args", "emulator_args_enabled", "auto_check_updates",
                         "column_order", "visible_columns", "show_rom_picker",
-                        "save_sync_dir", "save_sync_mark_all",
+                        "save_sync_dir", "save_sync_dirs", "save_sync_mark_all",
                         "save_sync_associations"}
         cleaned = {}
 

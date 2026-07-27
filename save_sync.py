@@ -79,6 +79,8 @@ RESOLUTION_ERROR = "error"           # network / API error during lookup
 SEARCH_RESULTS = "results"         # manual search returned options
 
 ASSOCIATION_CONFIG_KEY = "save_sync_associations"
+SAVE_DIRECTORIES_CONFIG_KEY = "save_sync_dirs"
+LEGACY_SAVE_DIRECTORY_CONFIG_KEY = "save_sync_dir"
 MATCH_SOURCE_COLLECTION = "collection"
 MATCH_SOURCE_SAVED_ALIAS = "saved_alias"
 
@@ -142,6 +144,103 @@ def _normalize(name):
     base = re.sub(r"[\s_-]*v?\d+(?:\.\d+)+\s*$", "", base)
     base = re.sub(r"[^a-z0-9]", "", base)
     return base
+
+
+def clean_save_directories(value, legacy_directory=""):
+    """Return canonical, ordered, duplicate-free save source folders.
+
+    ``save_sync_dir`` from older configurations is accepted as a migration
+    fallback. Paths are expanded and made absolute for stable persistence, but
+    they are never included in privacy-safe diagnostic exports.
+    """
+
+    if isinstance(value, str):
+        raw_directories = [value]
+    elif isinstance(value, (list, tuple)):
+        raw_directories = list(value)
+    else:
+        raw_directories = []
+
+    if not raw_directories and legacy_directory:
+        raw_directories = [legacy_directory]
+
+    cleaned = []
+    seen = set()
+    for raw_directory in raw_directories:
+        if not isinstance(raw_directory, str):
+            continue
+        stripped = raw_directory.strip()
+        if not stripped:
+            continue
+        directory = os.path.normpath(
+            os.path.abspath(os.path.expanduser(stripped))
+        )
+        identity = os.path.normcase(directory)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        cleaned.append(directory)
+    return cleaned
+
+
+def set_save_directories(config_manager, directories):
+    """Persist save sources and mirror the first source to the legacy key."""
+
+    if config_manager is None:
+        return False
+    cleaned = clean_save_directories(directories)
+    legacy = cleaned[0] if cleaned else ""
+    changed = False
+
+    if config_manager.get(SAVE_DIRECTORIES_CONFIG_KEY, []) != cleaned:
+        config_manager.set(SAVE_DIRECTORIES_CONFIG_KEY, cleaned)
+        changed = True
+    if config_manager.get(LEGACY_SAVE_DIRECTORY_CONFIG_KEY, "") != legacy:
+        config_manager.set(LEGACY_SAVE_DIRECTORY_CONFIG_KEY, legacy)
+        changed = True
+    return changed
+
+
+def get_save_directories(config_manager):
+    """Load save sources and migrate the legacy single-directory setting."""
+
+    if config_manager is None:
+        return []
+    stored = config_manager.get(SAVE_DIRECTORIES_CONFIG_KEY, [])
+    legacy = config_manager.get(LEGACY_SAVE_DIRECTORY_CONFIG_KEY, "")
+    cleaned = clean_save_directories(stored, legacy_directory=legacy)
+    set_save_directories(config_manager, cleaned)
+    return cleaned
+
+
+def add_save_directory(config_manager, directory):
+    """Append one save source, preserving order and suppressing duplicates."""
+
+    directories = get_save_directories(config_manager)
+    updated = clean_save_directories([*directories, directory])
+    changed = updated != directories
+    if changed:
+        set_save_directories(config_manager, updated)
+    return changed
+
+
+def remove_save_directory(config_manager, directory):
+    """Remove one save source and return whether it was present."""
+
+    directories = get_save_directories(config_manager)
+    target = clean_save_directories([directory])
+    if not target:
+        return False
+    target_identity = os.path.normcase(target[0])
+    updated = [
+        item
+        for item in directories
+        if os.path.normcase(item) != target_identity
+    ]
+    if updated == directories:
+        return False
+    set_save_directories(config_manager, updated)
+    return True
 
 
 def association_key(name):
@@ -508,26 +607,33 @@ def list_save_files(directory):
     return sorted(found)
 
 
+def list_save_files_from_directories(directories):
+    """Return unique save files from every configured source folder."""
+
+    found = {}
+    for directory in clean_save_directories(directories):
+        for path in list_save_files(directory):
+            identity = os.path.normcase(os.path.realpath(path))
+            found.setdefault(identity, path)
+    return sorted(found.values(), key=os.path.normcase)
+
+
 def _strength(candidate):
     """Sort key for picking the best save among duplicates for one hack."""
     exits = candidate.collected_exits if isinstance(candidate.collected_exits, int) else -1
     return (exits, candidate.mtime)
 
 
-def scan_saves(directory, hacks, mark_all=False, associations=None):
-    """Scan *directory* and return a list of :class:`SyncCandidate`.
+def _scan_save_paths(paths, hacks, mark_all=False, associations=None):
+    """Analyze save *paths* and retain the strongest candidate per hack."""
 
-    When several saves map to the same hack (e.g. ``le_plume`` v0.1/0.2/0.3), the
-    strongest one is kept -- highest collected exits, then newest mtime. Unmatched
-    saves are all returned so the UI can report them.
-    """
     index = build_hack_index(hacks)
     hacks_by_id = {str(hack.get("id", "")): hack for hack in hacks}
     association_map = clean_save_associations(associations)
-    matched = {}       # hack_id -> best SyncCandidate
+    matched = {}
     unmatched = []
 
-    for path in list_save_files(directory):
+    for path in paths:
         try:
             mtime = os.path.getmtime(path)
         except OSError:
@@ -568,7 +674,10 @@ def scan_saves(directory, hacks, mark_all=False, associations=None):
         candidate.total_exits = int(hack.get("exits", 0) or 0)
         candidate.already_completed = bool(hack.get("completed", False))
         candidate.status = classify(
-            collected, candidate.total_exits, candidate.already_completed, mark_all
+            collected,
+            candidate.total_exits,
+            candidate.already_completed,
+            mark_all,
         )
 
         best = matched.get(candidate.hack_id)
@@ -576,6 +685,30 @@ def scan_saves(directory, hacks, mark_all=False, associations=None):
             matched[candidate.hack_id] = candidate
 
     return list(matched.values()) + unmatched
+
+
+def scan_saves(directory, hacks, mark_all=False, associations=None):
+    """Scan one legacy save directory and return review candidates."""
+
+    return _scan_save_paths(
+        list_save_files(directory),
+        hacks,
+        mark_all=mark_all,
+        associations=associations,
+    )
+
+
+def scan_save_directories(
+    directories, hacks, mark_all=False, associations=None
+):
+    """Scan all configured save source folders as one logical collection."""
+
+    return _scan_save_paths(
+        list_save_files_from_directories(directories),
+        hacks,
+        mark_all=mark_all,
+        associations=associations,
+    )
 
 
 def apply_candidates(candidates, data_manager):

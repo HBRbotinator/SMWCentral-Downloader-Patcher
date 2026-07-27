@@ -1191,5 +1191,126 @@ class SaveAssociationTest(unittest.TestCase):
             "and c.status == save_sync.STATUS_COMPLETED", dialog_source
         )
 
+class SaveSourceDirectoryTest(unittest.TestCase):
+    class Config:
+        def __init__(self, values=None):
+            self.values = dict(values or {})
+
+        def get(self, key, default=""):
+            return self.values.get(key, default)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="save_sources_")
+        self.first = os.path.join(self.root, "first")
+        self.second = os.path.join(self.root, "second")
+        os.makedirs(self.first)
+        os.makedirs(self.second)
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.root)
+
+    def test_legacy_directory_migrates_to_canonical_source_list(self):
+        config = self.Config(
+            {
+                "save_sync_dir": self.first,
+                "save_sync_dirs": [],
+            }
+        )
+        directories = save_sync.get_save_directories(config)
+        self.assertEqual(directories, [os.path.abspath(self.first)])
+        self.assertEqual(config.values["save_sync_dirs"], directories)
+        self.assertEqual(config.values["save_sync_dir"], directories[0])
+
+    def test_add_remove_deduplicate_and_mirror_legacy_source(self):
+        config = self.Config()
+        self.assertTrue(save_sync.add_save_directory(config, self.first))
+        self.assertFalse(save_sync.add_save_directory(config, self.first))
+        self.assertTrue(save_sync.add_save_directory(config, self.second))
+        self.assertEqual(
+            config.values["save_sync_dirs"],
+            [os.path.abspath(self.first), os.path.abspath(self.second)],
+        )
+        self.assertTrue(save_sync.remove_save_directory(config, self.first))
+        self.assertEqual(
+            config.values["save_sync_dir"],
+            os.path.abspath(self.second),
+        )
+        self.assertFalse(save_sync.remove_save_directory(config, self.first))
+
+    def test_discovery_combines_sources_and_deduplicates_repeated_folder(self):
+        first_save = os.path.join(self.first, "First.srm")
+        second_save = os.path.join(self.second, "Second.SAV")
+        with open(first_save, "wb") as handle:
+            handle.write(b"x")
+        with open(second_save, "wb") as handle:
+            handle.write(b"y")
+        with open(os.path.join(self.second, "ignore.txt"), "wb") as handle:
+            handle.write(b"z")
+
+        found = save_sync.list_save_files_from_directories(
+            [self.first, self.second, self.first]
+        )
+        self.assertEqual(set(found), {first_save, second_save})
+
+    def test_multi_source_scan_keeps_strongest_candidate_across_folders(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        first_save = os.path.join(self.first, "Shared Hack.srm")
+        second_save = os.path.join(self.second, "Shared Hack.srm")
+        for path in (first_save, second_save):
+            with open(path, "wb") as handle:
+                handle.write(b"save")
+
+        def analysis_for(path):
+            value = 2 if os.path.dirname(path) == self.first else 5
+            return SimpleNamespace(
+                selected_value=value,
+                size=4,
+                profile="test",
+                counter_kind="overworld_events",
+                confidence="medium",
+                warnings=[],
+            )
+
+        hacks = [
+            {
+                "id": "42",
+                "title": "Shared Hack",
+                "exits": 10,
+                "completed": False,
+            }
+        ]
+        with patch("save_sync.analyze_save", side_effect=analysis_for):
+            candidates = save_sync.scan_save_directories(
+                [self.first, self.second],
+                hacks,
+            )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].collected_exits, 5)
+        self.assertEqual(candidates[0].save_path, second_save)
+
+    def test_config_and_settings_sources_expose_multiple_folder_lifecycle(self):
+        from pathlib import Path
+
+        root = Path(__file__).parent
+        config_source = (root / "config_manager.py").read_text(
+            encoding="utf-8"
+        )
+        settings_source = (
+            root / "ui" / "pages" / "settings_page.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"save_sync_dirs": []', config_source)
+        self.assertIn('text="Add Folder..."', settings_source)
+        self.assertIn('text="Remove Selected"', settings_source)
+        self.assertIn("save_sync.scan_save_directories(", settings_source)
+        self.assertIn("Unavailable Save Folders", settings_source)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

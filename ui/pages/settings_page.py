@@ -385,28 +385,58 @@ class SettingsPage:
 
         ttk.Label(
             save_sync_frame,
-            text="Point this at your emulator/console SAVE folder (.srm or .sav files). Matching hacks in "
+            text="Add one or more emulator/console SAVE folders (.srm or .sav files). Matching hacks in "
                  "your collection are marked completed, with the completion date taken from each save's "
                  "last-modified time. Play time is not stored in SNES saves, so it is left untouched.",
             style="Custom.TLabel",
             wraplength=760
         ).pack(anchor="w", pady=(0, 10))
 
-        # Directory picker row
-        save_dir_frame = ttk.Frame(save_sync_frame)
-        save_dir_frame.pack(fill="x", pady=(0, 8))
+        # Persisted save source folders
+        ttk.Label(
+            save_sync_frame,
+            text="Save Folders:",
+            style="Custom.TLabel",
+        ).pack(anchor="w", pady=(0, 4))
 
-        ttk.Label(save_dir_frame, text="Save Directory:", style="Custom.TLabel").pack(side="left", padx=(0, 10))
+        save_dirs_frame = ttk.Frame(save_sync_frame)
+        save_dirs_frame.pack(fill="x", pady=(0, 8))
 
-        self.save_sync_dir_entry = ttk.Entry(save_dir_frame, width=50)
-        self.save_sync_dir_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        save_dirs_list_frame = ttk.Frame(save_dirs_frame)
+        save_dirs_list_frame.pack(side="left", fill="both", expand=True)
+
+        self.save_sync_dirs_listbox = tk.Listbox(
+            save_dirs_list_frame,
+            height=4,
+            exportselection=False,
+        )
+        save_dirs_scrollbar = ttk.Scrollbar(
+            save_dirs_list_frame,
+            orient="vertical",
+            command=self.save_sync_dirs_listbox.yview,
+        )
+        self.save_sync_dirs_listbox.configure(
+            yscrollcommand=save_dirs_scrollbar.set
+        )
+        self.save_sync_dirs_listbox.pack(side="left", fill="both", expand=True)
+        save_dirs_scrollbar.pack(side="right", fill="y")
+
+        save_dirs_buttons = ttk.Frame(save_dirs_frame)
+        save_dirs_buttons.pack(side="left", padx=(10, 0), anchor="n")
 
         ttk.Button(
-            save_dir_frame,
-            text="Browse",
-            command=self._browse_save_dir,
-            style="Custom.TButton"
-        ).pack(side="left")
+            save_dirs_buttons,
+            text="Add Folder...",
+            command=self._add_save_dir,
+            style="Custom.TButton",
+        ).pack(fill="x", pady=(0, 5))
+
+        ttk.Button(
+            save_dirs_buttons,
+            text="Remove Selected",
+            command=self._remove_save_dir,
+            style="Custom.TButton",
+        ).pack(fill="x")
 
         # Mark-all toggle
         self.save_sync_mark_all_var = tk.BooleanVar()
@@ -440,7 +470,6 @@ class SettingsPage:
 
         # Load persisted save-sync settings
         self._load_save_sync_settings()
-        self.save_sync_dir_entry.bind("<FocusOut>", self._save_save_sync_settings)
 
         # Log section with level dropdown and clear button
         log_header_frame = ttk.Frame(content)
@@ -1249,58 +1278,159 @@ class SettingsPage:
     # Save Data Sync
     # ------------------------------------------------------------------ #
 
+    def _save_sync_directories_from_widget(self):
+        """Return the currently displayed save source folders."""
+
+        return [
+            self.save_sync_dirs_listbox.get(index)
+            for index in range(self.save_sync_dirs_listbox.size())
+        ]
+
+    def _populate_save_sync_directories(self, directories):
+        """Replace the save source list while preserving configured order."""
+
+        self.save_sync_dirs_listbox.delete(0, tk.END)
+        for directory in directories:
+            self.save_sync_dirs_listbox.insert(tk.END, directory)
+
     def _load_save_sync_settings(self):
         """Load save-sync settings from config into the widgets."""
+
         try:
+            import save_sync
+
             config = self.setup_section.config
-            self.save_sync_dir_entry.delete(0, tk.END)
-            self.save_sync_dir_entry.insert(0, config.get("save_sync_dir", ""))
-            self.save_sync_mark_all_var.set(config.get("save_sync_mark_all", False))
+            directories = save_sync.get_save_directories(config)
+            self._populate_save_sync_directories(directories)
+            self.save_sync_mark_all_var.set(
+                config.get("save_sync_mark_all", False)
+            )
         except Exception as e:
             print(f"Error loading save sync settings: {e}")
 
     def _save_save_sync_settings(self, event=None):
         """Persist save-sync settings to config."""
+
         try:
+            import save_sync
+
             config = self.setup_section.config
-            config.set("save_sync_dir", self.save_sync_dir_entry.get().strip())
+            save_sync.set_save_directories(
+                config,
+                self._save_sync_directories_from_widget(),
+            )
             config.set("save_sync_mark_all", self.save_sync_mark_all_var.get())
-            config.save()
         except Exception as e:
             print(f"Error saving save sync settings: {e}")
 
-    def _browse_save_dir(self):
-        """Browse for the emulator/console save directory."""
+    def _add_save_dir(self):
+        """Add another emulator or console save source folder."""
+
         try:
+            import save_sync
             from platform_utils import pick_directory
-            current = self.save_sync_dir_entry.get().strip()
+
+            directories = self._save_sync_directories_from_widget()
+            selected_indices = self.save_sync_dirs_listbox.curselection()
+            if selected_indices:
+                current = self.save_sync_dirs_listbox.get(selected_indices[0])
+            else:
+                current = directories[0] if directories else ""
+
             selected = pick_directory(
-                title="Select Save Directory",
-                initial_dir=current if current and os.path.isdir(current) else None,
+                title="Add Save Folder",
+                initial_dir=(
+                    current if current and os.path.isdir(current) else None
+                ),
             )
             if not selected:
                 return
-            self.save_sync_dir_entry.delete(0, tk.END)
-            self.save_sync_dir_entry.insert(0, selected)
-            self._save_save_sync_settings()
-        except Exception as e:
-            messagebox.showerror("Save Data Sync", f"Failed to pick directory: {e}")
 
-    def _scan_saves(self):
-        """Scan the save directory and open the review dialog."""
-        directory = self.save_sync_dir_entry.get().strip()
-        if not directory or not os.path.isdir(directory):
+            save_sync.add_save_directory(self.setup_section.config, selected)
+            self._populate_save_sync_directories(
+                save_sync.get_save_directories(self.setup_section.config)
+            )
+        except Exception as e:
             messagebox.showerror(
                 "Save Data Sync",
-                "Please select a valid save directory first."
+                f"Failed to add save folder: {e}",
+            )
+
+    def _remove_save_dir(self):
+        """Remove the selected source without touching files on disk."""
+
+        selected_indices = self.save_sync_dirs_listbox.curselection()
+        if not selected_indices:
+            messagebox.showinfo(
+                "Save Data Sync",
+                "Select a save folder to remove first.",
             )
             return
+
+        try:
+            import save_sync
+
+            directory = self.save_sync_dirs_listbox.get(selected_indices[0])
+            save_sync.remove_save_directory(
+                self.setup_section.config,
+                directory,
+            )
+            self._populate_save_sync_directories(
+                save_sync.get_save_directories(self.setup_section.config)
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "Save Data Sync",
+                f"Failed to remove save folder: {e}",
+            )
+
+    def _scan_saves(self):
+        """Scan all available save source folders and open the review dialog."""
+
+        import save_sync
+
+        directories = save_sync.get_save_directories(
+            self.setup_section.config
+        )
+        if not directories:
+            messagebox.showerror(
+                "Save Data Sync",
+                "Add at least one save folder first.",
+            )
+            return
+
+        available = [
+            directory for directory in directories if os.path.isdir(directory)
+        ]
+        unavailable = [
+            directory for directory in directories if not os.path.isdir(directory)
+        ]
+        if not available:
+            messagebox.showerror(
+                "Save Data Sync",
+                "None of the configured save folders are currently available.",
+            )
+            return
+
+        if unavailable:
+            missing_names = "\n".join(
+                f"• {directory}" for directory in unavailable
+            )
+            proceed = messagebox.askyesno(
+                "Unavailable Save Folders",
+                "These configured folders are unavailable and will be skipped:\n\n"
+                f"{missing_names}\n\n"
+                f"Continue with the {len(available)} available folder(s)?",
+            )
+            if not proceed:
+                return
 
         data_manager = getattr(self, "data_manager", None)
         if data_manager is None:
             messagebox.showerror(
                 "Save Data Sync",
-                "Collection data is not available yet. Open the Collection tab once, then try again."
+                "Collection data is not available yet. Open the Collection "
+                "tab once, then try again.",
             )
             return
 
@@ -1308,14 +1438,16 @@ class SettingsPage:
         mark_all = self.save_sync_mark_all_var.get()
 
         self.scan_saves_button.config(state="disabled", text="Scanning...")
-        self.save_sync_status_label.config(text="⏳ Scanning saves...", foreground=STATUS_COLOR_INFO)
+        self.save_sync_status_label.config(
+            text=f"⏳ Scanning {len(available)} folder(s)...",
+            foreground=STATUS_COLOR_INFO,
+        )
         self.frame.update_idletasks()
 
         def worker():
             error = None
             candidates = []
             try:
-                import save_sync
                 hacks = data_manager.get_all_hacks(include_obsolete=False)
                 existing_ids = {str(hack.get("id", "")) for hack in hacks}
                 associations, removed = save_sync.prune_save_associations(
@@ -1326,10 +1458,11 @@ class SettingsPage:
                 )
                 if removed:
                     self.setup_section.config.set(
-                        save_sync.ASSOCIATION_CONFIG_KEY, associations
+                        save_sync.ASSOCIATION_CONFIG_KEY,
+                        associations,
                     )
-                candidates = save_sync.scan_saves(
-                    directory,
+                candidates = save_sync.scan_save_directories(
+                    available,
                     hacks,
                     mark_all=mark_all,
                     associations=associations,
@@ -1337,8 +1470,10 @@ class SettingsPage:
             except Exception as e:
                 error = e
 
-            # Marshal results back to the Tk main thread.
-            self.frame.after(0, lambda: self._on_scan_complete(candidates, error))
+            self.frame.after(
+                0,
+                lambda: self._on_scan_complete(candidates, error),
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 
