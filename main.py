@@ -20,6 +20,8 @@ from tkinter import ttk
 from api_pipeline import run_pipeline
 from ui import setup_ui, update_log_colors
 from utils import resource_path
+from product_identity import PRODUCT_DISPLAY_NAME, VERSION
+from update_policy import current_update_policy
 import sv_ttk
 
 # Multiple approaches to suppress threading cleanup errors
@@ -50,8 +52,6 @@ try:
         pywinstyles = None
 except ImportError:
     pywinstyles = None
-
-VERSION = "v5.1"
 
 
 def apply_theme_to_titlebar(root):
@@ -816,7 +816,7 @@ def main():
         set_difficulty_lookup(difficulty_lookup)
         
         root = tk.Tk()
-        root.title("SMWC Downloader & Patcher")
+        root.title(PRODUCT_DISPLAY_NAME)
 
         # Set responsive window geometry based on screen size
         screen_width = root.winfo_screenwidth()
@@ -959,6 +959,9 @@ def main():
         # Check for updates in background after UI loads
         def check_for_updates_after_startup():
             """Check for updates after the UI has fully loaded"""
+            if not current_update_policy().checks_enabled:
+                return
+
             try:
                 from config_manager import ConfigManager
                 from updater import check_for_updates_background, show_update_dialog
@@ -995,4 +998,8 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--smoke-test" in sys.argv:
+        from build_support.runtime_smoke import run_runtime_smoke
+
+        raise SystemExit(run_runtime_smoke())
     main()

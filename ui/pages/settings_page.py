@@ -9,6 +9,8 @@ import platform
 # Add path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+from product_identity import VERSION
+from update_policy import current_update_policy
 from utils import TYPE_KEYMAP
 from ui_constants import get_page_padding, get_section_padding, STATUS_COLOR_INFO, STATUS_COLOR_SUCCESS, STATUS_COLOR_WARNING, STATUS_COLOR_ERROR
 
@@ -23,6 +25,7 @@ class SettingsPage:
         self.font = ("Segoe UI", 9)
         self.frame = None
         self.log_level_combo = None
+        self.update_policy = current_update_policy()
         
         # Callback for emulator settings changes
         self.emulator_settings_callback = None
@@ -232,6 +235,20 @@ class SettingsPage:
             command=self._save_auto_check_setting
         )
         self.auto_check_updates_checkbox.pack(anchor="w", pady=(4, 0))
+
+        if not self.update_policy.checks_enabled:
+            self.check_updates_button.config(
+                state="disabled",
+                text="Updates Disabled for Development Builds",
+            )
+            self.auto_check_updates_checkbox.config(state="disabled")
+            ttk.Label(
+                update_frame,
+                text=self.update_policy.reason,
+                style="Custom.TLabel",
+                wraplength=620,
+                justify="left",
+            ).pack(anchor="w", pady=(8, 0))
         
         # Load auto-check setting
         self._load_auto_check_setting()
@@ -556,10 +573,16 @@ class SettingsPage:
     
     def _check_for_updates(self):
         """Check for updates manually"""
+        if not self.update_policy.checks_enabled:
+            messagebox.showinfo(
+                "Updates Disabled",
+                self.update_policy.reason or "Updates are disabled for this build.",
+            )
+            return
+
         try:
             # Import here to avoid circular imports
             from updater import Updater, UpdateDialog
-            from main import VERSION
             
             # Disable button during check
             self.check_updates_button.config(state="disabled", text="Checking...")
@@ -616,6 +639,9 @@ class SettingsPage:
     
     def _save_auto_check_setting(self):
         """Save auto-check updates setting"""
+        if not self.update_policy.checks_enabled:
+            return
+
         try:
             # Use shared config instead of creating new instance
             config = self.setup_section.config
@@ -629,6 +655,10 @@ class SettingsPage:
     
     def _load_auto_check_setting(self):
         """Load auto-check updates setting"""
+        if not self.update_policy.checks_enabled:
+            self.auto_check_updates_var.set(False)
+            return
+
         try:
             # Use shared config instead of creating new instance
             config = self.setup_section.config

@@ -1,119 +1,144 @@
-# Centralized Version Management System
+# Product Identity and Version Management
 
-## Overview
-The SMWCentral Downloader & Patcher now uses a centralized version management system. **All version information is managed from a single location** - the `VERSION` constant in `main.py`.
+## Authoritative source
 
-## Single Source of Truth
+`product_manifest.json` is the single source of truth for SMWC Downloader & Patcher identity and packaging. It owns:
+
+- product ID and display name;
+- development or release version;
+- PEP 440 version;
+- release channel;
+- publisher and copyright;
+- supported Python range;
+- Windows and macOS numeric metadata;
+- application and updater identities;
+- supported native targets and artifact names;
+- PyInstaller resources, package data, and hidden imports.
+
+Do not add an independent version constant to `main.py`, workflows, PyInstaller specs, or release scripts.
+
+## Runtime identity
+
+`product_identity.py` validates the manifest and exports runtime constants such as:
+
 ```python
-# In main.py
-VERSION = "v4.3"  # <-- Only place you need to update the version!
+PRODUCT_DISPLAY_NAME
+PRODUCT_VERSION
+PEP440_VERSION
+RELEASE_CHANNEL
+VERSION
+WINDOWS_VERSION_TUPLE
+MACOS_SHORT_VERSION
+MACOS_BUNDLE_VERSION
 ```
 
-## How It Works
+Both source execution and frozen execution load the same manifest. The manifest is included in the application and updater packages as a required runtime resource.
 
-### Files Involved
-- `main.py` - Contains the master `VERSION` constant
-- `version_manager.py` - Central utilities for version information
-- `generate_version.py` - Dynamically generates `version.txt` for Windows executables
-- `update_version.py` - Simple script to update version in one command
-- `build_release.py` - Updated to use centralized version system
+## Generated package metadata
 
-### Automatic Version Propagation
-When you change the version in `main.py`, it automatically updates:
+`package_metadata.py` and `build_support.metadata` derive platform metadata from the manifest.
 
-1. **Build System** (`build_release.py`)
-   - Package directory name: `SMWC_Downloader_v4.3`
-   - Zip file name: `SMWC_Downloader_v4.3.zip`
-   - README content in release package
+Generated files include:
 
-2. **Windows Executable Metadata** (`version.txt`)
-   - File version: `4.3.0`
-   - Product version: `4.3.0`
-   - Generated dynamically during build
+- `version.txt` for the Windows application;
+- `updater_version.txt` for the Windows updater;
+- macOS bundle display, short, and bundle versions;
+- `build_identity.json` inside candidate output;
+- smoke and verification reports;
+- target-specific package filenames and checksums.
 
-3. **UI Components**
-   - Collection page version display
-   - Any other UI components that show version
+Generated metadata must not be treated as an editable source of truth.
 
-## Usage
+## Current development version
 
-### Method 1: Manual Update
-Edit `main.py` and change:
-```python
-VERSION = "v4.3"  # Change this to your new version
+The current line uses:
+
+```text
+Product version: 5.1.0-dev.1
+PEP 440 version: 5.1.0.dev1
+Release channel: development
+Display version: v5.1.0-dev.1
 ```
 
-### Method 2: Using Update Script
-```bash
-# Update to version 4.4
-python update_version.py v4.4
-python update_version.py 4.4    # Both formats work
-```
+The development suffix is represented consistently in Windows numeric and macOS bundle metadata. `python -m build_support.validate_manifest --json` checks these relationships.
 
-### Method 3: Check Current Version
-```bash
-python update_version.py        # Shows current version
-python version_manager.py       # Shows detailed version info
-```
+## Updating a development version
 
-## Building with New Version
+Change the related manifest fields together:
 
-The build process now automatically handles versioning:
+1. `product.version`
+2. `product.pep440_version`
+3. `versions.windows_numeric`
+4. `versions.macos_short`
+5. `versions.macos_bundle`
+6. every `targets.<target>.artifact_name`
 
-```bash
-python build_release.py
-```
+The updater component's `product_id` and `release_channel` must continue matching the product section.
 
-This will:
-1. Generate `version.txt` with current version from `main.py`
-2. Create package directory with versioned name
-3. Generate README with current version
-4. Create zip file with versioned name
-
-## Version Format
-
-The system supports these version formats:
-- **Display Version**: `v4.3` (used in UI, package names)
-- **Numeric Version**: `4.3` (used for calculations)
-- **Extended Version**: `4.3.0` (used for Windows metadata)
-- **Tuple Version**: `(4, 3, 0, 0)` (used for Windows version info)
-
-## Migration Benefits
-
-### Before (Manual Updates Required)
-- `main.py` - VERSION constant
-- `build_release.py` - Multiple hardcoded version strings
-- `version.txt` - Windows version metadata
-- `README.md` - Version in title and content
-- Any other files with hardcoded versions
-
-### After (Single Update Point)
-- `main.py` - VERSION constant ✅ **ONLY FILE TO UPDATE**
-- All other files automatically derive version from this source
-
-## Testing
-
-Test the version management system:
+Then run:
 
 ```bash
-# Test version manager
-python version_manager.py
-
-# Test version.txt generation
-python generate_version.py
-
-# Test build system imports
-python -c "from build_release import *; print(f'Build system version: {get_version()}')"
+python -m build_support.validate_manifest --json
+python -m unittest -v test_product_identity.py test_package_metadata.py test_build_configuration.py
+python -m build_support.quality --skip-build
 ```
 
-## Example Workflow
+Do not manually edit only `version.txt`, `updater_version.txt`, or a README filename.
 
-1. **Update version**: `python update_version.py v4.4`
-2. **Test version**: `python version_manager.py`
-3. **Build release**: `python build_release.py`
+## Release channels and updater policy
 
-The build will automatically create `SMWC_Downloader_v4.4.zip` with all the correct version numbers throughout!
+`update_policy.py` resolves update behavior from the manifest release channel.
 
-## No More Version Hell! 🎉
+- `development`: update discovery and in-place replacement are disabled.
+- `stable` or `release`: updater support is enabled.
+- empty or unknown channels: fail closed.
 
-You'll never again have to hunt through multiple files to update version numbers. Just change it once in `main.py` and everything else is handled automatically.
+This prevents a development candidate from replacing itself with an older stable build or invoking the standalone replacement helper.
+
+## Stable release preparation
+
+The current validation model is deliberately development-first. A stable release requires a focused release-preparation change rather than editing only the tag.
+
+That change must, at minimum:
+
+1. define and validate the stable version representation;
+2. set the manifest release channel to `stable` or `release`;
+3. update all native artifact names;
+4. regenerate and verify Windows/macOS metadata;
+5. confirm updater policy is enabled only for the intended stable build;
+6. pass source validation and all four native Candidate CI jobs;
+7. create a clean `vMAJOR.MINOR.PATCH` tag on that exact successful revision.
+
+The Final Release workflow then verifies all same-revision candidate evidence and creates `release-manifest.json`. It refuses duplicate, incomplete, dirty, mixed-revision, development-channel, or checksum-invalid releases.
+
+## Useful commands
+
+Validate identity and generated metadata:
+
+```bash
+python -m build_support.validate_manifest --json
+```
+
+Print manifest-defined release targets:
+
+```bash
+python -m build_support.release_gate --print-targets
+```
+
+Run the complete source gate:
+
+```bash
+python -m build_support.quality --skip-build
+```
+
+Build the current native candidate:
+
+```bash
+python -m build_support.build_candidate
+```
+
+Display runtime identity from Python:
+
+```bash
+python -c "from product_identity import PRODUCT_DISPLAY_NAME, VERSION, RELEASE_CHANNEL; print(PRODUCT_DISPLAY_NAME, VERSION, RELEASE_CHANNEL)"
+```

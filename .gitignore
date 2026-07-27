@@ -9,6 +9,7 @@ venv/
 dist/
 build/
 release/
+artifacts/
 *.exe
 *.zip
 *.spec.backup
@@ -25,9 +26,13 @@ PADDING_GUIDE.md
 # Development files
 *.log
 *.tmp
+.coverage
+coverage.json
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 .DS_Store
 test_canvas.py
-test_*.py
 
 # VS Code
 .vscode/

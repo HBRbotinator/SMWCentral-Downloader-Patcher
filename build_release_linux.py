@@ -2,7 +2,7 @@
 """
 SMWCentral Downloader - Linux Build System
 Creates both tar.gz archives and AppImage packages for Linux.
-Version is automatically pulled from main.py
+Version is read from product_manifest.json
 
 This script builds two distribution formats:
 1. tar.gz - Traditional archive with install.sh for system integration
@@ -35,146 +35,45 @@ def safe_remove_tree(path):
     return True
 
 def build_linux_executables():
-    """Build Linux executables using PyInstaller"""
+    """Build Linux executables using the checked-in shared specifications."""
     print("🔨 Building SMWCentral Downloader for Linux...")
-    
-    # Generate version.txt with current version
-    print("📝 Generating version.txt...")
+
+    # Regenerate committed Windows metadata before packaging so stale product
+    # identity is detected consistently across local and CI builds.
+    print("📝 Generating package metadata...")
     generate_version_txt()
-    
-    # Clean previous builds
+
     print("🧹 Cleaning previous builds...")
     safe_remove_tree("dist")
     safe_remove_tree("build")
-    
-    # Create Linux-specific spec for main downloader
-    print("📦 Creating main application spec...")
-    main_spec_content = """# -*- mode: python ; coding: utf-8 -*-
-a = Analysis(
-    ['main.py'],
-    pathex=[],
-    binaries=[],
-    datas=[('assets', 'assets'), ('ui', 'ui')],
-    hiddenimports=['tkinter.filedialog', 'tkinter.messagebox', 'platform_utils', 
-                   'difficulty_migration', 'difficulty_lookup_manager', 
-                   'PIL._tkinter_finder', 'PIL.Image', 'PIL.ImageTk'],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
-    noarchive=False,
-    optimize=0,
-)
-pyz = PYZ(a.pure)
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name='smwc-downloader',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-"""
-    
-    with open("SMWC Downloader Linux.spec", "w") as f:
-        f.write(main_spec_content)
-    
-    # Build main application
-    print("📦 Building main application...")
-    result = subprocess.run([
-        "python3", "-m", "PyInstaller",
-        "--clean",
-        "SMWC Downloader Linux.spec",
-    ])
-    
-    if result.returncode != 0:
-        print(f"[ERROR] Main app build failed (exit code {result.returncode})")
-        return False
-    
-    # Create Linux-specific spec for updater
-    print("🔄 Creating updater spec...")
-    updater_spec_content = """# -*- mode: python ; coding: utf-8 -*-
-a = Analysis(
-    ['standalone_updater.py'],
-    pathex=[],
-    binaries=[],
-    datas=[('assets/icon.ico', 'assets'), ('assets/icons', 'assets/icons')],
-    hiddenimports=[],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
-    noarchive=False,
-    optimize=0,
-)
-pyz = PYZ(a.pure)
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name='smwc-updater',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-"""
-    
-    with open("SMWC Updater Linux.spec", "w") as f:
-        f.write(updater_spec_content)
-    
-    # Build updater
-    print("🔄 Building updater...")
-    result = subprocess.run([
-        "python3", "-m", "PyInstaller",
-        "--clean",
-        "SMWC Updater Linux.spec",
-    ])
-    
-    if result.returncode != 0:
-        print(f"[ERROR] Updater build failed (exit code {result.returncode})")
-        return False
-    
-    # Verify executables exist
+
+    builds = (
+        ("main application", "SMWC Downloader Linux.spec"),
+        ("updater", "SMWC Updater Linux.spec"),
+    )
+    for label, spec_path in builds:
+        print(f"📦 Building {label}...")
+        result = subprocess.run(
+            ["python3", "-m", "PyInstaller", "--clean", spec_path],
+            env={**os.environ, "SMWC_BUILD_TARGET": "linux-x86_64"},
+        )
+        if result.returncode != 0:
+            print(f"[ERROR] {label.capitalize()} build failed (exit code {result.returncode})")
+            return False
+
     main_exe = os.path.join("dist", "smwc-downloader")
     updater_exe = os.path.join("dist", "smwc-updater")
-    
     if not os.path.exists(main_exe):
         print(f"[ERROR] Main executable not found: {main_exe}")
         return False
-    
     if not os.path.exists(updater_exe):
         print(f"[ERROR] Updater executable not found: {updater_exe}")
         return False
-    
-    # Display build info
-    main_size = os.path.getsize(main_exe) / (1024*1024)
-    updater_size = os.path.getsize(updater_exe) / (1024*1024)
+
+    main_size = os.path.getsize(main_exe) / (1024 * 1024)
+    updater_size = os.path.getsize(updater_exe) / (1024 * 1024)
     print(f"[OK] Main app built: {main_size:.1f}MB")
     print(f"[OK] Updater built: {updater_size:.1f}MB")
-    
     return True
 
 def create_tarball_package():
