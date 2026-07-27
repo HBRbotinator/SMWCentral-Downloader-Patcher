@@ -6,11 +6,16 @@ in the collection by filename, and derive completion status + last-played date.
 
 Format notes
 ------------
-Both .srm and .sav files are raw SNES SRAM dumps. The inherited implementation
-reads byte 0x8C and compares it with a hack's advertised exits. That byte is an
-overworld-event counter in ordinary SMW saves and is not universally trustworthy
-for ROM hacks, so the new structured parser records it as low-confidence legacy
-evidence while preserving the current completion decisions in this refactor.
+Both .srm and .sav files are raw SNES SRAM dumps. The structured parser first
+checks the three standard SMW slots and their backup copies. Checksum-valid
+slots are treated as medium-confidence evidence and the strongest valid
+overworld-event counter is selected. When no standard slot can be proven, the
+inherited byte at 0x8C remains available as low-confidence compatibility
+evidence.
+
+An overworld-event counter is still not universally equivalent to a ROM hack's
+advertised exits. Later profiles can provide hack-specific semantics without
+changing the matching or collection-update contracts in this module.
 
 Real-world play time is not stored in SMW SRAM, so this module never touches
 ``time_to_beat``. The completion date comes from the file's on-disk modified
@@ -67,12 +72,11 @@ RESOLUTION_ERROR = "error"           # network / API error during lookup
 
 
 def read_collected_exits(path):
-    """Return the inherited raw counter used by the original sync feature.
+    """Return the strongest supported progress-counter evidence.
 
-    The compatibility API still returns an ``int`` for every readable non-0xFF
-    byte at offset ``0x8C`` and ``None`` otherwise. Internally the read now goes
-    through :func:`save_analysis.analyze_save`, which records the profile,
-    counter meaning, confidence, warnings, and attempted evidence.
+    Checksum-valid standard SMW slots take precedence. The inherited raw byte at
+    ``0x8C`` remains the low-confidence fallback, preserving compatibility for
+    saves that use non-standard or expanded layouts.
     """
 
     return analyze_save(path).selected_value

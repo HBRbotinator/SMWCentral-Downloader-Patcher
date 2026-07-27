@@ -201,5 +201,248 @@ class SaveSyncCompatibilityTest(unittest.TestCase):
         self.assertEqual(candidate.evidence()["selected_value"], 3)
 
 
+def _write_standard_copy(
+    image: bytearray,
+    *,
+    slot: str,
+    copy_kind: str,
+    value: int,
+    fill: int = 0,
+) -> None:
+    offsets = {
+        name: {
+            save_analysis.COPY_PRIMARY: primary,
+            save_analysis.COPY_BACKUP: backup,
+        }
+        for name, primary, backup in save_analysis.STANDARD_SLOT_OFFSETS
+    }
+    offset = offsets[slot][copy_kind]
+    slot_data = bytearray([fill] * save_analysis.STANDARD_SLOT_DATA_SIZE)
+    slot_data[save_analysis.STANDARD_EVENT_COUNTER_OFFSET] = value
+    checksum = save_analysis.calculate_standard_checksum(bytes(slot_data))
+    image[offset : offset + save_analysis.STANDARD_SLOT_DATA_SIZE] = slot_data
+    checksum_start = offset + save_analysis.STANDARD_CHECKSUM_OFFSET
+    image[checksum_start : checksum_start + 2] = checksum.to_bytes(2, "little")
+
+
+class StandardSmwSlotAnalysisTest(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="standard_smw_slots_")
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _analyze(self, image: bytes | bytearray) -> save_analysis.SaveAnalysis:
+        path = self.root / "standard.srm"
+        path.write_bytes(bytes(image))
+        return save_analysis.analyze_save(path)
+
+    def test_checksum_seed_matches_zero_filled_slot(self):
+        slot_data = bytes(save_analysis.STANDARD_SLOT_DATA_SIZE)
+        self.assertEqual(
+            save_analysis.calculate_standard_checksum(slot_data),
+            save_analysis.STANDARD_CHECKSUM_SEED,
+        )
+
+    def test_checksum_requires_exact_standard_data_size(self):
+        with self.assertRaises(ValueError):
+            save_analysis.calculate_standard_checksum(b"short")
+
+    def test_checksum_valid_slot_uses_medium_confidence_profile(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        _write_standard_copy(
+            image,
+            slot="A",
+            copy_kind=save_analysis.COPY_PRIMARY,
+            value=4,
+        )
+        _write_standard_copy(
+            image,
+            slot="A",
+            copy_kind=save_analysis.COPY_BACKUP,
+            value=4,
+        )
+        result = self._analyze(image)
+        self.assertEqual(result.profile, save_analysis.PROFILE_STANDARD_SMW_SLOTS)
+        self.assertEqual(result.confidence, save_analysis.CONFIDENCE_MEDIUM)
+        self.assertEqual(result.selected_value, 4)
+        self.assertEqual(result.selected_slot, "A")
+        self.assertEqual(result.selected_copy, save_analysis.COPY_PRIMARY)
+        self.assertEqual(result.valid_slots, ("A",))
+
+    def test_highest_checksum_valid_slot_is_selected(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        for copy_kind in (save_analysis.COPY_PRIMARY, save_analysis.COPY_BACKUP):
+            _write_standard_copy(
+                image,
+                slot="A",
+                copy_kind=copy_kind,
+                value=2,
+            )
+            _write_standard_copy(
+                image,
+                slot="C",
+                copy_kind=copy_kind,
+                value=13,
+            )
+        result = self._analyze(image)
+        self.assertEqual(result.selected_value, 13)
+        self.assertEqual(result.selected_slot, "C")
+        self.assertEqual(result.valid_slots, ("A", "C"))
+
+    def test_invalid_high_counter_is_ignored(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        for copy_kind in (save_analysis.COPY_PRIMARY, save_analysis.COPY_BACKUP):
+            _write_standard_copy(
+                image,
+                slot="A",
+                copy_kind=copy_kind,
+                value=2,
+            )
+        b_primary = save_analysis.STANDARD_SLOT_OFFSETS[1][1]
+        image[b_primary + save_analysis.STANDARD_EVENT_COUNTER_OFFSET] = 96
+        result = self._analyze(image)
+        self.assertEqual(result.selected_value, 2)
+        self.assertEqual(result.selected_slot, "A")
+        b_attempt = next(
+            attempt
+            for attempt in result.attempts
+            if attempt.slot == "B"
+            and attempt.copy_kind == save_analysis.COPY_PRIMARY
+        )
+        self.assertFalse(b_attempt.checksum_valid)
+        self.assertEqual(b_attempt.counter_value, 96)
+
+    def test_backup_copy_recovers_when_primary_checksum_is_invalid(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        _write_standard_copy(
+            image,
+            slot="B",
+            copy_kind=save_analysis.COPY_BACKUP,
+            value=17,
+        )
+        result = self._analyze(image)
+        self.assertEqual(result.selected_value, 17)
+        self.assertEqual(result.selected_slot, "B")
+        self.assertEqual(result.selected_copy, save_analysis.COPY_BACKUP)
+        self.assertTrue(any("only one usable" in item for item in result.warnings))
+
+    def test_divergent_valid_copies_select_higher_counter_with_warning(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        _write_standard_copy(
+            image,
+            slot="A",
+            copy_kind=save_analysis.COPY_PRIMARY,
+            value=7,
+        )
+        _write_standard_copy(
+            image,
+            slot="A",
+            copy_kind=save_analysis.COPY_BACKUP,
+            value=9,
+        )
+        result = self._analyze(image)
+        self.assertEqual(result.selected_value, 9)
+        self.assertEqual(result.selected_copy, save_analysis.COPY_BACKUP)
+        self.assertTrue(any("counters differ" in item for item in result.warnings))
+
+    def test_padded_save_can_still_use_standard_slot_region(self):
+        image = bytearray(128 * 1024)
+        _write_standard_copy(
+            image,
+            slot="C",
+            copy_kind=save_analysis.COPY_PRIMARY,
+            value=44,
+        )
+        _write_standard_copy(
+            image,
+            slot="C",
+            copy_kind=save_analysis.COPY_BACKUP,
+            value=44,
+        )
+        result = self._analyze(image)
+        self.assertEqual(result.size, 128 * 1024)
+        self.assertEqual(result.profile, save_analysis.PROFILE_STANDARD_SMW_SLOTS)
+        self.assertEqual(result.selected_value, 44)
+
+    def test_no_valid_standard_copy_preserves_legacy_fallback(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        image[save_analysis.LEGACY_COUNTER_OFFSET] = 6
+        result = self._analyze(image)
+        self.assertEqual(result.profile, save_analysis.PROFILE_LEGACY_RAW_COUNTER)
+        self.assertEqual(result.confidence, save_analysis.CONFIDENCE_LOW)
+        self.assertEqual(result.selected_value, 6)
+        self.assertEqual(len(result.attempts), 7)
+        self.assertTrue(all(not item.accepted for item in result.attempts[:6]))
+        self.assertIn("No usable checksum-valid", result.warnings[0])
+
+    def test_evidence_includes_slot_and_checksum_details(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        _write_standard_copy(
+            image,
+            slot="C",
+            copy_kind=save_analysis.COPY_PRIMARY,
+            value=22,
+        )
+        result = self._analyze(image)
+        evidence = result.as_dict()
+        self.assertEqual(evidence["selected_slot"], "C")
+        self.assertEqual(evidence["valid_slots"], ["C"])
+        selected_attempt = next(
+            attempt
+            for attempt in evidence["attempts"]
+            if attempt["accepted"]
+        )
+        self.assertEqual(selected_attempt["slot"], "C")
+        self.assertTrue(selected_attempt["checksum_valid"])
+        self.assertEqual(
+            selected_attempt["stored_checksum"],
+            selected_attempt["expected_checksum"],
+        )
+
+    def test_compatibility_reader_returns_selected_standard_slot(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        for copy_kind in (save_analysis.COPY_PRIMARY, save_analysis.COPY_BACKUP):
+            _write_standard_copy(
+                image,
+                slot="A",
+                copy_kind=copy_kind,
+                value=2,
+            )
+            _write_standard_copy(
+                image,
+                slot="C",
+                copy_kind=copy_kind,
+                value=13,
+            )
+        path = self.root / "reader.srm"
+        path.write_bytes(image)
+        self.assertEqual(save_sync.read_collected_exits(path), 13)
+
+    def test_scan_classifies_from_selected_standard_slot(self):
+        image = bytearray(save_analysis.STANDARD_SRAM_SIZE)
+        for copy_kind in (save_analysis.COPY_PRIMARY, save_analysis.COPY_BACKUP):
+            _write_standard_copy(
+                image,
+                slot="C",
+                copy_kind=copy_kind,
+                value=13,
+            )
+        path = self.root / "Known Hack.srm"
+        path.write_bytes(image)
+        candidates = save_sync.scan_saves(
+            str(self.root),
+            [{"id": "1", "title": "Known Hack", "exits": 13}],
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].collected_exits, 13)
+        self.assertEqual(candidates[0].status, save_sync.STATUS_COMPLETED)
+        self.assertEqual(
+            candidates[0].profile,
+            save_analysis.PROFILE_STANDARD_SMW_SLOTS,
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
