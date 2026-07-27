@@ -6,14 +6,15 @@ in the collection by filename, and derive completion status + last-played date.
 
 Format notes
 ------------
-Both .srm and .sav files are raw SNES SRAM dumps and share the identical vanilla
-Super Mario World save layout (most SMW/kaizo hacks inherit it). Byte 0x8C of a
-save file holds the number of *collected exits*. Comparing that to a hack's total
-``exits`` (from processed.json) gives a reliable "completed" signal.
+Both .srm and .sav files are raw SNES SRAM dumps. The inherited implementation
+reads byte 0x8C and compares it with a hack's advertised exits. That byte is an
+overworld-event counter in ordinary SMW saves and is not universally trustworthy
+for ROM hacks, so the new structured parser records it as low-confidence legacy
+evidence while preserving the current completion decisions in this refactor.
 
-Real-world play time is NOT stored anywhere in SMW SRAM, so this module never
-touches ``time_to_beat``. The completion *date* comes from the file's on-disk
-last-modified timestamp, since SMW SRAM stores no real-world date either.
+Real-world play time is not stored in SMW SRAM, so this module never touches
+``time_to_beat``. The completion date comes from the file's on-disk modified
+timestamp because SRAM stores no real-world date either.
 
 Copyright (c) 2025 iamtheratio
 Licensed under the MIT License - see LICENSE file for details
@@ -24,16 +25,21 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
+from save_analysis import (
+    LEGACY_COUNTER_OFFSET,
+    MIN_LEGACY_SAVE_SIZE,
+    UNINITIALIZED_BYTE as _UNINITIALIZED_BYTE,
+    SaveAnalysis,
+    analyze_save,
+)
+
 # --- SMW SRAM layout ---------------------------------------------------------
 
-# Offset of the collected-exit counter within an SMW SRAM save file.
-SMW_EXIT_COUNT_OFFSET = 0x8C
-
-# Smallest file that can contain the exit-count byte.
-MIN_SAVE_SIZE = SMW_EXIT_COUNT_OFFSET + 1
-
-# 0xFF at the exit offset means uninitialized / non-SMW SRAM -> untrustworthy.
-UNINITIALIZED_BYTE = 0xFF
+# Backwards-compatible public aliases. The structured parser names this an
+# inherited raw counter because 0x8C is not universally an advertised-exit count.
+SMW_EXIT_COUNT_OFFSET = LEGACY_COUNTER_OFFSET
+MIN_SAVE_SIZE = MIN_LEGACY_SAVE_SIZE
+UNINITIALIZED_BYTE = _UNINITIALIZED_BYTE
 
 # No real SMW hack has anywhere near this many exits; larger reads are garbage
 # (e.g. FXPak-padded 128KB files that don't use the vanilla offset).
@@ -61,35 +67,23 @@ RESOLUTION_ERROR = "error"           # network / API error during lookup
 
 
 def read_collected_exits(path):
-    """Return the SMW collected-exit count stored in a save file.
+    """Return the inherited raw counter used by the original sync feature.
 
-    Reads byte 0x8C. Returns an ``int`` (0-254) on success, or ``None`` when the
-    value cannot be trusted: the file is too small, unreadable, or the byte is
-    0xFF (uninitialized SRAM).
-
-    The logic is identical for ``.srm`` and ``.sav`` files -- they are the same
-    raw SMW SRAM format and differ only by filename extension.
+    The compatibility API still returns an ``int`` for every readable non-0xFF
+    byte at offset ``0x8C`` and ``None`` otherwise. Internally the read now goes
+    through :func:`save_analysis.analyze_save`, which records the profile,
+    counter meaning, confidence, warnings, and attempted evidence.
     """
-    try:
-        with open(path, "rb") as f:
-            header = f.read(MIN_SAVE_SIZE)
-    except OSError:
-        return None
 
-    if len(header) < MIN_SAVE_SIZE:
-        return None
-
-    value = header[SMW_EXIT_COUNT_OFFSET]
-    if value == UNINITIALIZED_BYTE:
-        return None
-    return value
+    return analyze_save(path).selected_value
 
 
 def classify(collected, total, already_completed, mark_all):
     """Decide the completion verdict for a single matched save.
 
     Args:
-        collected (int | None): collected exits from :func:`read_collected_exits`.
+        collected (int | None): inherited raw counter from
+            :func:`read_collected_exits`.
         total (int): the hack's total exit count (0 if unknown).
         already_completed (bool): hack is already marked completed.
         mark_all (bool): user chose to mark every matched save as completed,
@@ -172,6 +166,12 @@ class SyncCandidate:
     save_name: str
     mtime: float
     collected_exits: object  # int, or None when unreadable
+    analysis: SaveAnalysis | None = None
+    save_size: int = 0
+    profile: str = ""
+    counter_kind: str = "unknown"
+    confidence: str = "none"
+    warnings: tuple[str, ...] = ()
     hack_id: str = ""
     title: str = ""
     total_exits: int = 0
@@ -198,6 +198,26 @@ class SyncCandidate:
         """e.g. ``'12 / 12'`` (collected / total), ``'? / 12'`` if unreadable."""
         got = self.collected_exits if isinstance(self.collected_exits, int) else "?"
         return f"{got} / {self.total_exits}"
+
+    def evidence(self):
+        """Return structured read evidence for diagnostics and later UI work."""
+
+        if self.analysis is not None:
+            return self.analysis.as_dict()
+        return {
+            "path": self.save_path,
+            "size": self.save_size,
+            "profile": self.profile,
+            "confidence": self.confidence,
+            "counter_kind": self.counter_kind,
+            "selected_value": (
+                self.collected_exits
+                if isinstance(self.collected_exits, int)
+                else None
+            ),
+            "warnings": list(self.warnings),
+            "attempts": [],
+        }
 
 
 def list_save_files(directory):
@@ -238,12 +258,19 @@ def scan_saves(directory, hacks, mark_all=False):
         except OSError:
             mtime = 0
 
-        collected = read_collected_exits(path)
+        analysis = analyze_save(path)
+        collected = analysis.selected_value
         candidate = SyncCandidate(
             save_path=path,
             save_name=os.path.basename(path),
             mtime=mtime,
             collected_exits=collected,
+            analysis=analysis,
+            save_size=analysis.size,
+            profile=analysis.profile,
+            counter_kind=analysis.counter_kind,
+            confidence=analysis.confidence,
+            warnings=analysis.warnings,
         )
 
         hack = index.get(_normalize(candidate.save_name))
