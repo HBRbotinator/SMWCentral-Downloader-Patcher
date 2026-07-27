@@ -868,5 +868,141 @@ class LegacyEmptySlotPatternTest(unittest.TestCase):
         self.assertIsNone(candidates[0].collected_exits)
         self.assertEqual(candidates[0].status, save_sync.STATUS_UNCERTAIN)
 
+class ManualOrphanSearchTest(unittest.TestCase):
+    def _hack(
+        self,
+        hack_id,
+        name,
+        *,
+        obsolete=False,
+        difficulty="diff_3",
+    ):
+        return {
+            "id": hack_id,
+            "name": name,
+            "raw_fields": {
+                "obsolete": obsolete,
+                "difficulty": difficulty,
+                "type": "kaizo",
+                "length": 10,
+            },
+        }
+
+    def test_empty_query_does_not_fetch(self):
+        calls = []
+
+        def fetch(params, log=None):
+            calls.append(params)
+            return {"data": []}
+
+        result = save_sync.search_orphan_options(
+            "   ",
+            set(),
+            fetch_fn=fetch,
+        )
+        self.assertEqual(result["status"], save_sync.RESOLUTION_NO_MATCH)
+        self.assertEqual(result["options"], [])
+        self.assertEqual(calls, [])
+
+    def test_manual_results_are_ranked_deduplicated_and_annotated(self):
+        exact_existing = self._hack("2", "Quickie World 2")
+        exact_obsolete = self._hack(
+            "3",
+            "Quickie World 2",
+            obsolete=True,
+        )
+        near = self._hack("1", "Quickie World")
+
+        def fetch(params, log=None):
+            self.assertEqual(params, {"name": "Quickie World 2"})
+            return {
+                "data": [
+                    near,
+                    exact_obsolete,
+                    exact_existing,
+                    exact_existing,
+                ]
+            }
+
+        result = save_sync.search_orphan_options(
+            "Quickie_World_2.srm",
+            {"2"},
+            fetch_fn=fetch,
+        )
+        self.assertEqual(result["status"], save_sync.SEARCH_RESULTS)
+        self.assertEqual(
+            [item["hack_id"] for item in result["options"]],
+            ["2", "3", "1"],
+        )
+        first = result["options"][0]
+        self.assertTrue(first["exact_title"])
+        self.assertTrue(first["in_collection"])
+        self.assertFalse(first["obsolete"])
+        self.assertEqual(first["difficulty"], "Intermediate")
+
+    def test_manual_search_does_not_weaken_strict_automatic_resolution(self):
+        near = self._hack("1", "Quickie World 2")
+
+        def fetch(params, log=None):
+            return {"data": [near]}
+
+        automatic = save_sync.resolve_orphan(
+            "QW2.srm",
+            set(),
+            fetch_fn=fetch,
+        )
+        manual = save_sync.search_orphan_options(
+            "Quickie World 2",
+            set(),
+            fetch_fn=fetch,
+        )
+        self.assertEqual(
+            automatic["status"],
+            save_sync.RESOLUTION_NO_MATCH,
+        )
+        self.assertEqual(manual["status"], save_sync.SEARCH_RESULTS)
+        self.assertEqual(manual["options"][0]["hack_id"], "1")
+
+    def test_search_error_is_reported_without_options(self):
+        def fetch(params, log=None):
+            raise RuntimeError("offline")
+
+        result = save_sync.search_orphan_options(
+            "Akogare 2",
+            set(),
+            fetch_fn=fetch,
+        )
+        self.assertEqual(result["status"], save_sync.RESOLUTION_ERROR)
+        self.assertEqual(result["options"], [])
+
+    def test_selected_hack_resolution_respects_existing_collection(self):
+        hack = self._hack("42", "A Pretty View")
+        new = save_sync.resolution_for_selected_hack(hack, set())
+        existing = save_sync.resolution_for_selected_hack(hack, {42})
+        invalid = save_sync.resolution_for_selected_hack(
+            {"name": "No ID"},
+            set(),
+        )
+        self.assertEqual(new["status"], save_sync.RESOLUTION_RESOLVED)
+        self.assertEqual(existing["status"], save_sync.RESOLUTION_EXISTS)
+        self.assertEqual(invalid["status"], save_sync.RESOLUTION_NO_MATCH)
+
+    def test_limit_is_applied_after_deduplication(self):
+        hacks = [
+            self._hack(str(index), f"Hack {index}")
+            for index in range(5)
+        ]
+
+        def fetch(params, log=None):
+            return {"data": hacks}
+
+        result = save_sync.search_orphan_options(
+            "Hack",
+            set(),
+            fetch_fn=fetch,
+            limit=2,
+        )
+        self.assertEqual(len(result["options"]), 2)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

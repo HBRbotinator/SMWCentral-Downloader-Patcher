@@ -76,6 +76,7 @@ RESOLUTION_EXISTS = "exists"         # resolved to a hack already in the collect
 RESOLUTION_NO_MATCH = "no_match"     # SMWC search returned no exact-title match
 RESOLUTION_AMBIGUOUS = "ambiguous"   # multiple exact matches, can't auto-pick
 RESOLUTION_ERROR = "error"           # network / API error during lookup
+SEARCH_RESULTS = "results"         # manual search returned options
 
 
 def read_collected_exits(path):
@@ -604,6 +605,118 @@ def resolve_orphan(save_name, existing_ids, fetch_fn=None, log=None):
         return {"status": RESOLUTION_NO_MATCH, "hack": None, "hack_id": ""}
 
     status = RESOLUTION_EXISTS if hack_id in existing_ids else RESOLUTION_RESOLVED
+    return {"status": status, "hack": hack, "hack_id": hack_id}
+
+
+def search_orphan_options(
+    query, existing_ids, fetch_fn=None, log=None, limit=50
+):
+    """Return deterministic, user-selectable SMWC results for a manual query.
+
+    Unlike :func:`resolve_orphan`, this function never chooses a hack. It only
+    returns options for an explicit user selection, preserving the strict exact
+    title rule used by automatic orphan resolution.
+    """
+
+    if fetch_fn is None:
+        from api_pipeline import fetch_hack_list as fetch_fn
+
+    cleaned_query = make_search_query(query)
+    if not cleaned_query:
+        return {
+            "status": RESOLUTION_NO_MATCH,
+            "query": "",
+            "options": [],
+        }
+
+    try:
+        result = fetch_fn({"name": cleaned_query}, log=log)
+    except Exception as exc:
+        if log:
+            log(
+                f"SMWC manual search failed for '{cleaned_query}': {exc}",
+                "Error",
+            )
+        return {
+            "status": RESOLUTION_ERROR,
+            "query": cleaned_query,
+            "options": [],
+        }
+
+    data = result.get("data", []) if isinstance(result, dict) else []
+    if not isinstance(data, list):
+        data = []
+
+    target = _normalize(cleaned_query)
+    existing = {str(hack_id) for hack_id in existing_ids}
+    options = []
+
+    for hack in data:
+        if not isinstance(hack, dict):
+            continue
+        hack_id = str(hack.get("id", ""))
+        name = str(hack.get("name", "") or "").strip()
+        if not hack_id or not name:
+            continue
+
+        raw = hack.get("raw_fields", {}) or {}
+        try:
+            difficulty = _smwc_entry_fields(hack)["current_difficulty"]
+        except (KeyError, TypeError, ValueError):
+            difficulty = ""
+
+        options.append(
+            {
+                "hack_id": hack_id,
+                "name": name,
+                "exact_title": _normalize(name) == target,
+                "obsolete": bool(raw.get("obsolete", False)),
+                "in_collection": hack_id in existing,
+                "difficulty": difficulty,
+                "hack": hack,
+            }
+        )
+
+    options.sort(
+        key=lambda option: (
+            not option["exact_title"],
+            option["obsolete"],
+            not option["in_collection"],
+            option["name"].casefold(),
+            option["hack_id"],
+        )
+    )
+
+    deduplicated = []
+    seen_ids = set()
+    result_limit = max(1, int(limit))
+    for option in options:
+        if option["hack_id"] in seen_ids:
+            continue
+        seen_ids.add(option["hack_id"])
+        deduplicated.append(option)
+        if len(deduplicated) >= result_limit:
+            break
+
+    return {
+        "status": SEARCH_RESULTS if deduplicated else RESOLUTION_NO_MATCH,
+        "query": cleaned_query,
+        "options": deduplicated,
+    }
+
+
+def resolution_for_selected_hack(hack, existing_ids):
+    """Build a resolution for a hack the user explicitly selected."""
+
+    if not isinstance(hack, dict):
+        return {"status": RESOLUTION_NO_MATCH, "hack": None, "hack_id": ""}
+
+    hack_id = str(hack.get("id", ""))
+    if not hack_id:
+        return {"status": RESOLUTION_NO_MATCH, "hack": None, "hack_id": ""}
+
+    existing = {str(existing_id) for existing_id in existing_ids}
+    status = RESOLUTION_EXISTS if hack_id in existing else RESOLUTION_RESOLVED
     return {"status": status, "hack": hack, "hack_id": hack_id}
 
 
