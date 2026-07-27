@@ -747,7 +747,8 @@ class DiagnosticReportTest(unittest.TestCase):
                 [self._candidate()],
                 generated_at=datetime(2026, 7, 27, 10, 30, tzinfo=timezone.utc),
             )
-            self.assertEqual(written, str(destination.resolve()))
+            self.assertTrue(Path(written).is_absolute())
+            self.assertTrue(os.path.samefile(written, destination))
             payload = json.loads(destination.read_text(encoding="utf-8"))
             self.assertEqual(payload["schema_version"], 1)
             self.assertTrue(
