@@ -1312,5 +1312,80 @@ class SaveSourceDirectoryTest(unittest.TestCase):
         self.assertIn("save_sync.scan_save_directories(", settings_source)
         self.assertIn("Unavailable Save Folders", settings_source)
 
+class StartupSaveScanTest(unittest.TestCase):
+    def _candidate(self, *, status, hack_id="42"):
+        return save_sync.SyncCandidate(
+            save_path="C:/Saves/Test.srm",
+            save_name="Test.srm",
+            mtime=1,
+            collected_exits=1,
+            hack_id=hack_id,
+            title="Test",
+            total_exits=2,
+            status=status,
+        )
+
+    def test_auto_review_keeps_completions_and_unmatched_only(self):
+        candidates = [
+            self._candidate(status=save_sync.STATUS_COMPLETED),
+            self._candidate(status=save_sync.STATUS_IN_PROGRESS),
+            self._candidate(status=save_sync.STATUS_UNCERTAIN),
+            self._candidate(status=save_sync.STATUS_ALREADY_COMPLETED),
+            self._candidate(
+                status=save_sync.STATUS_UNMATCHED,
+                hack_id="",
+            ),
+        ]
+        selected = save_sync.auto_review_candidates(candidates)
+        self.assertEqual(selected, [candidates[0], candidates[4]])
+
+    def test_config_declares_opt_in_startup_scan(self):
+        from pathlib import Path
+
+        source = (Path(__file__).parent / "config_manager.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"save_sync_auto_scan": False', source)
+        self.assertIn(
+            '"save_sync_auto_scan", "save_sync_associations"',
+            source,
+        )
+
+    def test_settings_expose_review_only_startup_scan(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "Check save folders automatically on startup",
+            source,
+        )
+        self.assertIn("nothing is applied automatically", source)
+        self.assertIn('text="Review Auto-Scan..."', source)
+        self.assertIn(
+            "self.frame.after(2000, self.start_save_sync_auto_scan)",
+            source,
+        )
+
+    def test_startup_scan_is_noninteractive_and_retains_review_candidates(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("self._scan_saves(auto=True)", source)
+        self.assertIn("interactive=not auto", source)
+        self.assertIn(
+            "review_candidates = "
+            "save_sync.auto_review_candidates(candidates)",
+            source,
+        )
+        self.assertIn("def _review_auto_scan", source)
+        self.assertNotIn(
+            "apply_candidates(review_candidates",
+            source,
+        )
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

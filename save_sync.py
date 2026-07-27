@@ -420,6 +420,22 @@ class SyncCandidate:
 
 
 
+def auto_review_candidates(candidates):
+    """Return startup-scan results that merit an explicit user review.
+
+    Automatic scans never write collection data. Completed candidates can
+    propose a collection update, while unmatched saves may need a manual SMWC
+    association. In-progress, uncertain, and already-completed matches remain
+    available through a normal manual scan but do not create a startup prompt.
+    """
+
+    return [
+        candidate
+        for candidate in candidates
+        if candidate.status == STATUS_COMPLETED or not candidate.hack_id
+    ]
+
+
 def _utc_timestamp(value=None):
     """Return an ISO-8601 UTC timestamp for diagnostic metadata."""
 

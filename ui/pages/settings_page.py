@@ -30,6 +30,12 @@ class SettingsPage:
         # Callback for emulator settings changes
         self.emulator_settings_callback = None
 
+        # Opt-in startup scan state. Automatic scans only prepare a review;
+        # they never write collection data without the existing dialog.
+        self._auto_scan_started = False
+        self._auto_scan_running = False
+        self._pending_auto_scan_candidates = []
+
     def update_theme_colors(self):
         """Update cancel button colors when theme changes"""
         # No longer needed - button keeps its original style
@@ -449,6 +455,16 @@ class SettingsPage:
             command=self._save_save_sync_settings
         ).pack(anchor="w", pady=(0, 8))
 
+        self.save_sync_auto_scan_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            save_sync_frame,
+            text="Check save folders automatically on startup "
+                 "(review required; nothing is applied automatically)",
+            variable=self.save_sync_auto_scan_var,
+            style="Custom.TCheckbutton",
+            command=self._save_save_sync_settings,
+        ).pack(anchor="w", pady=(0, 8))
+
         # Scan button + status
         scan_row = ttk.Frame(save_sync_frame)
         scan_row.pack(fill="x")
@@ -461,6 +477,15 @@ class SettingsPage:
         )
         self.scan_saves_button.pack(side="left")
 
+        self.review_auto_scan_button = ttk.Button(
+            scan_row,
+            text="Review Auto-Scan...",
+            command=self._review_auto_scan,
+            style="Custom.TButton",
+            state="disabled",
+        )
+        self.review_auto_scan_button.pack(side="left", padx=(8, 0))
+
         self.save_sync_status_label = ttk.Label(
             scan_row,
             text="",
@@ -470,6 +495,7 @@ class SettingsPage:
 
         # Load persisted save-sync settings
         self._load_save_sync_settings()
+        self.frame.after(2000, self.start_save_sync_auto_scan)
 
         # Log section with level dropdown and clear button
         log_header_frame = ttk.Frame(content)
@@ -1305,6 +1331,9 @@ class SettingsPage:
             self.save_sync_mark_all_var.set(
                 config.get("save_sync_mark_all", False)
             )
+            self.save_sync_auto_scan_var.set(
+                config.get("save_sync_auto_scan", False)
+            )
         except Exception as e:
             print(f"Error loading save sync settings: {e}")
 
@@ -1320,6 +1349,10 @@ class SettingsPage:
                 self._save_sync_directories_from_widget(),
             )
             config.set("save_sync_mark_all", self.save_sync_mark_all_var.get())
+            config.set(
+                "save_sync_auto_scan",
+                self.save_sync_auto_scan_var.get(),
+            )
         except Exception as e:
             print(f"Error saving save sync settings: {e}")
 
@@ -1384,8 +1417,8 @@ class SettingsPage:
                 f"Failed to remove save folder: {e}",
             )
 
-    def _scan_saves(self):
-        """Scan all available save source folders and open the review dialog."""
+    def _available_save_directories(self, interactive):
+        """Return available configured sources for manual or startup scans."""
 
         import save_sync
 
@@ -1393,53 +1426,114 @@ class SettingsPage:
             self.setup_section.config
         )
         if not directories:
-            messagebox.showerror(
-                "Save Data Sync",
-                "Add at least one save folder first.",
-            )
-            return
+            if interactive:
+                messagebox.showerror(
+                    "Save Data Sync",
+                    "Add at least one save folder first.",
+                )
+            else:
+                self.save_sync_status_label.config(
+                    text="Auto-scan skipped: no save folders",
+                    foreground=STATUS_COLOR_WARNING,
+                )
+            return []
 
         available = [
             directory for directory in directories if os.path.isdir(directory)
         ]
         unavailable = [
-            directory for directory in directories if not os.path.isdir(directory)
+            directory for directory in directories
+            if not os.path.isdir(directory)
         ]
         if not available:
-            messagebox.showerror(
-                "Save Data Sync",
-                "None of the configured save folders are currently available.",
-            )
-            return
+            if interactive:
+                messagebox.showerror(
+                    "Save Data Sync",
+                    "None of the configured save folders are currently "
+                    "available.",
+                )
+            else:
+                self.save_sync_status_label.config(
+                    text="Auto-scan skipped: folders unavailable",
+                    foreground=STATUS_COLOR_WARNING,
+                )
+                if self.logger:
+                    self.logger.log(
+                        "Save Data Sync startup scan skipped because no "
+                        "configured folder was available.",
+                        "Information",
+                    )
+            return []
 
-        if unavailable:
+        if unavailable and interactive:
             missing_names = "\n".join(
                 f"• {directory}" for directory in unavailable
             )
             proceed = messagebox.askyesno(
                 "Unavailable Save Folders",
-                "These configured folders are unavailable and will be skipped:\n\n"
+                "These configured folders are unavailable and will be "
+                "skipped:\n\n"
                 f"{missing_names}\n\n"
                 f"Continue with the {len(available)} available folder(s)?",
             )
             if not proceed:
-                return
+                return []
+        elif unavailable and self.logger:
+            self.logger.log(
+                "Save Data Sync startup scan skipped "
+                f"{len(unavailable)} unavailable configured folder(s).",
+                "Information",
+            )
+
+        return available
+
+    def start_save_sync_auto_scan(self):
+        """Run one opt-in startup scan without opening or applying a dialog."""
+
+        if self._auto_scan_started:
+            return
+        self._auto_scan_started = True
+        if not self.save_sync_auto_scan_var.get():
+            return
+        self._scan_saves(auto=True)
+
+    def _scan_saves(self, auto=False):
+        """Scan configured sources manually or prepare an opt-in review."""
+
+        import save_sync
+
+        if auto and self._auto_scan_running:
+            return
+        if not auto:
+            self._pending_auto_scan_candidates = []
+
+        available = self._available_save_directories(interactive=not auto)
+        if not available:
+            return
 
         data_manager = getattr(self, "data_manager", None)
         if data_manager is None:
-            messagebox.showerror(
-                "Save Data Sync",
-                "Collection data is not available yet. Open the Collection "
-                "tab once, then try again.",
-            )
+            if auto:
+                self.save_sync_status_label.config(
+                    text="Auto-scan skipped: collection unavailable",
+                    foreground=STATUS_COLOR_WARNING,
+                )
+            else:
+                messagebox.showerror(
+                    "Save Data Sync",
+                    "Collection data is not available yet. Open the Collection "
+                    "tab once, then try again.",
+                )
             return
 
         self._save_save_sync_settings()
         mark_all = self.save_sync_mark_all_var.get()
-
+        self._auto_scan_running = auto
         self.scan_saves_button.config(state="disabled", text="Scanning...")
+        self.review_auto_scan_button.config(state="disabled")
+        prefix = "Auto-scanning" if auto else "Scanning"
         self.save_sync_status_label.config(
-            text=f"⏳ Scanning {len(available)} folder(s)...",
+            text=f"⏳ {prefix} {len(available)} folder(s)...",
             foreground=STATUS_COLOR_INFO,
         )
         self.frame.update_idletasks()
@@ -1467,45 +1561,110 @@ class SettingsPage:
                     mark_all=mark_all,
                     associations=associations,
                 )
-            except Exception as e:
-                error = e
+            except Exception as exc:
+                error = exc
 
             self.frame.after(
                 0,
-                lambda: self._on_scan_complete(candidates, error),
+                lambda: self._on_scan_complete(
+                    candidates, error, auto=auto
+                ),
             )
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_scan_complete(self, candidates, error):
-        """Handle scan results on the main thread and show the review dialog."""
+    def _on_scan_complete(self, candidates, error, auto=False):
+        """Handle manual results or retain startup results for later review."""
+
+        import save_sync
+
+        self._auto_scan_running = False
         self.scan_saves_button.config(state="normal", text="Scan Saves")
 
         if error is not None:
-            self.save_sync_status_label.config(text="❌ Scan failed", foreground=STATUS_COLOR_ERROR)
-            messagebox.showerror("Save Data Sync", f"Failed to scan saves:\n{error}")
+            label = "Auto-scan failed" if auto else "Scan failed"
+            self.save_sync_status_label.config(
+                text=f"❌ {label}",
+                foreground=STATUS_COLOR_ERROR,
+            )
+            if not auto:
+                messagebox.showerror(
+                    "Save Data Sync",
+                    f"Failed to scan saves:\n{error}",
+                )
             if self.logger:
-                self.logger.log(f"Save data scan failed: {error}", "Error")
+                self.logger.log(
+                    f"Save data scan failed: {error}",
+                    "Error",
+                )
+            return
+
+        if auto:
+            review_candidates = save_sync.auto_review_candidates(candidates)
+            self._pending_auto_scan_candidates = review_candidates
+            if not review_candidates:
+                self.review_auto_scan_button.config(state="disabled")
+                self.save_sync_status_label.config(
+                    text="Auto-scan: no changes to review",
+                    foreground=STATUS_COLOR_SUCCESS,
+                )
+                return
+
+            completions = sum(
+                candidate.status == save_sync.STATUS_COMPLETED
+                for candidate in review_candidates
+            )
+            unmatched = sum(
+                not candidate.hack_id for candidate in review_candidates
+            )
+            self.review_auto_scan_button.config(state="normal")
+            self.save_sync_status_label.config(
+                text=(
+                    f"Auto-scan ready: {completions} completion(s) · "
+                    f"{unmatched} unmatched"
+                ),
+                foreground=STATUS_COLOR_SUCCESS,
+            )
             return
 
         if not candidates:
             self.save_sync_status_label.config(
-                text="No .srm/.sav files found", foreground=STATUS_COLOR_WARNING
+                text="No .srm/.sav files found",
+                foreground=STATUS_COLOR_WARNING,
             )
             messagebox.showinfo(
                 "Save Data Sync",
-                "No .srm or .sav files were found in that directory."
+                "No .srm or .sav files were found in the configured folders.",
             )
             return
 
-        matched = [c for c in candidates if c.hack_id]
-        unmatched = [c for c in candidates if not c.hack_id]
+        matched = [
+            candidate for candidate in candidates if candidate.hack_id
+        ]
+        unmatched = [
+            candidate for candidate in candidates if not candidate.hack_id
+        ]
         self.save_sync_status_label.config(
             text=f"{len(matched)} matched · {len(unmatched)} unmatched",
-            foreground=STATUS_COLOR_SUCCESS
+            foreground=STATUS_COLOR_SUCCESS,
         )
+        self._show_save_sync_dialog(candidates)
+
+    def _review_auto_scan(self):
+        """Open the normal explicit review for retained startup results."""
+
+        candidates = list(self._pending_auto_scan_candidates)
+        if not candidates:
+            return
+        self._pending_auto_scan_candidates = []
+        self.review_auto_scan_button.config(state="disabled")
+        self._show_save_sync_dialog(candidates)
+
+    def _show_save_sync_dialog(self, candidates):
+        """Open the existing review dialog; no scan path applies directly."""
 
         from ui.save_sync_dialog import SaveSyncDialog
+
         reload_cb = getattr(self, "reload_collection_callback", None)
         dialog = SaveSyncDialog(
             self.frame,
