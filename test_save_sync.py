@@ -1346,10 +1346,8 @@ class StartupSaveScanTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('"save_sync_auto_scan": False', source)
-        self.assertIn(
-            '"save_sync_auto_scan", "save_sync_associations"',
-            source,
-        )
+        self.assertIn('"save_sync_auto_scan"', source)
+        self.assertIn('"save_sync_associations"', source)
 
     def test_settings_expose_review_only_startup_scan(self):
         from pathlib import Path
@@ -1386,6 +1384,53 @@ class StartupSaveScanTest(unittest.TestCase):
             "apply_candidates(review_candidates",
             source,
         )
+
+class PeriodicSaveScanTest(unittest.TestCase):
+    def test_interval_normalization_is_closed_to_supported_values(self):
+        self.assertEqual(save_sync.normalize_auto_scan_interval(5), 5)
+        self.assertEqual(save_sync.normalize_auto_scan_interval("60"), 60)
+        self.assertEqual(save_sync.normalize_auto_scan_interval(7), 15)
+        self.assertEqual(save_sync.normalize_auto_scan_interval("bad"), 15)
+
+    def test_config_declares_opt_in_periodic_scan(self):
+        from pathlib import Path
+
+        source = (Path(__file__).parent / "config_manager.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"save_sync_periodic_scan": False', source)
+        self.assertIn('"save_sync_scan_interval_minutes": 15', source)
+
+    def test_settings_expose_controlled_periodic_review_scan(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "Continue checking while the application is open",
+            source,
+        )
+        self.assertIn(
+            "self.frame.after(2500, self.start_save_sync_periodic_scan)",
+            source,
+        )
+        self.assertIn("def _restart_periodic_save_sync_scan", source)
+        self.assertIn("minutes * 60 * 1000", source)
+
+    def test_periodic_scan_defers_while_review_is_pending(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "not self._auto_scan_running "
+            "and not self._pending_auto_scan_candidates",
+            source,
+        )
+        self.assertIn("self._scan_saves(auto=True)", source)
+        self.assertNotIn("apply_candidates(self._pending_auto_scan_candidates", source)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

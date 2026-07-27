@@ -35,6 +35,7 @@ class SettingsPage:
         self._auto_scan_started = False
         self._auto_scan_running = False
         self._pending_auto_scan_candidates = []
+        self._periodic_scan_job = None
 
     def update_theme_colors(self):
         """Update cancel button colors when theme changes"""
@@ -463,7 +464,43 @@ class SettingsPage:
             variable=self.save_sync_auto_scan_var,
             style="Custom.TCheckbutton",
             command=self._save_save_sync_settings,
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(anchor="w", pady=(0, 5))
+
+        periodic_row = ttk.Frame(save_sync_frame)
+        periodic_row.pack(fill="x", pady=(0, 8))
+        self.save_sync_periodic_scan_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            periodic_row,
+            text="Continue checking while the application is open "
+                 "(review required)",
+            variable=self.save_sync_periodic_scan_var,
+            style="Custom.TCheckbutton",
+            command=self._save_periodic_scan_settings,
+        ).pack(side="left")
+
+        ttk.Label(
+            periodic_row,
+            text="Every:",
+            style="Custom.TLabel",
+        ).pack(side="left", padx=(16, 5))
+        self.save_sync_scan_interval_var = tk.StringVar()
+        self.save_sync_scan_interval_combo = ttk.Combobox(
+            periodic_row,
+            textvariable=self.save_sync_scan_interval_var,
+            values=("5", "15", "30", "60"),
+            state="readonly",
+            width=5,
+        )
+        self.save_sync_scan_interval_combo.pack(side="left")
+        self.save_sync_scan_interval_combo.bind(
+            "<<ComboboxSelected>>",
+            self._save_periodic_scan_settings,
+        )
+        ttk.Label(
+            periodic_row,
+            text="minutes",
+            style="Custom.TLabel",
+        ).pack(side="left", padx=(5, 0))
 
         # Scan button + status
         scan_row = ttk.Frame(save_sync_frame)
@@ -495,7 +532,9 @@ class SettingsPage:
 
         # Load persisted save-sync settings
         self._load_save_sync_settings()
+        self._update_periodic_scan_controls()
         self.frame.after(2000, self.start_save_sync_auto_scan)
+        self.frame.after(2500, self.start_save_sync_periodic_scan)
 
         # Log section with level dropdown and clear button
         log_header_frame = ttk.Frame(content)
@@ -1334,6 +1373,18 @@ class SettingsPage:
             self.save_sync_auto_scan_var.set(
                 config.get("save_sync_auto_scan", False)
             )
+            self.save_sync_periodic_scan_var.set(
+                config.get("save_sync_periodic_scan", False)
+            )
+            self.save_sync_scan_interval_var.set(
+                str(
+                    save_sync.normalize_auto_scan_interval(
+                        config.get(
+                            "save_sync_scan_interval_minutes", 15
+                        )
+                    )
+                )
+            )
         except Exception as e:
             print(f"Error loading save sync settings: {e}")
 
@@ -1353,8 +1404,35 @@ class SettingsPage:
                 "save_sync_auto_scan",
                 self.save_sync_auto_scan_var.get(),
             )
+            config.set(
+                "save_sync_periodic_scan",
+                self.save_sync_periodic_scan_var.get(),
+            )
+            config.set(
+                "save_sync_scan_interval_minutes",
+                save_sync.normalize_auto_scan_interval(
+                    self.save_sync_scan_interval_var.get()
+                ),
+            )
         except Exception as e:
             print(f"Error saving save sync settings: {e}")
+
+    def _update_periodic_scan_controls(self):
+        """Enable interval selection only while periodic review scans are on."""
+
+        state = (
+            "readonly"
+            if self.save_sync_periodic_scan_var.get()
+            else "disabled"
+        )
+        self.save_sync_scan_interval_combo.config(state=state)
+
+    def _save_periodic_scan_settings(self, event=None):
+        """Persist and reschedule the review-only periodic scan."""
+
+        self._update_periodic_scan_controls()
+        self._save_save_sync_settings()
+        self._restart_periodic_save_sync_scan()
 
     def _add_save_dir(self):
         """Add another emulator or console save source folder."""
@@ -1486,6 +1564,46 @@ class SettingsPage:
             )
 
         return available
+
+    def start_save_sync_periodic_scan(self):
+        """Schedule opt-in review scans while the settings page is alive."""
+
+        self._restart_periodic_save_sync_scan()
+
+    def _restart_periodic_save_sync_scan(self):
+        """Cancel the old timer and schedule the current configured interval."""
+
+        if self._periodic_scan_job is not None:
+            try:
+                self.frame.after_cancel(self._periodic_scan_job)
+            except (AttributeError, tk.TclError):
+                pass
+            self._periodic_scan_job = None
+
+        if not self.save_sync_periodic_scan_var.get():
+            return
+
+        import save_sync
+
+        minutes = save_sync.normalize_auto_scan_interval(
+            self.save_sync_scan_interval_var.get()
+        )
+        self._periodic_scan_job = self.frame.after(
+            minutes * 60 * 1000,
+            self._run_periodic_save_sync_scan,
+        )
+
+    def _run_periodic_save_sync_scan(self):
+        """Run a noninteractive scan unless work or review is already pending."""
+
+        self._periodic_scan_job = None
+        if not self.save_sync_periodic_scan_var.get():
+            return
+
+        if not self._auto_scan_running and not self._pending_auto_scan_candidates:
+            self._scan_saves(auto=True)
+
+        self._restart_periodic_save_sync_scan()
 
     def start_save_sync_auto_scan(self):
         """Run one opt-in startup scan without opening or applying a dialog."""

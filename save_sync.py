@@ -83,6 +83,20 @@ SAVE_DIRECTORIES_CONFIG_KEY = "save_sync_dirs"
 LEGACY_SAVE_DIRECTORY_CONFIG_KEY = "save_sync_dir"
 MATCH_SOURCE_COLLECTION = "collection"
 MATCH_SOURCE_SAVED_ALIAS = "saved_alias"
+AUTO_SCAN_INTERVAL_CHOICES = (5, 15, 30, 60)
+DEFAULT_AUTO_SCAN_INTERVAL_MINUTES = 15
+
+
+def normalize_auto_scan_interval(value):
+    """Return a supported review-only background scan interval."""
+
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_AUTO_SCAN_INTERVAL_MINUTES
+    if minutes not in AUTO_SCAN_INTERVAL_CHOICES:
+        return DEFAULT_AUTO_SCAN_INTERVAL_MINUTES
+    return minutes
 
 
 def read_collected_exits(path):
