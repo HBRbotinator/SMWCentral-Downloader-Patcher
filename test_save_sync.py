@@ -1528,5 +1528,129 @@ class LocalSaveEntryTest(unittest.TestCase):
         self.assertIn("save_sync.import_local_orphan", source)
         self.assertIn("Apply Selected", source)
 
+class LocalSaveEntryLifecycleRegressionTest(unittest.TestCase):
+    @staticmethod
+    def _local_hack():
+        return {
+            "id": "usr_save_cc154f1fc78c6ebd",
+            "title": "Grand Poo World 3",
+            "exits": 41,
+            "completed": False,
+            "local_save_entry": True,
+        }
+
+    @staticmethod
+    def _analysis(path):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            selected_value=41,
+            size=4096,
+            profile="standard_smw_slots",
+            counter_kind="overworld_events",
+            confidence="medium",
+            warnings=[],
+            as_dict=lambda: {
+                "path": path,
+                "size": 4096,
+                "profile": "standard_smw_slots",
+                "counter_kind": "overworld_events",
+                "confidence": "medium",
+                "selected_value": 41,
+                "warnings": [],
+                "attempts": [],
+            },
+        )
+
+    def test_local_entries_are_excluded_from_automatic_title_matching(self):
+        local = self._local_hack()
+        normal = {
+            "id": "123",
+            "title": "Normal Hack",
+            "exits": 5,
+        }
+
+        index = save_sync.build_hack_index([local, normal])
+
+        self.assertNotIn(
+            save_sync._normalize("Grand_Poo_World_3.srm"),
+            index,
+        )
+        self.assertEqual(
+            index[save_sync._normalize("Normal Hack.srm")]["id"],
+            "123",
+        )
+
+    def test_local_save_without_association_remains_unmatched(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            save_path = os.path.join(directory, "Grand_Poo_World_3.srm")
+            with open(save_path, "wb") as handle:
+                handle.write(b"save")
+
+            with patch(
+                "save_sync.analyze_save",
+                return_value=self._analysis(save_path),
+            ):
+                candidates = save_sync.scan_saves(
+                    directory,
+                    [self._local_hack()],
+                    associations={},
+                )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].status, save_sync.STATUS_UNMATCHED)
+        self.assertEqual(candidates[0].hack_id, "")
+
+    def test_local_save_uses_saved_alias_and_reports_it(self):
+        from unittest.mock import patch
+
+        local = self._local_hack()
+        with tempfile.TemporaryDirectory() as directory:
+            save_path = os.path.join(directory, "Grand_Poo_World_3.srm")
+            with open(save_path, "wb") as handle:
+                handle.write(b"save")
+
+            with patch(
+                "save_sync.analyze_save",
+                return_value=self._analysis(save_path),
+            ):
+                candidates = save_sync.scan_saves(
+                    directory,
+                    [local],
+                    associations={
+                        "grandpooworld3": local["id"],
+                    },
+                )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(
+            candidates[0].match_source,
+            save_sync.MATCH_SOURCE_SAVED_ALIAS,
+        )
+        report = save_sync.build_diagnostic_report(candidates)
+        self.assertEqual(report["summary"]["saved_association_count"], 1)
+        self.assertEqual(
+            report["candidates"][0]["match"]["source"],
+            "saved_alias",
+        )
+        self.assertTrue(
+            report["candidates"][0]["match"]["saved_association"]
+        )
+
+    def test_local_resolution_refreshes_apply_state_immediately(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).parent / "ui" / "save_sync_dialog.py"
+        ).read_text(encoding="utf-8")
+        method = source.split(
+            "    def _set_orphan_resolution", 1
+        )[1].split("    def _lookup_done", 1)[0]
+
+        self.assertIn("self._update_orph_header()", method)
+        self.assertIn("self._update_apply_state()", method)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

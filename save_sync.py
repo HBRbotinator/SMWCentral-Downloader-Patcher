@@ -351,6 +351,13 @@ def build_hack_index(hacks):
     """
     index = {}
     for hack in hacks:
+        # User-created local entries are linked only through an explicit saved
+        # filename association. Treating their title as an automatic match would
+        # make "Forget Saved Match" ineffective and could connect unrelated
+        # saves that happen to normalize to the same local title.
+        if hack.get("local_save_entry"):
+            continue
+
         keys = set()
 
         title = hack.get("title", "")

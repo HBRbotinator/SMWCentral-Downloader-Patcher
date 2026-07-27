@@ -913,6 +913,7 @@ class SaveSyncDialog:
         except tk.TclError:
             return False
         self._update_orph_header()
+        self._update_apply_state()
         return True
 
     def _lookup_done(self):
