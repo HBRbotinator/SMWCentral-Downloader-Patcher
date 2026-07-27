@@ -4,6 +4,11 @@
 
 A simple desktop app that automatically downloads, patches, and organizes ROM hacks from SMWCentral. Works on Windows, Mac, and Linux.
 
+> [!NOTE]
+> This branch is the v5.1 development line. Candidate packages are built and verified by GitHub Actions for Windows x64, Linux x64, macOS Apple Silicon, and macOS Intel. Development builds do not check for or install updates in place.
+
+Developer documentation: [CONTRIBUTING.md](CONTRIBUTING.md), [Build and Release Instructions](.github/BUILD_INSTRUCTIONS.md), and [Product Identity and Version Management](VERSION_MANAGEMENT.md).
+
 ![Dashboard](images/application-5.0-dashboard.png)
 
 ## 📋 Table of Contents
@@ -16,45 +21,31 @@ A simple desktop app that automatically downloads, patches, and organizes ROM ha
 
 ## 📥 Download & Install
 
-### Windows (10/11)
-1. Download `SMWC-Downloader-Windows-x64.zip` from the [Releases page](../../releases)
-2. Extract the ZIP file to any folder you want (like your Desktop or Program Files)
-3. Double-click `SMWC Downloader.exe` to run the app
-4. **If Windows shows a security warning**: Click "More info" → "Run anyway" (this is normal for new apps)
+Download the package matching your operating system from the [Releases page](../../releases) or, for development testing, from a successful **v5.1 Candidate CI** workflow run. Artifact filenames include the manifest version.
 
-> [!IMPORTANT]
-> Windows may flag this app because it's new and unsigned. This is normal!
-> 
-> **If you see warnings:**
-> - **Browser**: Click "Keep" if download gets blocked
-> - **Windows Defender**: Click "More info" → "Run anyway" 
-> - **To prevent future warnings**: Add the app folder to Windows Defender exclusions in Settings → Update & Security → Windows Security → Virus & threat protection → Exclusions
+### Windows 10/11 x64
 
-### Mac (macOS 10.15+)
-1. Download `SMWC-Downloader-macOS-Universal.dmg` from the [Releases page](../../releases)
-2. Open the DMG file and drag the app to your Applications folder
-3. **First time only**: Right-click the app → "Open" → "Open" (to bypass security warning)
-4. After that, you can launch it normally from Applications or Spotlight
+1. Download `SMWC-Downloader-<version>-Windows-x64.zip`.
+2. Extract the ZIP into a normal writable folder.
+3. Launch `SMWC Downloader.exe`.
+4. For an unsigned development build, Windows may require **More info → Run anyway**.
 
-### Linux (Ubuntu, Debian, Fedora, etc.)
+### macOS 10.15+
 
-**Option 1: AppImage (Portable - Recommended)**
-1. Download `SMWC-Downloader-x86_64.AppImage` from the [Releases page](../../releases)
-2. Make it executable: `chmod +x SMWC-Downloader-*.AppImage`
-3. Run directly: `./SMWC-Downloader-*.AppImage`
-4. **Optional**: Move to a convenient location like `~/Applications` or `~/.local/bin`
+Choose the package matching the Mac:
 
-**Benefits**: No installation needed, portable, self-contained, easy to update (just replace the file)
+- Apple Silicon: `SMWC-Downloader-<version>-macOS-arm64.dmg`
+- Intel: `SMWC-Downloader-<version>-macOS-x86_64.dmg`
 
-**Option 2: Traditional Installation**
-1. Download `SMWC-Downloader-Linux-x64.tar.gz` from the [Releases page](../../releases)
-2. Extract: `tar -xzf SMWC-Downloader-*.tar.gz`
-3. Run the installer: `./install.sh` (this adds the app to your Applications menu)
-4. Launch from Applications menu or run `smwc-downloader` in terminal
+Open the DMG and copy the application to Applications. Unsigned builds may require right-clicking the application and choosing **Open** the first time. The project does not currently publish a Universal macOS package.
 
-**Benefits**: Full system integration, appears in application menus, desktop file associations
+### Linux x86_64
 
-> **Note**: User data (config.json, processed.json) is stored in `~/.smwc-downloader/` for both options
+1. Download `SMWC-Downloader-<version>-Linux-x64.tar.gz`.
+2. Extract it: `tar -xzf SMWC-Downloader-*-Linux-x64.tar.gz`.
+3. Run the packaged executable from the extracted directory.
+
+The current build contract publishes a native tarball rather than an AppImage. Extract development candidates into a fresh folder when testing so the packaged files are not mixed with an older candidate.
 
 ## 🚀 How to Use
 
@@ -147,7 +138,7 @@ When editing **Completed Date** and **Time to Beat** fields, the app supports fl
     - Optimized bulk API (completes in under 1 minute for most collections)
     - Finds metadata for obsolete/unlisted hacks via fallback lookups
     - Cancellable operation (safe to cancel during fetch phase)
-- **Auto-updates**: Choose if you want automatic app updates
+- **Auto-updates**: Available for stable/release builds. Development candidates display disabled update controls and must be replaced manually
 - **Theme**: Switch between light and dark modes with instant, smooth transitions and optimized performance
 - **API Delay Slider**: Set delay from 0.0 to 3.0 seconds between API requests to avoid rate limiting issues
 
@@ -246,7 +237,7 @@ If clicking the play icon doesn't work:
 - **Your Operating System**: Windows 10+, macOS 10.15+, or modern Linux
 - **A clean SMW ROM**: Unmodified Super Mario World ROM file (.smc or .sfc)
 - **Storage space**: About 20 MB for the app, plus space for your ROM collection
-- **Internet connection**: Required for downloading hacks and app updates
+- **Internet connection**: Required for downloading hacks; stable releases may also use it for update checks
 - **Optional - Emulator**: Any SNES emulator (Snes9x, RetroArch, bsnes, etc.) for the quick-launch feature
 
 ##  Changelog

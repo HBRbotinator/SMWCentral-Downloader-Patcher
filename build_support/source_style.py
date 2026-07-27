@@ -21,6 +21,7 @@ DEFAULT_PATHS = (
     "test_ci_workflow.py",
     "test_release_gate.py",
     "test_update_policy.py",
+    "test_documentation.py",
 )
 
 
