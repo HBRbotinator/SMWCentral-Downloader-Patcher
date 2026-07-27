@@ -58,7 +58,7 @@ SAVE_EXTENSIONS = (".srm", ".sav")
 
 # Privacy-safe diagnostic report format. Reports contain parser and matching
 # evidence, but never absolute paths, parent directories, or raw save bytes.
-DIAGNOSTIC_SCHEMA_VERSION = 1
+DIAGNOSTIC_SCHEMA_VERSION = 2
 
 # --- Classification verdicts -------------------------------------------------
 
@@ -259,10 +259,44 @@ def _safe_analysis_evidence(candidate):
     return evidence
 
 
+def _diagnostic_match_state(candidate):
+    """Return explicit direct, resolved, and effective matching evidence."""
+
+    resolution = str(candidate.resolution or RESOLUTION_NONE)
+    direct_hack_id = str(candidate.hack_id or "")
+    resolved_hack_id = str(candidate.resolved_hack_id or "")
+    resolved = resolution in {RESOLUTION_RESOLVED, RESOLUTION_EXISTS} and bool(
+        resolved_hack_id
+    )
+    direct = bool(direct_hack_id) and not resolved
+
+    if direct:
+        source = "collection"
+        effective_hack_id = direct_hack_id
+    elif resolution == RESOLUTION_EXISTS and resolved_hack_id:
+        source = "smwc_existing"
+        effective_hack_id = resolved_hack_id
+    elif resolution == RESOLUTION_RESOLVED and resolved_hack_id:
+        source = "smwc_new"
+        effective_hack_id = resolved_hack_id
+    else:
+        source = "none"
+        effective_hack_id = ""
+
+    return {
+        "direct": direct,
+        "resolved_through_smwc": resolved,
+        "effective": bool(effective_hack_id),
+        "source": source,
+        "effective_hack_id": effective_hack_id,
+    }
+
+
 def _diagnostic_candidate(candidate):
     """Serialize one candidate without paths or raw save contents."""
 
     save_name = os.path.basename(candidate.save_name or candidate.save_path)
+    match_state = _diagnostic_match_state(candidate)
     return {
         "save": {
             "name": save_name,
@@ -277,6 +311,7 @@ def _diagnostic_candidate(candidate):
             "total_exits": int(candidate.total_exits or 0),
             "status": str(candidate.status or STATUS_UNMATCHED),
             "already_completed": bool(candidate.already_completed),
+            **match_state,
         },
         "resolution": {
             "status": str(candidate.resolution or RESOLUTION_NONE),
@@ -304,7 +339,15 @@ def build_diagnostic_report(candidates, generated_at=None):
     status_counts = Counter(row["match"]["status"] for row in rows)
     profile_counts = Counter(row["analysis"]["profile"] for row in rows)
     confidence_counts = Counter(row["analysis"]["confidence"] for row in rows)
-    matched_count = sum(bool(row["match"]["hack_id"]) for row in rows)
+    resolution_counts = Counter(
+        row["resolution"]["status"] or "not_attempted" for row in rows
+    )
+    direct_match_count = sum(row["match"]["direct"] for row in rows)
+    resolved_match_count = sum(
+        row["match"]["resolved_through_smwc"] for row in rows
+    )
+    effective_match_count = sum(row["match"]["effective"] for row in rows)
+    unresolved_count = len(rows) - effective_match_count
 
     return {
         "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
@@ -316,9 +359,14 @@ def build_diagnostic_report(candidates, generated_at=None):
         },
         "summary": {
             "candidate_count": len(rows),
-            "matched_count": matched_count,
-            "unmatched_count": len(rows) - matched_count,
+            "direct_match_count": direct_match_count,
+            "resolved_through_smwc_count": resolved_match_count,
+            "effective_matched_count": effective_match_count,
+            "unresolved_count": unresolved_count,
+            "matched_count": effective_match_count,
+            "unmatched_count": unresolved_count,
             "status_counts": dict(sorted(status_counts.items())),
+            "resolution_counts": dict(sorted(resolution_counts.items())),
             "profile_counts": dict(sorted(profile_counts.items())),
             "confidence_counts": dict(sorted(confidence_counts.items())),
         },

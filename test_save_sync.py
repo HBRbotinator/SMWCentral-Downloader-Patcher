@@ -681,6 +681,8 @@ class DiagnosticReportTest(unittest.TestCase):
         confidence="low",
         status=STATUS_IN_PROGRESS,
         hack_id="42",
+        resolution=save_sync.RESOLUTION_NONE,
+        resolved_hack_id="",
     ):
         return save_sync.SyncCandidate(
             save_path=save_path,
@@ -696,6 +698,8 @@ class DiagnosticReportTest(unittest.TestCase):
             title="Example Hack" if hack_id else "",
             total_exits=10 if hack_id else 0,
             status=status,
+            resolution=resolution,
+            resolved_hack_id=resolved_hack_id,
         )
 
     def test_report_redacts_paths_and_raw_save_data(self):
@@ -739,6 +743,67 @@ class DiagnosticReportTest(unittest.TestCase):
             {"low": 1, "none": 1},
         )
 
+    def test_report_distinguishes_direct_resolved_and_unresolved_matches(self):
+        candidates = [
+            self._candidate(save_name="Direct.srm", hack_id="42"),
+            self._candidate(
+                save_name="Resolved New.srm",
+                hack_id="",
+                resolution=save_sync.RESOLUTION_RESOLVED,
+                resolved_hack_id="99",
+            ),
+            self._candidate(
+                save_name="Resolved Existing.srm",
+                hack_id="7",
+                resolution=save_sync.RESOLUTION_EXISTS,
+                resolved_hack_id="7",
+            ),
+            self._candidate(
+                save_name="Unresolved.srm",
+                hack_id="",
+                resolution=save_sync.RESOLUTION_NO_MATCH,
+            ),
+        ]
+        report = save_sync.build_diagnostic_report(candidates)
+        summary = report["summary"]
+        self.assertEqual(summary["direct_match_count"], 1)
+        self.assertEqual(summary["resolved_through_smwc_count"], 2)
+        self.assertEqual(summary["effective_matched_count"], 3)
+        self.assertEqual(summary["unresolved_count"], 1)
+        self.assertEqual(summary["matched_count"], 3)
+        self.assertEqual(summary["unmatched_count"], 1)
+        self.assertEqual(
+            summary["resolution_counts"],
+            {"exists": 1, "no_match": 1, "not_attempted": 1, "resolved": 1},
+        )
+
+    def test_candidate_rows_expose_effective_match_source(self):
+        candidates = [
+            self._candidate(save_name="Direct.srm", hack_id="42"),
+            self._candidate(
+                save_name="Resolved New.srm",
+                hack_id="",
+                resolution=save_sync.RESOLUTION_RESOLVED,
+                resolved_hack_id="99",
+            ),
+            self._candidate(
+                save_name="Resolved Existing.srm",
+                hack_id="7",
+                resolution=save_sync.RESOLUTION_EXISTS,
+                resolved_hack_id="7",
+            ),
+            self._candidate(save_name="None.srm", hack_id=""),
+        ]
+        report = save_sync.build_diagnostic_report(candidates)
+        rows = {row["save"]["name"]: row["match"] for row in report["candidates"]}
+        self.assertEqual(rows["Direct.srm"]["source"], "collection")
+        self.assertEqual(rows["Direct.srm"]["effective_hack_id"], "42")
+        self.assertEqual(rows["Resolved New.srm"]["source"], "smwc_new")
+        self.assertEqual(rows["Resolved New.srm"]["effective_hack_id"], "99")
+        self.assertEqual(rows["Resolved Existing.srm"]["source"], "smwc_existing")
+        self.assertEqual(rows["None.srm"]["source"], "none")
+        self.assertFalse(rows["None.srm"]["effective"])
+
     def test_writer_produces_stable_json_and_creates_parent(self):
         with tempfile.TemporaryDirectory(prefix="save_diag_report_") as root:
             destination = Path(root) / "nested" / "report.json"
@@ -750,7 +815,7 @@ class DiagnosticReportTest(unittest.TestCase):
             self.assertTrue(Path(written).is_absolute())
             self.assertTrue(os.path.samefile(written, destination))
             payload = json.loads(destination.read_text(encoding="utf-8"))
-            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["schema_version"], 2)
             self.assertTrue(
                 destination.read_text(encoding="utf-8").endswith("\n")
             )
