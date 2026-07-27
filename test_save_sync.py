@@ -10,6 +10,7 @@ Run:  python -m pytest test_save_sync.py      (or)  python test_save_sync.py
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -332,6 +333,339 @@ class ImportOrphanTest(unittest.TestCase):
         )
         self.assertEqual(cand.hack_id, "55")
         self.assertEqual(cand.status, save_sync.STATUS_COMPLETED)  # 4>=4
+
+
+class LegacyLayoutContractTest(unittest.TestCase):
+    """Lock the vanilla-layout assumptions that later work will replace explicitly."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="savesync_layout_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, name, blob):
+        path = os.path.join(self.tmp, name)
+        with open(path, "wb") as handle:
+            handle.write(blob)
+        return path
+
+    def test_legacy_exit_offset_and_minimum_size_are_fixed(self):
+        self.assertEqual(SMW_EXIT_COUNT_OFFSET, 0x8C)
+        self.assertEqual(MIN_SAVE_SIZE, 0x8D)
+
+    def test_reader_uses_only_the_legacy_exit_counter_byte(self):
+        data = bytearray(MIN_SAVE_SIZE + 4)
+        data[SMW_EXIT_COUNT_OFFSET - 1] = 91
+        data[SMW_EXIT_COUNT_OFFSET] = 17
+        data[SMW_EXIT_COUNT_OFFSET + 1] = 73
+        path = self._write("layout.srm", bytes(data))
+        self.assertEqual(read_collected_exits(path), 17)
+
+    def test_zero_is_a_valid_initialized_exit_count(self):
+        path = self._write("new-game.srm", _make_srm_bytes(0))
+        self.assertEqual(read_collected_exits(path), 0)
+
+    def test_reader_returns_raw_non_ff_byte_before_classification(self):
+        path = self._write("raw.srm", _make_srm_bytes(0xFE))
+        self.assertEqual(read_collected_exits(path), 254)
+        self.assertEqual(classify(254, 15, False, False), STATUS_UNCERTAIN)
+
+
+class SaveFileDiscoveryTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="savesync_list_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _touch(self, relative, payload=b"x"):
+        path = os.path.join(self.tmp, relative)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(payload)
+        return path
+
+    def test_extensions_are_case_insensitive_and_results_are_sorted_absolute_paths(self):
+        second = self._touch("b.SAV")
+        first = self._touch("A.sRm")
+        self.assertEqual(
+            save_sync.list_save_files(self.tmp),
+            sorted([os.path.abspath(first), os.path.abspath(second)]),
+        )
+
+    def test_unsupported_extensions_and_nested_saves_are_ignored(self):
+        self._touch("notes.txt")
+        self._touch("rom.smc")
+        self._touch(os.path.join("nested", "hidden.srm"))
+        self.assertEqual(save_sync.list_save_files(self.tmp), [])
+
+    def test_directory_named_like_a_save_is_ignored(self):
+        os.mkdir(os.path.join(self.tmp, "folder.srm"))
+        self.assertEqual(save_sync.list_save_files(self.tmp), [])
+
+    def test_missing_directory_returns_empty_list(self):
+        missing = os.path.join(self.tmp, "missing")
+        self.assertEqual(save_sync.list_save_files(missing), [])
+
+
+class NormalizationRegressionTest(unittest.TestCase):
+    def test_trailing_decimal_versions_are_removed(self):
+        expected = "leplume"
+        for name in (
+            "Le Plume v1.1.srm",
+            "Le_Plume_v0.3.sav",
+            "Le-Plume-2.0.srm",
+            "Le Plume1.2.srm",
+        ):
+            self.assertEqual(save_sync._normalize(name), expected)
+
+    def test_integer_title_suffix_is_preserved(self):
+        self.assertEqual(
+            save_sync._normalize("Grand Poo World 2.srm"),
+            "grandpooworld2",
+        )
+
+    def test_directory_extension_case_and_punctuation_are_ignored(self):
+        name = os.path.join("some", "folder", "Fresh-Hops!.SRM")
+        self.assertEqual(save_sync._normalize(name), "freshhops")
+
+    def test_known_rom_paths_and_additional_file_paths_are_indexed(self):
+        hack = {
+            "id": "10",
+            "title": "Canonical Title",
+            "file_path": "/roms/Downloaded_Name_v1.2.smc",
+            "files": [
+                {"path": "/archive/Alternate Name.sfc"},
+                "not-a-dictionary",
+                {},
+            ],
+        }
+        index = build_hack_index([hack])
+        self.assertIs(index[save_sync._normalize("Canonical Title.srm")], hack)
+        self.assertIs(index[save_sync._normalize("Downloaded_Name.srm")], hack)
+        self.assertIs(index[save_sync._normalize("Alternate Name.sav")], hack)
+
+    def test_first_collection_entry_wins_normalized_title_collision(self):
+        first = {"id": "1", "title": "Same Hack"}
+        second = {"id": "2", "title": "Same-Hack"}
+        index = build_hack_index([first, second])
+        self.assertIs(index["samehack"], first)
+
+
+class CandidatePropertiesTest(unittest.TestCase):
+    def test_completed_date_uses_local_calendar_date(self):
+        mtime = 1719800000.0
+        candidate = save_sync.SyncCandidate("x", "x.srm", mtime, 1)
+        expected = save_sync.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+        self.assertEqual(candidate.completed_date, expected)
+
+    def test_zero_mtime_has_no_completed_date(self):
+        candidate = save_sync.SyncCandidate("x", "x.srm", 0, 1)
+        self.assertEqual(candidate.completed_date, "")
+
+    def test_will_complete_only_tracks_completed_status(self):
+        candidate = save_sync.SyncCandidate("x", "x.srm", 1, 1)
+        for status in (
+            STATUS_IN_PROGRESS,
+            STATUS_UNCERTAIN,
+            STATUS_ALREADY_COMPLETED,
+            STATUS_UNMATCHED,
+        ):
+            candidate.status = status
+            self.assertFalse(candidate.will_complete)
+        candidate.status = STATUS_COMPLETED
+        self.assertTrue(candidate.will_complete)
+
+    def test_exits_display_preserves_readable_and_unknown_values(self):
+        readable = save_sync.SyncCandidate("x", "x.srm", 1, 7, total_exits=12)
+        unknown = save_sync.SyncCandidate("x", "x.srm", 1, None, total_exits=12)
+        self.assertEqual(readable.exits_display, "7 / 12")
+        self.assertEqual(unknown.exits_display, "? / 12")
+
+
+class DuplicateSelectionRegressionTest(unittest.TestCase):
+    HACK = {"id": "1", "title": "Tie Hack", "exits": 10, "completed": False}
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="savesync_duplicates_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, name, blob, mtime):
+        path = os.path.join(self.tmp, name)
+        with open(path, "wb") as handle:
+            handle.write(blob)
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def _single_result(self):
+        results = scan_saves(self.tmp, [self.HACK])
+        self.assertEqual(len(results), 1)
+        return results[0]
+
+    def test_more_exits_beats_a_newer_save(self):
+        self._write("Tie Hack v1.0.srm", _make_srm_bytes(8), 1700000000)
+        self._write("Tie Hack v1.1.srm", _make_srm_bytes(3), 1800000000)
+        self.assertEqual(self._single_result().collected_exits, 8)
+
+    def test_equal_exits_use_the_newest_mtime(self):
+        self._write("Tie Hack v1.0.srm", _make_srm_bytes(5), 1700000000)
+        newest = self._write("Tie Hack v1.1.srm", _make_srm_bytes(5), 1800000000)
+        self.assertEqual(self._single_result().save_path, newest)
+
+    def test_readable_zero_beats_an_unreadable_duplicate(self):
+        self._write("Tie Hack v1.0.srm", b"tiny", 1800000000)
+        readable = self._write("Tie Hack v1.1.srm", _make_srm_bytes(0), 1700000000)
+        result = self._single_result()
+        self.assertEqual(result.save_path, readable)
+        self.assertEqual(result.collected_exits, 0)
+
+
+class RecordingDataManager(FakeDataManager):
+    def __init__(self, data=None):
+        super().__init__(data)
+        self.operations = []
+
+    def update_hack(self, hack_id, field, value):
+        self.operations.append(("update", hack_id, field, value))
+        return super().update_hack(hack_id, field, value)
+
+    def force_save(self):
+        self.operations.append(("force_save",))
+        return super().force_save()
+
+
+class ApplyCandidatesRegressionTest(unittest.TestCase):
+    def test_date_is_written_before_completed_and_saved_once(self):
+        manager = RecordingDataManager({"1": {"completed": False}})
+        candidate = save_sync.SyncCandidate(
+            "x", "x.srm", 1719800000.0, 4, hack_id="1", status=STATUS_COMPLETED
+        )
+        applied = save_sync.apply_candidates([candidate], manager)
+        self.assertEqual(applied, 1)
+        self.assertEqual(
+            manager.operations,
+            [
+                ("update", "1", "completed_date", candidate.completed_date),
+                ("update", "1", "completed", True),
+                ("force_save",),
+            ],
+        )
+
+    def test_unmatched_candidates_are_skipped_without_saving(self):
+        manager = RecordingDataManager()
+        candidate = save_sync.SyncCandidate("x", "x.srm", 1, 1)
+        self.assertEqual(save_sync.apply_candidates([candidate], manager), 0)
+        self.assertEqual(manager.operations, [])
+        self.assertFalse(manager.saved)
+
+    def test_unknown_mtime_sets_completion_without_overwriting_date(self):
+        manager = RecordingDataManager(
+            {"1": {"completed": False, "completed_date": "2024-01-02"}}
+        )
+        candidate = save_sync.SyncCandidate("x", "x.srm", 0, 4, hack_id="1")
+        save_sync.apply_candidates([candidate], manager)
+        self.assertEqual(manager.data["1"]["completed_date"], "2024-01-02")
+        self.assertTrue(manager.data["1"]["completed"])
+
+    def test_apply_never_writes_completed_false(self):
+        manager = RecordingDataManager({"1": {"completed": True}})
+        candidate = save_sync.SyncCandidate(
+            "x", "x.srm", 1, 0, hack_id="1", status=STATUS_ALREADY_COMPLETED
+        )
+        save_sync.apply_candidates([candidate], manager)
+        self.assertNotIn(("update", "1", "completed", False), manager.operations)
+        self.assertTrue(manager.data["1"]["completed"])
+
+
+class OrphanResolutionRegressionTest(unittest.TestCase):
+    def test_empty_query_returns_no_match_without_fetching(self):
+        calls = []
+
+        def fetch(config, page=1, waiting_mode=False, log=None):
+            calls.append(config)
+            return {"data": []}
+
+        result = save_sync.resolve_orphan("", set(), fetch_fn=fetch)
+        self.assertEqual(result["status"], save_sync.RESOLUTION_NO_MATCH)
+        self.assertEqual(calls, [])
+
+    def test_non_dictionary_fetch_result_is_no_match(self):
+        def fetch(config, page=1, waiting_mode=False, log=None):
+            return ["unexpected"]
+
+        result = save_sync.resolve_orphan("Known Hack.srm", set(), fetch_fn=fetch)
+        self.assertEqual(result["status"], save_sync.RESOLUTION_NO_MATCH)
+
+    def test_exact_title_without_an_id_is_no_match(self):
+        hack = _smwc_hack("", "Known Hack")
+        result = save_sync.resolve_orphan(
+            "Known Hack.srm", set(), fetch_fn=_fake_fetch([hack])
+        )
+        self.assertEqual(result["status"], save_sync.RESOLUTION_NO_MATCH)
+
+    def test_versioned_save_matches_unversioned_smwc_title(self):
+        result = save_sync.resolve_orphan(
+            "Known_Hack_v1.2.srm",
+            set(),
+            fetch_fn=_fake_fetch([_smwc_hack("42", "Known Hack")]),
+        )
+        self.assertEqual(result["status"], save_sync.RESOLUTION_RESOLVED)
+        self.assertEqual(result["hack_id"], "42")
+
+
+class OrphanImportRegressionTest(unittest.TestCase):
+    def test_incomplete_import_stays_incomplete_without_completion_date(self):
+        manager = FakeDataManager()
+        candidate = save_sync.SyncCandidate(
+            save_path="x",
+            save_name="Long Hack.srm",
+            mtime=1719800000.0,
+            collected_exits=3,
+            resolution=save_sync.RESOLUTION_RESOLVED,
+            resolved_hack=_smwc_hack("80", "Long Hack", length=10),
+            resolved_hack_id="80",
+        )
+        self.assertTrue(save_sync.import_orphan(candidate, manager))
+        self.assertFalse(manager.data["80"]["completed"])
+        self.assertEqual(manager.data["80"]["completed_date"], "")
+
+    def test_mark_all_import_completes_an_unreadable_save(self):
+        manager = FakeDataManager()
+        candidate = save_sync.SyncCandidate(
+            save_path="x",
+            save_name="Unknown Layout.srm",
+            mtime=1719800000.0,
+            collected_exits=None,
+            resolution=save_sync.RESOLUTION_RESOLVED,
+            resolved_hack=_smwc_hack("81", "Unknown Layout", length=10),
+            resolved_hack_id="81",
+        )
+        self.assertTrue(save_sync.import_orphan(candidate, manager, mark_all=True))
+        self.assertTrue(manager.data["81"]["completed"])
+        self.assertEqual(manager.data["81"]["completed_date"], candidate.completed_date)
+
+    def test_resolved_attachment_populates_metadata_and_status(self):
+        manager = FakeDataManager()
+        candidate = save_sync.SyncCandidate("x", "x.srm", 1, 2)
+        resolution = {
+            "status": save_sync.RESOLUTION_RESOLVED,
+            "hack": _smwc_hack("82", "Resolved Hack", length=5),
+            "hack_id": "82",
+        }
+        returned = save_sync.attach_resolution(candidate, resolution, manager)
+        self.assertIs(returned, candidate)
+        self.assertEqual(candidate.title, "Resolved Hack")
+        self.assertEqual(candidate.total_exits, 5)
+        self.assertEqual(candidate.status, STATUS_IN_PROGRESS)
+
+    def test_unresolved_candidate_cannot_be_imported(self):
+        manager = FakeDataManager()
+        candidate = save_sync.SyncCandidate("x", "x.srm", 1, 1)
+        self.assertFalse(save_sync.import_orphan(candidate, manager))
+        self.assertEqual(manager.data, {})
 
 
 if __name__ == "__main__":
