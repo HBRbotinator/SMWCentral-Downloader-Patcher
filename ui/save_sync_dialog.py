@@ -17,7 +17,7 @@ import os
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, filedialog, messagebox
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -68,13 +68,14 @@ class SaveSyncDialog:
         self.on_applied = on_applied
         self.fetch_fn = fetch_fn
         self.mark_all = mark_all
+        self.candidates = list(candidates)
 
         self.matched = sorted(
-            (c for c in candidates if c.hack_id),
+            (c for c in self.candidates if c.hack_id),
             key=lambda c: (_STATUS_ORDER.get(c.status, 9), c.title.lower()),
         )
         self.unmatched = sorted(
-            (c for c in candidates if not c.hack_id),
+            (c for c in self.candidates if not c.hack_id),
             key=lambda c: c.save_name.lower(),
         )
 
@@ -482,6 +483,46 @@ class SaveSyncDialog:
         )
         self.apply_button.pack(side="right")
         ttk.Button(bar, text="Cancel", command=self.win.destroy).pack(side="right", padx=(0, 8))
+        ttk.Button(
+            bar,
+            text="Export Diagnostics...",
+            command=self._export_diagnostics,
+        ).pack(side="left")
+
+    def _export_diagnostics(self):
+        destination = filedialog.asksaveasfilename(
+            parent=self.win,
+            title="Export Save Data Sync Diagnostics",
+            defaultextension=".json",
+            initialfile=save_sync.diagnostic_filename(),
+            filetypes=(("JSON diagnostic report", "*.json"), ("All files", "*.*")),
+        )
+        if not destination:
+            return
+
+        try:
+            written = save_sync.write_diagnostic_report(destination, self.candidates)
+        except Exception as exc:  # pragma: no cover - defensive UI boundary
+            if self.logger:
+                self.logger.log(f"Save diagnostic export failed: {exc}", "Error")
+            messagebox.showerror(
+                "Save Data Sync",
+                f"Failed to export diagnostics:\n{exc}",
+                parent=self.win,
+            )
+            return
+
+        if self.logger:
+            self.logger.log(
+                f"Save Data Sync diagnostics exported: {os.path.basename(written)}",
+                "Information",
+            )
+        messagebox.showinfo(
+            "Save Data Sync",
+            "Diagnostic report exported.\n\n"
+            "The report contains no absolute paths or raw save bytes.",
+            parent=self.win,
+        )
 
     def _update_apply_state(self):
         count = len(self._selected_completions()) + len(self._selected_orphans())

@@ -9,12 +9,14 @@ filename-to-hack matching.
 Run:  python -m pytest test_save_sync.py      (or)  python test_save_sync.py
 """
 
+import json
 import os
 import shutil
 import sys
 import tempfile
 import unittest
-
+from datetime import datetime, timezone
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import save_sync
@@ -669,6 +671,104 @@ class OrphanImportRegressionTest(unittest.TestCase):
         self.assertFalse(save_sync.import_orphan(candidate, manager))
         self.assertEqual(manager.data, {})
 
+class DiagnosticReportTest(unittest.TestCase):
+    def _candidate(
+        self,
+        *,
+        save_name="Example Hack.srm",
+        save_path="C:/Users/example/private/saves/Example Hack.srm",
+        profile="legacy_raw_counter",
+        confidence="low",
+        status=STATUS_IN_PROGRESS,
+        hack_id="42",
+    ):
+        return save_sync.SyncCandidate(
+            save_path=save_path,
+            save_name=save_name,
+            mtime=1_700_000_000,
+            collected_exits=3,
+            save_size=8192,
+            profile=profile,
+            counter_kind="overworld_events",
+            confidence=confidence,
+            warnings=("example warning",),
+            hack_id=hack_id,
+            title="Example Hack" if hack_id else "",
+            total_exits=10 if hack_id else 0,
+            status=status,
+        )
+
+    def test_report_redacts_paths_and_raw_save_data(self):
+        private_path = "C:/Users/example/private/saves/Example Hack.srm"
+        report = save_sync.build_diagnostic_report(
+            [self._candidate(save_path=private_path)],
+            generated_at=datetime(2026, 7, 27, 10, 30, tzinfo=timezone.utc),
+        )
+        encoded = json.dumps(report)
+        self.assertNotIn(private_path, encoded)
+        self.assertNotIn("C:/Users/example/private", encoded)
+        self.assertFalse(report["privacy"]["absolute_paths_included"])
+        self.assertFalse(report["privacy"]["raw_save_bytes_included"])
+        self.assertNotIn("path", report["candidates"][0]["analysis"])
+
+    def test_report_summarizes_and_sorts_candidates(self):
+        candidates = [
+            self._candidate(
+                save_name="Zulu.srm",
+                profile="expanded_sram_unknown",
+                confidence="none",
+                status=STATUS_UNCERTAIN,
+                hack_id="",
+            ),
+            self._candidate(save_name="Alpha.sav"),
+        ]
+        report = save_sync.build_diagnostic_report(
+            candidates,
+            generated_at=datetime(2026, 7, 27, 10, 30, tzinfo=timezone.utc),
+        )
+        self.assertEqual(report["generated_at_utc"], "2026-07-27T10:30:00Z")
+        self.assertEqual(
+            [row["save"]["name"] for row in report["candidates"]],
+            ["Alpha.sav", "Zulu.srm"],
+        )
+        self.assertEqual(report["summary"]["candidate_count"], 2)
+        self.assertEqual(report["summary"]["matched_count"], 1)
+        self.assertEqual(report["summary"]["unmatched_count"], 1)
+        self.assertEqual(
+            report["summary"]["confidence_counts"],
+            {"low": 1, "none": 1},
+        )
+
+    def test_writer_produces_stable_json_and_creates_parent(self):
+        with tempfile.TemporaryDirectory(prefix="save_diag_report_") as root:
+            destination = Path(root) / "nested" / "report.json"
+            written = save_sync.write_diagnostic_report(
+                destination,
+                [self._candidate()],
+                generated_at=datetime(2026, 7, 27, 10, 30, tzinfo=timezone.utc),
+            )
+            self.assertEqual(written, str(destination.resolve()))
+            payload = json.loads(destination.read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema_version"], 1)
+            self.assertTrue(
+                destination.read_text(encoding="utf-8").endswith("\n")
+            )
+            self.assertFalse(destination.with_suffix(".json.tmp").exists())
+
+    def test_default_filename_uses_supplied_timestamp(self):
+        stamp = datetime(2026, 7, 27, 10, 30, 45)
+        self.assertEqual(
+            save_sync.diagnostic_filename(stamp),
+            "SMWC-Save-Diagnostics-20260727-103045.json",
+        )
+
+    def test_review_dialog_exposes_diagnostic_export(self):
+        source = (
+            Path(__file__).parent / "ui" / "save_sync_dialog.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('text="Export Diagnostics..."', source)
+        self.assertIn("save_sync.write_diagnostic_report", source)
+        self.assertIn("no absolute paths or raw save bytes", source)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

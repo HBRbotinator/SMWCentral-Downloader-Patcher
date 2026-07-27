@@ -26,10 +26,12 @@ Copyright (c) 2025 iamtheratio
 Licensed under the MIT License - see LICENSE file for details
 """
 
+import json
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from save_analysis import (
     LEGACY_COUNTER_OFFSET,
@@ -53,6 +55,10 @@ MAX_PLAUSIBLE_EXITS = 120
 
 # Save-file extensions we understand (both are raw SMW SRAM).
 SAVE_EXTENSIONS = (".srm", ".sav")
+
+# Privacy-safe diagnostic report format. Reports contain parser and matching
+# evidence, but never absolute paths, parent directories, or raw save bytes.
+DIAGNOSTIC_SCHEMA_VERSION = 1
 
 # --- Classification verdicts -------------------------------------------------
 
@@ -224,6 +230,124 @@ class SyncCandidate:
             "warnings": list(self.warnings),
             "attempts": [],
         }
+
+
+
+def _utc_timestamp(value=None):
+    """Return an ISO-8601 UTC timestamp for diagnostic metadata."""
+
+    moment = value or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    else:
+        moment = moment.astimezone(timezone.utc)
+    return moment.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def diagnostic_filename(value=None):
+    """Return a timestamped default filename for a diagnostic export."""
+
+    moment = value or datetime.now()
+    return f"SMWC-Save-Diagnostics-{moment.strftime('%Y%m%d-%H%M%S')}.json"
+
+
+def _safe_analysis_evidence(candidate):
+    """Return candidate evidence with local filesystem paths removed."""
+
+    evidence = dict(candidate.evidence())
+    evidence.pop("path", None)
+    return evidence
+
+
+def _diagnostic_candidate(candidate):
+    """Serialize one candidate without paths or raw save contents."""
+
+    save_name = os.path.basename(candidate.save_name or candidate.save_path)
+    return {
+        "save": {
+            "name": save_name,
+            "extension": os.path.splitext(save_name)[1].lower(),
+            "size": int(candidate.save_size or 0),
+            "modified_date": candidate.completed_date or None,
+        },
+        "analysis": _safe_analysis_evidence(candidate),
+        "match": {
+            "hack_id": str(candidate.hack_id or ""),
+            "title": str(candidate.title or ""),
+            "total_exits": int(candidate.total_exits or 0),
+            "status": str(candidate.status or STATUS_UNMATCHED),
+            "already_completed": bool(candidate.already_completed),
+        },
+        "resolution": {
+            "status": str(candidate.resolution or RESOLUTION_NONE),
+            "resolved_hack_id": str(candidate.resolved_hack_id or ""),
+        },
+    }
+
+
+def build_diagnostic_report(candidates, generated_at=None):
+    """Build a privacy-safe Save Data Sync diagnostic report.
+
+    The report intentionally excludes absolute paths, parent-directory names,
+    raw SRAM bytes, and complete SMWC response objects. It is suitable for issue
+    reports and parser research without exposing the user's local directory
+    layout.
+    """
+
+    rows = sorted(
+        (_diagnostic_candidate(candidate) for candidate in candidates),
+        key=lambda row: (
+            row["save"]["name"].casefold(),
+            row["match"]["hack_id"],
+        ),
+    )
+    status_counts = Counter(row["match"]["status"] for row in rows)
+    profile_counts = Counter(row["analysis"]["profile"] for row in rows)
+    confidence_counts = Counter(row["analysis"]["confidence"] for row in rows)
+    matched_count = sum(bool(row["match"]["hack_id"]) for row in rows)
+
+    return {
+        "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
+        "generated_at_utc": _utc_timestamp(generated_at),
+        "privacy": {
+            "absolute_paths_included": False,
+            "parent_directories_included": False,
+            "raw_save_bytes_included": False,
+        },
+        "summary": {
+            "candidate_count": len(rows),
+            "matched_count": matched_count,
+            "unmatched_count": len(rows) - matched_count,
+            "status_counts": dict(sorted(status_counts.items())),
+            "profile_counts": dict(sorted(profile_counts.items())),
+            "confidence_counts": dict(sorted(confidence_counts.items())),
+        },
+        "candidates": rows,
+    }
+
+
+def write_diagnostic_report(destination, candidates, generated_at=None):
+    """Write a diagnostic report atomically and return its absolute path."""
+
+    absolute = os.path.abspath(os.fspath(destination))
+    parent = os.path.dirname(absolute)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    report = build_diagnostic_report(candidates, generated_at=generated_at)
+    temporary = absolute + ".tmp"
+    try:
+        with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(report, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(temporary, absolute)
+    finally:
+        try:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+        except OSError:
+            pass
+    return absolute
 
 
 def list_save_files(directory):
