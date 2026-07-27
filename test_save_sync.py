@@ -815,7 +815,7 @@ class DiagnosticReportTest(unittest.TestCase):
             self.assertTrue(Path(written).is_absolute())
             self.assertTrue(os.path.samefile(written, destination))
             payload = json.loads(destination.read_text(encoding="utf-8"))
-            self.assertEqual(payload["schema_version"], 2)
+            self.assertEqual(payload["schema_version"], 3)
             self.assertTrue(
                 destination.read_text(encoding="utf-8").endswith("\n")
             )
@@ -1044,6 +1044,151 @@ class ManualOrphanSearchUiTest(unittest.TestCase):
             'collection = "Already added" '
             'if option["in_collection"] else "New"',
             source,
+        )
+
+class SaveAssociationTest(unittest.TestCase):
+    class FakeConfig:
+        def __init__(self, initial=None):
+            self.values = dict(initial or {})
+            self.set_calls = []
+
+        def get(self, key, default=None):
+            return self.values.get(key, default)
+
+        def set(self, key, value):
+            self.values[key] = value
+            self.set_calls.append((key, value))
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="save_alias_")
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _write_save(self, name, exits=22):
+        path = self.root / name
+        path.write_bytes(_make_srm_bytes(exits, size=8192))
+        return path
+
+    def test_remember_replace_and_forget_use_normalized_filename_key(self):
+        config = self.FakeConfig()
+        self.assertTrue(
+            save_sync.remember_save_association(
+                config, "/private/saves/QW2.srm", "19279"
+            )
+        )
+        self.assertEqual(
+            config.values[save_sync.ASSOCIATION_CONFIG_KEY],
+            {"qw2": "19279"},
+        )
+        self.assertFalse(
+            save_sync.remember_save_association(
+                config, "qw2.sav", "19279"
+            )
+        )
+        self.assertTrue(
+            save_sync.remember_save_association(
+                config, "QW2.srm", "99999"
+            )
+        )
+        self.assertEqual(
+            config.values[save_sync.ASSOCIATION_CONFIG_KEY]["qw2"],
+            "99999",
+        )
+        self.assertTrue(
+            save_sync.forget_save_association(config, "QW2.srm")
+        )
+        self.assertEqual(
+            config.values[save_sync.ASSOCIATION_CONFIG_KEY], {}
+        )
+
+    def test_prune_drops_targets_missing_from_collection(self):
+        valid, removed = save_sync.prune_save_associations(
+            {"QW2.srm": "19279", "Old.srm": "404"},
+            {"19279"},
+        )
+        self.assertEqual(valid, {"qw2": "19279"})
+        self.assertEqual(removed, 1)
+
+    def test_scan_uses_saved_association_as_fallback(self):
+        self._write_save("QW2.srm")
+        hacks = [
+            {"id": "19279", "title": "Quickie World 2", "exits": 22}
+        ]
+        unmatched = save_sync.scan_saves(str(self.root), hacks)
+        self.assertEqual(unmatched[0].status, save_sync.STATUS_UNMATCHED)
+
+        matched = save_sync.scan_saves(
+            str(self.root),
+            hacks,
+            associations={"QW2.srm": "19279"},
+        )
+        self.assertEqual(matched[0].hack_id, "19279")
+        self.assertEqual(matched[0].status, save_sync.STATUS_COMPLETED)
+        self.assertEqual(
+            matched[0].match_source,
+            save_sync.MATCH_SOURCE_SAVED_ALIAS,
+        )
+
+    def test_direct_collection_match_takes_precedence_over_saved_alias(self):
+        self._write_save("Quickie World 2.srm")
+        hacks = [
+            {"id": "19279", "title": "Quickie World 2", "exits": 22},
+            {"id": "99999", "title": "Different Hack", "exits": 22},
+        ]
+        candidates = save_sync.scan_saves(
+            str(self.root),
+            hacks,
+            associations={"Quickie World 2.srm": "99999"},
+        )
+        self.assertEqual(candidates[0].hack_id, "19279")
+        self.assertEqual(
+            candidates[0].match_source,
+            save_sync.MATCH_SOURCE_COLLECTION,
+        )
+
+    def test_diagnostics_identify_saved_associations(self):
+        candidate = save_sync.SyncCandidate(
+            save_path="QW2.srm",
+            save_name="QW2.srm",
+            mtime=0,
+            collected_exits=22,
+            hack_id="19279",
+            title="Quickie World 2",
+            total_exits=22,
+            status=save_sync.STATUS_COMPLETED,
+            match_source=save_sync.MATCH_SOURCE_SAVED_ALIAS,
+        )
+        report = save_sync.build_diagnostic_report([candidate])
+        self.assertEqual(report["schema_version"], 3)
+        self.assertEqual(report["summary"]["direct_match_count"], 0)
+        self.assertEqual(report["summary"]["saved_association_count"], 1)
+        match = report["candidates"][0]["match"]
+        self.assertEqual(match["source"], "saved_alias")
+        self.assertTrue(match["saved_association"])
+
+    def test_config_and_ui_sources_expose_association_lifecycle(self):
+        config_source = (
+            Path(__file__).parent / "config_manager.py"
+        ).read_text(encoding="utf-8")
+        settings_source = (
+            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+        ).read_text(encoding="utf-8")
+        dialog_source = (
+            Path(__file__).parent / "ui" / "save_sync_dialog.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"save_sync_associations": {}', config_source)
+        self.assertIn("associations=associations", settings_source)
+        self.assertIn(
+            "config_manager=self.setup_section.config", settings_source
+        )
+        self.assertIn("manual=True", dialog_source)
+        self.assertIn("save_sync.remember_save_association", dialog_source)
+        self.assertIn('text="Forget Saved Match"', dialog_source)
+        self.assertIn("save_sync.forget_save_association", dialog_source)
+        self.assertIn(
+            "and c.status == save_sync.STATUS_COMPLETED", dialog_source
         )
 
 if __name__ == "__main__":

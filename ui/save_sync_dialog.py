@@ -282,13 +282,15 @@ class SaveSyncDialog:
     """Modal preview dialog for applying save-sync results."""
 
     def __init__(self, parent, candidates, data_manager, logger=None,
-                 on_applied=None, fetch_fn=None, mark_all=False):
+                 on_applied=None, fetch_fn=None, mark_all=False,
+                 config_manager=None):
         self.parent = parent
         self.data_manager = data_manager
         self.logger = logger
         self.on_applied = on_applied
         self.fetch_fn = fetch_fn
         self.mark_all = mark_all
+        self.config_manager = config_manager
         self.candidates = list(candidates)
 
         self.matched = sorted(
@@ -305,6 +307,7 @@ class SaveSyncDialog:
         self.comp_tree = None
         self.comp_checked = {}
         self.comp_cand = {}
+        self.forget_match_button = None
         # Orphan tab state
         self.orph_tree = None
         self.orph_checked = {}
@@ -369,19 +372,26 @@ class SaveSyncDialog:
         ) or "No matching saves"
         ttk.Label(tab, text=summary, foreground="gray").pack(anchor="w", pady=(0, 8))
 
-        columns = ("check", "title", "file", "decision", "date", "exits")
+        columns = (
+            "check", "title", "file", "decision", "source", "date", "exits"
+        )
         self.comp_tree = self._make_tree(
             tab, columns,
             {
                 "check": ("", 34, "center", False),
-                "title": ("Hack", 220, "w", True),
-                "file": ("Save File", 190, "w", True),
+                "title": ("Hack", 205, "w", True),
+                "file": ("Save File", 175, "w", True),
                 "decision": ("Decision", 90, "w", False),
+                "source": ("Match", 80, "w", False),
                 "date": ("Play Date", 90, "center", False),
                 "exits": ("Exits", 70, "center", False),
             },
+            selectmode="browse",
         )
         self.comp_tree.bind("<Button-1>", self._on_comp_click)
+        self.comp_tree.bind(
+            "<<TreeviewSelect>>", self._completion_selection_changed
+        )
         # Clicking the check-column header toggles all rows.
         self.comp_tree.heading("check", text=UNCHECKED, command=self._comp_toggle_all)
 
@@ -389,6 +399,13 @@ class SaveSyncDialog:
         btns.pack(fill="x", pady=(8, 0))
         ttk.Button(btns, text="Select All", command=lambda: self._comp_set_all(True)).pack(side="left")
         ttk.Button(btns, text="Select None", command=lambda: self._comp_set_all(False)).pack(side="left", padx=(8, 0))
+        self.forget_match_button = ttk.Button(
+            btns,
+            text="Forget Saved Match",
+            state="disabled",
+            command=self._forget_selected_match,
+        )
+        self.forget_match_button.pack(side="right")
         return tab
 
     def _populate_completion(self):
@@ -408,9 +425,19 @@ class SaveSyncDialog:
 
             iid = self.comp_tree.insert(
                 "", "end",
-                values=(glyph, cand.title, cand.save_name,
-                        _STATUS_LABEL.get(cand.status, cand.status),
-                        cand.completed_date or "-", cand.exits_display),
+                values=(
+                    glyph,
+                    cand.title,
+                    cand.save_name,
+                    _STATUS_LABEL.get(cand.status, cand.status),
+                    (
+                        "Saved"
+                        if cand.match_source == save_sync.MATCH_SOURCE_SAVED_ALIAS
+                        else "Automatic"
+                    ),
+                    cand.completed_date or "-",
+                    cand.exits_display,
+                ),
                 tags=tags,
             )
             self.comp_cand[iid] = cand
@@ -446,6 +473,59 @@ class SaveSyncDialog:
             self.comp_tree.heading("check", text=CHECKED if all_on else UNCHECKED)
         except tk.TclError:
             pass
+
+    def _completion_selection_changed(self, _event=None):
+        enabled = False
+        if self.comp_tree is not None:
+            selected = self.comp_tree.selection()
+            if len(selected) == 1:
+                candidate = self.comp_cand.get(selected[0])
+                enabled = bool(
+                    candidate
+                    and candidate.match_source
+                    == save_sync.MATCH_SOURCE_SAVED_ALIAS
+                    and self.config_manager is not None
+                )
+        try:
+            self.forget_match_button.config(
+                state="normal" if enabled else "disabled"
+            )
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _forget_selected_match(self):
+        selected = self.comp_tree.selection() if self.comp_tree else ()
+        if len(selected) != 1:
+            return
+        candidate = self.comp_cand.get(selected[0])
+        if not candidate or (
+            candidate.match_source != save_sync.MATCH_SOURCE_SAVED_ALIAS
+        ):
+            return
+
+        if not messagebox.askyesno(
+            "Save Data Sync",
+            f"Forget the saved match for {candidate.save_name}?\n\n"
+            "The review window will close. Scan again to choose another match.",
+            parent=self.win,
+        ):
+            return
+
+        if save_sync.forget_save_association(
+            self.config_manager, candidate.save_name
+        ):
+            if self.logger:
+                self.logger.log(
+                    f"Forgot saved match for {candidate.save_name}",
+                    "Information",
+                )
+            self.win.destroy()
+            messagebox.showinfo(
+                "Save Data Sync",
+                "Saved match forgotten. Scan the save directory again to "
+                "review or replace it.",
+                parent=self.parent.winfo_toplevel(),
+            )
 
     # -- orphan tab -----------------------------------------------------------
 
@@ -590,7 +670,7 @@ class SaveSyncDialog:
         ).show()
 
     def _apply_manual_resolution(self, iid, resolution):
-        if self._set_orphan_resolution(iid, resolution):
+        if self._set_orphan_resolution(iid, resolution, manual=True):
             try:
                 self.lookup_status.config(text="Manual match selected")
             except tk.TclError:
@@ -646,10 +726,11 @@ class SaveSyncDialog:
         if self._set_orphan_resolution(iid, resolution):
             self.lookup_status.config(text=f"Looked up {index}/{total}...")
 
-    def _set_orphan_resolution(self, iid, resolution):
+    def _set_orphan_resolution(self, iid, resolution, manual=False):
         cand = self.orph_cand.get(iid)
         if cand is None:
             return False
+        cand.manual_selection = bool(manual)
         save_sync.attach_resolution(
             cand, resolution, self.data_manager, self.mark_all
         )
@@ -667,7 +748,9 @@ class SaveSyncDialog:
             if cand.already_completed:
                 label = _STATUS_LABEL[save_sync.STATUS_ALREADY_COMPLETED]
 
-        if cand.resolution == save_sync.RESOLUTION_RESOLVED:
+        if manual and cand.resolution in _ORPHAN_ACTIONABLE:
+            checked = True
+        elif cand.resolution == save_sync.RESOLUTION_RESOLVED:
             checked = True
         elif cand.resolution == save_sync.RESOLUTION_EXISTS:
             checked = cand.status == save_sync.STATUS_COMPLETED
@@ -829,8 +912,16 @@ class SaveSyncDialog:
             return
         completions = self._selected_completions()
         orphans = self._selected_orphans()
-        new_imports = [c for c in orphans if c.resolution == save_sync.RESOLUTION_RESOLVED]
-        existing_updates = [c for c in orphans if c.resolution == save_sync.RESOLUTION_EXISTS]
+        new_imports = [
+            c for c in orphans
+            if c.resolution == save_sync.RESOLUTION_RESOLVED
+        ]
+        existing_updates = [
+            c for c in orphans
+            if c.resolution == save_sync.RESOLUTION_EXISTS
+            and c.status == save_sync.STATUS_COMPLETED
+        ]
+        manual_matches = [c for c in orphans if c.manual_selection]
 
         if not completions and not orphans:
             return
@@ -844,6 +935,16 @@ class SaveSyncDialog:
                     imported += 1
             if imported or new_imports:
                 self.data_manager.force_save()
+
+            remembered = 0
+            for cand in manual_matches:
+                target_id = str(cand.resolved_hack_id or "")
+                if target_id not in self.data_manager.data:
+                    continue
+                if save_sync.remember_save_association(
+                    self.config_manager, cand.save_name, target_id
+                ):
+                    remembered += 1
         except Exception as exc:  # pragma: no cover - defensive
             if self.logger:
                 self.logger.log(f"Save sync apply failed: {exc}", "Error")
@@ -852,7 +953,9 @@ class SaveSyncDialog:
 
         if self.logger:
             self.logger.log(
-                f"Save Data Sync: {marked} completion update(s), {imported} hack(s) imported",
+                f"Save Data Sync: {marked} completion update(s), "
+                f"{imported} hack(s) imported, "
+                f"{remembered} saved match(es)",
                 "Information",
             )
 
@@ -866,7 +969,8 @@ class SaveSyncDialog:
         self.win.destroy()
         messagebox.showinfo(
             "Save Data Sync",
-            f"Marked {marked} hack(s) completed and imported {imported} new hack(s).",
+            f"Marked {marked} hack(s) completed, imported {imported} "
+            f"new hack(s), and remembered {remembered} manual match(es).",
             parent=self.parent.winfo_toplevel(),
         )
 

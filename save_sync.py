@@ -58,7 +58,7 @@ SAVE_EXTENSIONS = (".srm", ".sav")
 
 # Privacy-safe diagnostic report format. Reports contain parser and matching
 # evidence, but never absolute paths, parent directories, or raw save bytes.
-DIAGNOSTIC_SCHEMA_VERSION = 2
+DIAGNOSTIC_SCHEMA_VERSION = 3
 
 # --- Classification verdicts -------------------------------------------------
 
@@ -77,6 +77,10 @@ RESOLUTION_NO_MATCH = "no_match"     # SMWC search returned no exact-title match
 RESOLUTION_AMBIGUOUS = "ambiguous"   # multiple exact matches, can't auto-pick
 RESOLUTION_ERROR = "error"           # network / API error during lookup
 SEARCH_RESULTS = "results"         # manual search returned options
+
+ASSOCIATION_CONFIG_KEY = "save_sync_associations"
+MATCH_SOURCE_COLLECTION = "collection"
+MATCH_SOURCE_SAVED_ALIAS = "saved_alias"
 
 
 def read_collected_exits(path):
@@ -140,6 +144,87 @@ def _normalize(name):
     return base
 
 
+def association_key(name):
+    """Return the normalized, path-free key used for explicit save matches."""
+
+    return _normalize(os.path.basename(str(name or "")))
+
+
+def clean_save_associations(value):
+    """Return a normalized ``save filename -> SMWC ID`` mapping."""
+
+    if not isinstance(value, dict):
+        return {}
+
+    cleaned = {}
+    for raw_name, raw_hack_id in value.items():
+        key = association_key(raw_name)
+        hack_id = str(raw_hack_id or "").strip()
+        if key and hack_id:
+            cleaned[key] = hack_id
+    return cleaned
+
+
+def get_save_associations(config_manager):
+    """Load normalized explicit save matches from an application config."""
+
+    if config_manager is None:
+        return {}
+    return clean_save_associations(
+        config_manager.get(ASSOCIATION_CONFIG_KEY, {})
+    )
+
+
+def remember_save_association(config_manager, save_name, hack_id):
+    """Persist one explicit filename-to-hack selection.
+
+    Returns ``True`` when the stored value changed. Existing values for the same
+    normalized save filename are replaced, allowing the user to correct a prior
+    selection.
+    """
+
+    if config_manager is None:
+        return False
+    key = association_key(save_name)
+    target = str(hack_id or "").strip()
+    if not key or not target:
+        return False
+
+    associations = get_save_associations(config_manager)
+    changed = associations.get(key) != target
+    if changed:
+        associations[key] = target
+        config_manager.set(ASSOCIATION_CONFIG_KEY, associations)
+    return changed
+
+
+def forget_save_association(config_manager, save_name):
+    """Remove one explicit filename association and return whether it existed."""
+
+    if config_manager is None:
+        return False
+    key = association_key(save_name)
+    associations = get_save_associations(config_manager)
+    if not key or key not in associations:
+        return False
+
+    del associations[key]
+    config_manager.set(ASSOCIATION_CONFIG_KEY, associations)
+    return True
+
+
+def prune_save_associations(associations, existing_ids):
+    """Drop associations whose target no longer exists in the collection."""
+
+    cleaned = clean_save_associations(associations)
+    valid_ids = {str(hack_id) for hack_id in existing_ids}
+    valid = {
+        key: hack_id
+        for key, hack_id in cleaned.items()
+        if hack_id in valid_ids
+    }
+    return valid, len(cleaned) - len(valid)
+
 def build_hack_index(hacks):
     """Build ``normalized-name -> hack`` map for matching save filenames.
 
@@ -194,6 +279,8 @@ class SyncCandidate:
     resolution: str = RESOLUTION_NONE
     resolved_hack: object = None      # raw SMWC hack dict for a new import
     resolved_hack_id: str = ""
+    match_source: str = ""
+    manual_selection: bool = False
 
     @property
     def completed_date(self):
@@ -269,10 +356,12 @@ def _diagnostic_match_state(candidate):
     resolved = resolution in {RESOLUTION_RESOLVED, RESOLUTION_EXISTS} and bool(
         resolved_hack_id
     )
-    direct = bool(direct_hack_id) and not resolved
+    pre_resolved = bool(direct_hack_id) and not resolved
+    source = candidate.match_source or MATCH_SOURCE_COLLECTION
+    saved_association = pre_resolved and source == MATCH_SOURCE_SAVED_ALIAS
+    direct = pre_resolved and not saved_association
 
-    if direct:
-        source = "collection"
+    if pre_resolved:
         effective_hack_id = direct_hack_id
     elif resolution == RESOLUTION_EXISTS and resolved_hack_id:
         source = "smwc_existing"
@@ -290,6 +379,7 @@ def _diagnostic_match_state(candidate):
         "effective": bool(effective_hack_id),
         "source": source,
         "effective_hack_id": effective_hack_id,
+        "saved_association": saved_association,
     }
 
 
@@ -344,6 +434,9 @@ def build_diagnostic_report(candidates, generated_at=None):
         row["resolution"]["status"] or "not_attempted" for row in rows
     )
     direct_match_count = sum(row["match"]["direct"] for row in rows)
+    saved_association_count = sum(
+        row["match"]["saved_association"] for row in rows
+    )
     resolved_match_count = sum(
         row["match"]["resolved_through_smwc"] for row in rows
     )
@@ -361,6 +454,7 @@ def build_diagnostic_report(candidates, generated_at=None):
         "summary": {
             "candidate_count": len(rows),
             "direct_match_count": direct_match_count,
+            "saved_association_count": saved_association_count,
             "resolved_through_smwc_count": resolved_match_count,
             "effective_matched_count": effective_match_count,
             "unresolved_count": unresolved_count,
@@ -420,7 +514,7 @@ def _strength(candidate):
     return (exits, candidate.mtime)
 
 
-def scan_saves(directory, hacks, mark_all=False):
+def scan_saves(directory, hacks, mark_all=False, associations=None):
     """Scan *directory* and return a list of :class:`SyncCandidate`.
 
     When several saves map to the same hack (e.g. ``le_plume`` v0.1/0.2/0.3), the
@@ -428,6 +522,8 @@ def scan_saves(directory, hacks, mark_all=False):
     saves are all returned so the UI can report them.
     """
     index = build_hack_index(hacks)
+    hacks_by_id = {str(hack.get("id", "")): hack for hack in hacks}
+    association_map = clean_save_associations(associations)
     matched = {}       # hack_id -> best SyncCandidate
     unmatched = []
 
@@ -453,11 +549,21 @@ def scan_saves(directory, hacks, mark_all=False):
         )
 
         hack = index.get(_normalize(candidate.save_name))
+        if hack:
+            candidate.match_source = MATCH_SOURCE_COLLECTION
+        else:
+            associated_id = association_map.get(
+                association_key(candidate.save_name), ""
+            )
+            hack = hacks_by_id.get(associated_id)
+            if hack:
+                candidate.match_source = MATCH_SOURCE_SAVED_ALIAS
+
         if not hack:
             unmatched.append(candidate)
             continue
 
-        candidate.hack_id = hack.get("id", "")
+        candidate.hack_id = str(hack.get("id", ""))
         candidate.title = hack.get("title", "")
         candidate.total_exits = int(hack.get("exits", 0) or 0)
         candidate.already_completed = bool(hack.get("completed", False))
