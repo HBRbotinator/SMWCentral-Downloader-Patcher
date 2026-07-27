@@ -57,6 +57,227 @@ _RESOLUTION_LABEL = {
 _ORPHAN_ACTIONABLE = {save_sync.RESOLUTION_RESOLVED, save_sync.RESOLUTION_EXISTS}
 
 
+class ManualSmwcSearchDialog:
+    """Modal free-text SMWC search for one unresolved save."""
+
+    def __init__(self, parent, candidate, existing_ids, fetch_fn=None,
+                 logger=None, on_selected=None):
+        self.parent = parent
+        self.candidate = candidate
+        self.existing_ids = set(existing_ids)
+        self.fetch_fn = fetch_fn
+        self.logger = logger
+        self.on_selected = on_selected
+
+        self.win = None
+        self.query_var = None
+        self.result_tree = None
+        self.search_button = None
+        self.use_button = None
+        self.status_label = None
+        self.options = {}
+        self._search_running = False
+
+    def show(self):
+        self.win = tk.Toplevel(self.parent)
+        self.win.title(f"Search SMWCentral - {self.candidate.save_name}")
+        self.win.geometry("760x470")
+        self.win.transient(self.parent)
+        self.win.grab_set()
+        self.win.protocol("WM_DELETE_WINDOW", self._close)
+
+        container = ttk.Frame(self.win, padding=15)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(
+            container,
+            text="Search SMWCentral manually, select the correct hack, then "
+                 "confirm the selection. No result is chosen automatically.",
+            wraplength=720,
+        ).pack(anchor="w", pady=(0, 10))
+
+        query_row = ttk.Frame(container)
+        query_row.pack(fill="x", pady=(0, 10))
+        ttk.Label(query_row, text="Search:").pack(side="left")
+        self.query_var = tk.StringVar(
+            value=save_sync.make_search_query(self.candidate.save_name)
+        )
+        entry = ttk.Entry(query_row, textvariable=self.query_var)
+        entry.pack(side="left", fill="x", expand=True, padx=(8, 8))
+        entry.bind("<Return>", lambda _event: self._start_search())
+        self.search_button = ttk.Button(
+            query_row, text="Search", command=self._start_search
+        )
+        self.search_button.pack(side="right")
+
+        columns = ("name", "difficulty", "release", "collection")
+        frame = ttk.Frame(container)
+        frame.pack(fill="both", expand=True)
+        self.result_tree = ttk.Treeview(
+            frame, columns=columns, show="headings", selectmode="browse"
+        )
+        headings = {
+            "name": ("Hack", 330, "w", True),
+            "difficulty": ("Difficulty", 120, "w", False),
+            "release": ("Release", 100, "w", False),
+            "collection": ("Collection", 120, "w", False),
+        }
+        for column, (label, width, anchor, stretch) in headings.items():
+            self.result_tree.heading(column, text=label)
+            self.result_tree.column(
+                column, width=width, anchor=anchor, stretch=stretch
+            )
+        scrollbar = ttk.Scrollbar(
+            frame, orient="vertical", command=self.result_tree.yview
+        )
+        self.result_tree.configure(yscrollcommand=scrollbar.set)
+        self.result_tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        self.result_tree.bind("<<TreeviewSelect>>", self._selection_changed)
+        self.result_tree.bind("<Double-1>", self._use_selected)
+
+        footer = ttk.Frame(container)
+        footer.pack(fill="x", pady=(10, 0))
+        self.status_label = ttk.Label(footer, text="", foreground="gray")
+        self.status_label.pack(side="left")
+        self.use_button = ttk.Button(
+            footer, text="Use Selected", state="disabled",
+            command=self._use_selected,
+        )
+        self.use_button.pack(side="right")
+        ttk.Button(footer, text="Cancel", command=self._close).pack(
+            side="right", padx=(0, 8)
+        )
+
+        self._center()
+        entry.focus_set()
+        entry.selection_range(0, "end")
+        return self.win
+
+    def _start_search(self):
+        if self._search_running:
+            return
+        query = self.query_var.get().strip()
+        if not query:
+            self.status_label.config(text="Enter a search term.")
+            return
+
+        self._search_running = True
+        self.search_button.config(state="disabled")
+        self.use_button.config(state="disabled")
+        self.status_label.config(text="Searching SMWCentral...")
+        self.options.clear()
+        for iid in self.result_tree.get_children():
+            self.result_tree.delete(iid)
+
+        threading.Thread(
+            target=self._search_worker, args=(query,), daemon=True
+        ).start()
+
+    def _search_worker(self, query):
+        result = save_sync.search_orphan_options(
+            query,
+            self.existing_ids,
+            fetch_fn=self.fetch_fn,
+            log=self.logger.log if self.logger else None,
+        )
+        self._ui(self._show_results, result)
+
+    def _show_results(self, result):
+        self._search_running = False
+        try:
+            self.search_button.config(state="normal")
+        except tk.TclError:
+            return
+
+        options = result.get("options", [])
+        for option in options:
+            release = "Obsolete" if option["obsolete"] else "Current"
+            collection = "Already added" if option["in_collection"] else "New"
+            iid = self.result_tree.insert(
+                "",
+                "end",
+                values=(
+                    option["name"],
+                    option["difficulty"] or "-",
+                    release,
+                    collection,
+                ),
+            )
+            self.options[iid] = option
+
+        if result.get("status") == save_sync.RESOLUTION_ERROR:
+            message = "SMWCentral search failed. Check the log and try again."
+        elif options:
+            message = f"Found {len(options)} result(s). Select the correct hack."
+        else:
+            message = "No results found. Try a different search term."
+        self.status_label.config(text=message)
+        self._selection_changed()
+
+    def _selection_changed(self, _event=None):
+        selected = self.result_tree.selection() if self.result_tree else ()
+        state = (
+            "normal"
+            if len(selected) == 1 and not self._search_running
+            else "disabled"
+        )
+        try:
+            self.use_button.config(state=state)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _use_selected(self, _event=None):
+        selected = self.result_tree.selection()
+        if len(selected) != 1:
+            return
+        option = self.options.get(selected[0])
+        if not option:
+            return
+
+        resolution = save_sync.resolution_for_selected_hack(
+            option["hack"], self.existing_ids
+        )
+        if resolution["status"] not in _ORPHAN_ACTIONABLE:
+            self.status_label.config(text="The selected result cannot be used.")
+            return
+
+        if self.on_selected:
+            self.on_selected(resolution)
+        self._close()
+
+    def _ui(self, func, *args):
+        try:
+            if self.win and self.win.winfo_exists():
+                self.win.after(0, lambda: func(*args))
+        except tk.TclError:
+            pass
+
+    def _close(self):
+        try:
+            if self.win and self.win.winfo_exists():
+                self.win.destroy()
+            if self.parent and self.parent.winfo_exists():
+                self.parent.grab_set()
+        except tk.TclError:
+            pass
+
+    def _center(self):
+        self.win.update_idletasks()
+        try:
+            x = self.parent.winfo_x() + (
+                self.parent.winfo_width() - self.win.winfo_width()
+            ) // 2
+            y = self.parent.winfo_y() + (
+                self.parent.winfo_height() - self.win.winfo_height()
+            ) // 2
+            self.win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+
+
 class SaveSyncDialog:
     """Modal preview dialog for applying save-sync results."""
 
@@ -89,6 +310,7 @@ class SaveSyncDialog:
         self.orph_checked = {}
         self.orph_cand = {}
         self.orph_iid = {}  # candidate id() -> iid, for background updates
+        self.manual_search_button = None
 
         self._cancel_lookup = False
         self._lookup_running = False
@@ -232,9 +454,9 @@ class SaveSyncDialog:
 
         ttk.Label(
             tab,
-            text="These saves matched no hack in your collection. Check the ones you "
-                 "recognize, look them up on SMWCentral, then import the confident "
-                 "matches. Each lookup is a network request, so only check what you need.",
+            text="These saves matched no hack in your collection. Use the checked "
+                 "lookup for strict exact-title matches, or select one row and search "
+                 "SMWCentral manually for abbreviations and alternate names.",
             wraplength=780, foreground="gray",
         ).pack(anchor="w", pady=(0, 8))
 
@@ -248,6 +470,7 @@ class SaveSyncDialog:
                 "hack": ("Resolved Hack", 230, "w", True),
                 "difficulty": ("Difficulty", 110, "w", False),
             },
+            selectmode="browse",
         )
         self.orph_tree.bind("<Button-1>", self._on_orph_click)
         # Clicking the check-column header toggles all selectable rows.
@@ -257,6 +480,11 @@ class SaveSyncDialog:
         controls.pack(fill="x", pady=(8, 0))
         ttk.Button(controls, text="Select All", command=lambda: self._orph_set_all(True)).pack(side="left")
         ttk.Button(controls, text="Select None", command=lambda: self._orph_set_all(False)).pack(side="left", padx=(8, 0))
+        self.manual_search_button = ttk.Button(
+            controls, text="Search Selected...",
+            command=self._manual_search_selected,
+        )
+        self.manual_search_button.pack(side="left", padx=(12, 0))
 
         self.lookup_button = ttk.Button(
             controls, text="Look up checked on SMWC", command=self._toggle_lookup
@@ -325,6 +553,50 @@ class SaveSyncDialog:
         except tk.TclError:
             pass
 
+    def _manual_search_selected(self):
+        if self._lookup_running:
+            return
+        selected = self.orph_tree.selection()
+        if len(selected) != 1:
+            messagebox.showinfo(
+                "Save Data Sync",
+                "Select one unmatched save row to search manually.",
+                parent=self.win,
+            )
+            return
+
+        iid = selected[0]
+        cand = self.orph_cand.get(iid)
+        if cand is None:
+            return
+        if cand.resolution in _ORPHAN_ACTIONABLE:
+            messagebox.showinfo(
+                "Save Data Sync",
+                "This save already has a usable SMWCentral match.",
+                parent=self.win,
+            )
+            return
+
+        existing_ids = set(self.data_manager.data.keys())
+        ManualSmwcSearchDialog(
+            self.win,
+            cand,
+            existing_ids,
+            fetch_fn=self.fetch_fn,
+            logger=self.logger,
+            on_selected=lambda resolution: self._apply_manual_resolution(
+                iid, resolution
+            ),
+        ).show()
+
+    def _apply_manual_resolution(self, iid, resolution):
+        if self._set_orphan_resolution(iid, resolution):
+            try:
+                self.lookup_status.config(text="Manual match selected")
+            except tk.TclError:
+                pass
+            self._update_apply_state()
+
     # -- SMWC lookup (threaded) ----------------------------------------------
 
     def _toggle_lookup(self):
@@ -349,6 +621,7 @@ class SaveSyncDialog:
         self._cancel_lookup = False
         self._lookup_running = True
         self.lookup_button.config(text="Cancel Lookup")
+        self.manual_search_button.config(state="disabled")
         self._update_apply_state()
 
         existing_ids = set(self.data_manager.data.keys())
@@ -370,24 +643,30 @@ class SaveSyncDialog:
         self._ui(self._lookup_done)
 
     def _apply_lookup_result(self, iid, resolution, index, total):
+        if self._set_orphan_resolution(iid, resolution):
+            self.lookup_status.config(text=f"Looked up {index}/{total}...")
+
+    def _set_orphan_resolution(self, iid, resolution):
         cand = self.orph_cand.get(iid)
         if cand is None:
-            return
-        save_sync.attach_resolution(cand, resolution, self.data_manager, self.mark_all)
+            return False
+        save_sync.attach_resolution(
+            cand, resolution, self.data_manager, self.mark_all
+        )
 
         label = _RESOLUTION_LABEL.get(cand.resolution, cand.resolution)
         hack_name = cand.title if cand.resolution in _ORPHAN_ACTIONABLE else ""
         difficulty = ""
         if cand.resolution == save_sync.RESOLUTION_RESOLVED and cand.resolved_hack:
-            difficulty = save_sync._smwc_entry_fields(cand.resolved_hack)["current_difficulty"]
+            difficulty = save_sync._smwc_entry_fields(
+                cand.resolved_hack
+            )["current_difficulty"]
         elif cand.resolution == save_sync.RESOLUTION_EXISTS:
             existing = self.data_manager.data.get(cand.resolved_hack_id, {})
             difficulty = existing.get("current_difficulty", "")
             if cand.already_completed:
-                label = _STATUS_LABEL[save_sync.STATUS_ALREADY_COMPLETED]  # "Already synced"
+                label = _STATUS_LABEL[save_sync.STATUS_ALREADY_COMPLETED]
 
-        # Auto-check actionable results; new imports always, existing only when
-        # the save actually meets the completion rule.
         if cand.resolution == save_sync.RESOLUTION_RESOLVED:
             checked = True
         elif cand.resolution == save_sync.RESOLUTION_EXISTS:
@@ -396,20 +675,30 @@ class SaveSyncDialog:
             checked = False
         self.orph_checked[iid] = checked
 
-        values = (CHECKED if checked else UNCHECKED, cand.save_name, label, hack_name, difficulty)
+        values = (
+            CHECKED if checked else UNCHECKED,
+            cand.save_name,
+            label,
+            hack_name,
+            difficulty,
+        )
         try:
-            self.orph_tree.item(iid, values=values,
-                                tags=("locked",) if self._orph_locked(cand) else ())
+            self.orph_tree.item(
+                iid,
+                values=values,
+                tags=("locked",) if self._orph_locked(cand) else (),
+            )
         except tk.TclError:
-            return
-        self.lookup_status.config(text=f"Looked up {index}/{total}...")
+            return False
         self._update_orph_header()
+        return True
 
     def _lookup_done(self):
         self._lookup_running = False
         self._cancel_lookup = False
         try:
             self.lookup_button.config(text="Look up checked on SMWC", state="normal")
+            self.manual_search_button.config(state="normal")
             self.lookup_status.config(text="")
         except tk.TclError:
             pass
@@ -417,10 +706,12 @@ class SaveSyncDialog:
 
     # -- shared tree helpers --------------------------------------------------
 
-    def _make_tree(self, parent, columns, headings):
+    def _make_tree(self, parent, columns, headings, selectmode="none"):
         frame = ttk.Frame(parent)
         frame.pack(fill="both", expand=True)
-        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="none")
+        tree = ttk.Treeview(
+            frame, columns=columns, show="headings", selectmode=selectmode
+        )
         for col, (text, width, anchor, stretch) in headings.items():
             tree.heading(col, text=text)
             tree.column(col, width=width, anchor=anchor, stretch=stretch)

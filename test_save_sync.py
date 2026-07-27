@@ -1004,5 +1004,47 @@ class ManualOrphanSearchTest(unittest.TestCase):
         )
         self.assertEqual(len(result["options"]), 2)
 
+class ManualOrphanSearchUiTest(unittest.TestCase):
+    def _source(self):
+        return (
+            Path(__file__).parent / "ui" / "save_sync_dialog.py"
+        ).read_text(encoding="utf-8")
+
+    def test_review_dialog_exposes_manual_search_action(self):
+        source = self._source()
+        self.assertIn('text="Search Selected..."', source)
+        self.assertIn('selectmode="browse"', source)
+        self.assertIn("def _manual_search_selected", source)
+
+    def test_manual_dialog_uses_explicit_search_and_selection_contract(self):
+        source = self._source()
+        self.assertIn("class ManualSmwcSearchDialog", source)
+        self.assertIn("save_sync.search_orphan_options", source)
+        self.assertIn("save_sync.resolution_for_selected_hack", source)
+        self.assertIn("No result is chosen automatically.", source)
+
+    def test_manual_search_runs_off_tk_main_thread(self):
+        source = self._source()
+        self.assertIn("target=self._search_worker", source)
+        self.assertIn("self._ui(self._show_results, result)", source)
+
+    def test_bulk_lookup_remains_strict_and_selection_reuses_attach_flow(self):
+        source = self._source()
+        self.assertIn("save_sync.resolve_orphan(", source)
+        self.assertIn("def _set_orphan_resolution", source)
+        self.assertIn("save_sync.attach_resolution(", source)
+
+    def test_manual_results_show_release_and_collection_state(self):
+        source = self._source()
+        self.assertIn(
+            'release = "Obsolete" if option["obsolete"] else "Current"',
+            source,
+        )
+        self.assertIn(
+            'collection = "Already added" '
+            'if option["in_collection"] else "New"',
+            source,
+        )
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
