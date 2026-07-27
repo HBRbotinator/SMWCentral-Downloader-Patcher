@@ -1652,5 +1652,129 @@ class LocalSaveEntryLifecycleRegressionTest(unittest.TestCase):
         self.assertIn("self._update_orph_header()", method)
         self.assertIn("self._update_apply_state()", method)
 
+class LocalSaveEntryManagementTest(unittest.TestCase):
+    class DataManager:
+        def __init__(self, data, save_result=True):
+            self.data = data
+            self.unsaved_changes = False
+            self.save_result = save_result
+            self.save_calls = 0
+
+        def force_save(self):
+            self.save_calls += 1
+            return self.save_result
+
+    class Config:
+        def __init__(self, values=None):
+            self.values = dict(values or {})
+
+        def get(self, key, default=None):
+            return self.values.get(key, default)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    def test_edit_preserves_identity_and_collection_state(self):
+        entry = {
+            "title": "Old Title",
+            "exits": 10,
+            "completed": True,
+            "completed_date": "2026-01-02",
+            "notes": "keep me",
+            "personal_rating": 5,
+            "local_save_entry": True,
+        }
+        manager = self.DataManager({"usr_save_local": entry})
+
+        changed = save_sync.update_local_entry(
+            manager,
+            "usr_save_local",
+            "New Title",
+            25,
+        )
+
+        self.assertTrue(changed)
+        self.assertIn("usr_save_local", manager.data)
+        self.assertEqual(entry["title"], "New Title")
+        self.assertEqual(entry["exits"], 25)
+        self.assertTrue(entry["completed"])
+        self.assertEqual(entry["completed_date"], "2026-01-02")
+        self.assertEqual(entry["notes"], "keep me")
+        self.assertEqual(entry["personal_rating"], 5)
+        self.assertEqual(manager.save_calls, 1)
+
+    def test_normal_collection_entry_cannot_be_edited_or_removed(self):
+        entry = {
+            "title": "SMWC Hack",
+            "exits": 10,
+            "local_save_entry": False,
+        }
+        manager = self.DataManager({"123": entry})
+        config = self.Config({
+            save_sync.ASSOCIATION_CONFIG_KEY: {"smwchack": "123"}
+        })
+
+        self.assertFalse(
+            save_sync.update_local_entry(manager, "123", "Changed", 20)
+        )
+        removed, aliases = save_sync.remove_local_entry(
+            manager, config, "123"
+        )
+        self.assertFalse(removed)
+        self.assertEqual(aliases, 0)
+        self.assertIn("123", manager.data)
+        self.assertEqual(
+            config.values[save_sync.ASSOCIATION_CONFIG_KEY],
+            {"smwchack": "123"},
+        )
+
+    def test_remove_deletes_only_local_record_and_targeting_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            recorded_path = os.path.join(directory, "must-remain.srm")
+            with open(recorded_path, "wb") as handle:
+                handle.write(b"save")
+
+            entry = {
+                "title": "Local Hack",
+                "exits": 12,
+                "local_save_entry": True,
+                "file_path": recorded_path,
+            }
+            manager = self.DataManager({"usr_save_local": entry})
+            config = self.Config({
+                save_sync.ASSOCIATION_CONFIG_KEY: {
+                    "localhack": "usr_save_local",
+                    "alternate": "usr_save_local",
+                    "other": "456",
+                }
+            })
+
+            removed, aliases = save_sync.remove_local_entry(
+                manager, config, "usr_save_local"
+            )
+
+            self.assertTrue(removed)
+            self.assertEqual(aliases, 2)
+            self.assertNotIn("usr_save_local", manager.data)
+            self.assertTrue(os.path.isfile(recorded_path))
+            self.assertEqual(
+                config.values[save_sync.ASSOCIATION_CONFIG_KEY],
+                {"other": "456"},
+            )
+
+    def test_review_ui_exposes_local_edit_and_safe_removal(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).parent / "ui" / "save_sync_dialog.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("class EditLocalSaveEntryDialog", source)
+        self.assertIn('text="Edit Local Entry..."', source)
+        self.assertIn('text="Remove Local Entry..."', source)
+        self.assertIn("save_sync.update_local_entry(", source)
+        self.assertIn("save_sync.remove_local_entry(", source)
+        self.assertIn("The save file will not be deleted", source)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

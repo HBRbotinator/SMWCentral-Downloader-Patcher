@@ -381,6 +381,90 @@ class LocalSaveEntryDialog:
         self.win.destroy()
 
 
+class EditLocalSaveEntryDialog:
+    """Modal editor for metadata on an existing local save entry."""
+
+    def __init__(self, parent, candidate, entry, on_saved=None):
+        self.parent = parent
+        self.candidate = candidate
+        self.entry = entry
+        self.on_saved = on_saved
+        self.win = None
+        self.title_var = None
+        self.exits_var = None
+
+    def show(self):
+        self.win = tk.Toplevel(self.parent)
+        self.win.title(f"Edit Local Entry - {self.candidate.save_name}")
+        self.win.geometry("520x220")
+        self.win.transient(self.parent)
+        self.win.grab_set()
+
+        container = ttk.Frame(self.win, padding=15)
+        container.pack(fill="both", expand=True)
+        ttk.Label(
+            container,
+            text="Edit the local collection metadata. The saved association "
+                 "and save file remain unchanged.",
+            wraplength=480,
+        ).pack(anchor="w", pady=(0, 12))
+
+        form = ttk.Frame(container)
+        form.pack(fill="x")
+        form.columnconfigure(1, weight=1)
+        ttk.Label(form, text="Title:").grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.title_var = tk.StringVar(value=self.entry.get("title", ""))
+        title_entry = ttk.Entry(form, textvariable=self.title_var)
+        title_entry.grid(row=0, column=1, sticky="ew", pady=4)
+
+        ttk.Label(form, text="Total exits:").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.exits_var = tk.StringVar(value=str(self.entry.get("exits", 0)))
+        ttk.Entry(form, textvariable=self.exits_var, width=10).grid(
+            row=1, column=1, sticky="w", pady=4
+        )
+
+        buttons = ttk.Frame(container)
+        buttons.pack(fill="x", pady=(14, 0))
+        ttk.Button(buttons, text="Save", command=self._confirm).pack(
+            side="right"
+        )
+        ttk.Button(buttons, text="Cancel", command=self.win.destroy).pack(
+            side="right", padx=(0, 8)
+        )
+
+        self.win.update_idletasks()
+        try:
+            x = self.parent.winfo_x() + (
+                self.parent.winfo_width() - self.win.winfo_width()
+            ) // 2
+            y = self.parent.winfo_y() + (
+                self.parent.winfo_height() - self.win.winfo_height()
+            ) // 2
+            self.win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+        title_entry.focus_set()
+        title_entry.selection_range(0, "end")
+        return self.win
+
+    def _confirm(self):
+        try:
+            title, exits = save_sync.validate_local_entry_fields(
+                self.title_var.get(), self.exits_var.get()
+            )
+        except ValueError as exc:
+            messagebox.showerror("Save Data Sync", str(exc), parent=self.win)
+            return
+
+        if self.on_saved:
+            self.on_saved(title, exits)
+        self.win.destroy()
+
+
 class SaveSyncDialog:
     """Modal preview dialog for applying save-sync results."""
 
@@ -411,6 +495,8 @@ class SaveSyncDialog:
         self.comp_checked = {}
         self.comp_cand = {}
         self.forget_match_button = None
+        self.edit_local_button = None
+        self.remove_local_button = None
         # Orphan tab state
         self.orph_tree = None
         self.orph_checked = {}
@@ -503,13 +589,27 @@ class SaveSyncDialog:
         btns.pack(fill="x", pady=(8, 0))
         ttk.Button(btns, text="Select All", command=lambda: self._comp_set_all(True)).pack(side="left")
         ttk.Button(btns, text="Select None", command=lambda: self._comp_set_all(False)).pack(side="left", padx=(8, 0))
+        self.remove_local_button = ttk.Button(
+            btns,
+            text="Remove Local Entry...",
+            state="disabled",
+            command=self._remove_selected_local_entry,
+        )
+        self.remove_local_button.pack(side="right")
+        self.edit_local_button = ttk.Button(
+            btns,
+            text="Edit Local Entry...",
+            state="disabled",
+            command=self._edit_selected_local_entry,
+        )
+        self.edit_local_button.pack(side="right", padx=(0, 8))
         self.forget_match_button = ttk.Button(
             btns,
             text="Forget Saved Match",
             state="disabled",
             command=self._forget_selected_match,
         )
-        self.forget_match_button.pack(side="right")
+        self.forget_match_button.pack(side="right", padx=(0, 8))
         return tab
 
     def _populate_completion(self):
@@ -578,24 +678,123 @@ class SaveSyncDialog:
         except tk.TclError:
             pass
 
+    def _selected_local_completion(self):
+        if self.comp_tree is None:
+            return None, None, None
+        selected = self.comp_tree.selection()
+        if len(selected) != 1:
+            return None, None, None
+        iid = selected[0]
+        candidate = self.comp_cand.get(iid)
+        entry = (
+            self.data_manager.data.get(candidate.hack_id)
+            if candidate is not None
+            else None
+        )
+        if not isinstance(entry, dict) or not entry.get("local_save_entry"):
+            return iid, candidate, None
+        return iid, candidate, entry
+
     def _completion_selection_changed(self, _event=None):
-        enabled = False
-        if self.comp_tree is not None:
-            selected = self.comp_tree.selection()
-            if len(selected) == 1:
-                candidate = self.comp_cand.get(selected[0])
-                enabled = bool(
-                    candidate
-                    and candidate.match_source
-                    == save_sync.MATCH_SOURCE_SAVED_ALIAS
-                    and self.config_manager is not None
-                )
+        iid, candidate, local_entry = self._selected_local_completion()
+        forget_enabled = bool(
+            candidate
+            and candidate.match_source == save_sync.MATCH_SOURCE_SAVED_ALIAS
+            and self.config_manager is not None
+        )
+        local_enabled = bool(iid and candidate and local_entry)
         try:
             self.forget_match_button.config(
-                state="normal" if enabled else "disabled"
+                state="normal" if forget_enabled else "disabled"
+            )
+            self.edit_local_button.config(
+                state="normal" if local_enabled else "disabled"
+            )
+            self.remove_local_button.config(
+                state="normal" if local_enabled else "disabled"
             )
         except (tk.TclError, AttributeError):
             pass
+
+    def _edit_selected_local_entry(self):
+        iid, candidate, entry = self._selected_local_completion()
+        if not iid or candidate is None or entry is None:
+            return
+        EditLocalSaveEntryDialog(
+            self.win,
+            candidate,
+            entry,
+            on_saved=lambda title, exits: self._apply_local_entry_edit(
+                iid, candidate, title, exits
+            ),
+        ).show()
+
+    def _apply_local_entry_edit(self, iid, candidate, title, exits):
+        if not save_sync.update_local_entry(
+            self.data_manager, candidate.hack_id, title, exits
+        ):
+            messagebox.showerror(
+                "Save Data Sync",
+                "The local collection entry could not be updated.",
+                parent=self.win,
+            )
+            return
+
+        candidate.title = title
+        candidate.total_exits = exits
+        candidate.status = save_sync.classify(
+            candidate.collected_exits,
+            exits,
+            candidate.already_completed,
+            self.mark_all,
+        )
+        values = list(self.comp_tree.item(iid, "values"))
+        values[1] = candidate.title
+        values[3] = _STATUS_LABEL.get(candidate.status, candidate.status)
+        values[6] = candidate.exits_display
+        self.comp_tree.item(iid, values=values)
+        self._update_apply_state()
+        if self.on_applied:
+            self.on_applied()
+        messagebox.showinfo(
+            "Save Data Sync",
+            "Local collection metadata updated. Completion state was not "
+            "changed automatically.",
+            parent=self.win,
+        )
+
+    def _remove_selected_local_entry(self):
+        _iid, candidate, entry = self._selected_local_completion()
+        if candidate is None or entry is None:
+            return
+        if not messagebox.askyesno(
+            "Remove Local Entry",
+            f"Remove '{entry.get('title', candidate.title)}' from the "
+            "collection?\n\nThe save file will not be deleted. Any saved "
+            "filename associations to this local entry will also be removed.",
+            parent=self.win,
+        ):
+            return
+
+        removed, association_count = save_sync.remove_local_entry(
+            self.data_manager, self.config_manager, candidate.hack_id
+        )
+        if not removed:
+            messagebox.showerror(
+                "Save Data Sync",
+                "The local collection entry could not be removed.",
+                parent=self.win,
+            )
+            return
+        if self.on_applied:
+            self.on_applied()
+        self.win.destroy()
+        messagebox.showinfo(
+            "Save Data Sync",
+            "Local collection entry removed. The save file was left "
+            f"untouched. Removed {association_count} saved match(es).",
+            parent=self.parent.winfo_toplevel(),
+        )
 
     def _forget_selected_match(self):
         selected = self.comp_tree.selection() if self.comp_tree else ()

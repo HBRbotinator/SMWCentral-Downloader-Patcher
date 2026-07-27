@@ -854,10 +854,8 @@ def local_entry_id(save_name, title):
     return f"usr_save_{digest}"
 
 
-def build_local_entry(save_name, title, total_exits):
-    """Build a collection entry for a hack that is not listed on SMWCentral."""
-
-    from utils import get_sorted_folder_name
+def validate_local_entry_fields(title, total_exits):
+    """Return a cleaned local title and validated exit total."""
 
     clean_title = str(title or "").strip()
     if not clean_title:
@@ -868,6 +866,15 @@ def build_local_entry(save_name, title, total_exits):
         raise ValueError("Total exits must be a whole number.") from exc
     if exits < 0 or exits > 999:
         raise ValueError("Total exits must be between 0 and 999.")
+    return clean_title, exits
+
+
+def build_local_entry(save_name, title, total_exits):
+    """Build a collection entry for a hack that is not listed on SMWCentral."""
+
+    from utils import get_sorted_folder_name
+
+    clean_title, exits = validate_local_entry_fields(title, total_exits)
 
     hack_id = local_entry_id(save_name, clean_title)
     return hack_id, {
@@ -890,6 +897,64 @@ def build_local_entry(save_name, title, total_exits):
         "additional_paths": [],
         "local_save_entry": True,
     }
+
+
+def update_local_entry(data_manager, hack_id, title, total_exits):
+    """Update local metadata while preserving identity and collection state."""
+
+    hack_id = str(hack_id or "")
+    entry = data_manager.data.get(hack_id) if data_manager is not None else None
+    if not isinstance(entry, dict) or not entry.get("local_save_entry"):
+        return False
+
+    clean_title, exits = validate_local_entry_fields(title, total_exits)
+    old_title = entry.get("title", "")
+    old_exits = entry.get("exits", 0)
+    entry["title"] = clean_title
+    entry["exits"] = exits
+    data_manager.unsaved_changes = True
+    if data_manager.force_save():
+        return True
+
+    entry["title"] = old_title
+    entry["exits"] = old_exits
+    data_manager.unsaved_changes = True
+    data_manager.force_save()
+    return False
+
+
+def remove_local_entry(data_manager, config_manager, hack_id):
+    """Remove one local entry and its aliases without deleting save or ROM files."""
+
+    hack_id = str(hack_id or "")
+    entry = data_manager.data.get(hack_id) if data_manager is not None else None
+    if not isinstance(entry, dict) or not entry.get("local_save_entry"):
+        return False, 0
+
+    associations = get_save_associations(config_manager)
+    retained = {
+        key: target
+        for key, target in associations.items()
+        if str(target) != hack_id
+    }
+    removed_count = len(associations) - len(retained)
+
+    try:
+        if config_manager is not None and retained != associations:
+            config_manager.set(ASSOCIATION_CONFIG_KEY, retained)
+        del data_manager.data[hack_id]
+        data_manager.unsaved_changes = True
+        if data_manager.force_save():
+            return True, removed_count
+    except Exception:
+        pass
+
+    data_manager.data[hack_id] = entry
+    data_manager.unsaved_changes = True
+    data_manager.force_save()
+    if config_manager is not None and retained != associations:
+        config_manager.set(ASSOCIATION_CONFIG_KEY, associations)
+    return False, 0
 
 
 def resolution_for_local_entry(save_name, title, total_exits, existing_ids):
