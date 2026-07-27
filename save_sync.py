@@ -26,6 +26,7 @@ Copyright (c) 2025 iamtheratio
 Licensed under the MIT License - see LICENSE file for details
 """
 
+import hashlib
 import json
 import os
 import re
@@ -58,7 +59,7 @@ SAVE_EXTENSIONS = (".srm", ".sav")
 
 # Privacy-safe diagnostic report format. Reports contain parser and matching
 # evidence, but never absolute paths, parent directories, or raw save bytes.
-DIAGNOSTIC_SCHEMA_VERSION = 3
+DIAGNOSTIC_SCHEMA_VERSION = 4
 
 # --- Classification verdicts -------------------------------------------------
 
@@ -76,6 +77,7 @@ RESOLUTION_EXISTS = "exists"         # resolved to a hack already in the collect
 RESOLUTION_NO_MATCH = "no_match"     # SMWC search returned no exact-title match
 RESOLUTION_AMBIGUOUS = "ambiguous"   # multiple exact matches, can't auto-pick
 RESOLUTION_ERROR = "error"           # network / API error during lookup
+RESOLUTION_LOCAL = "local"           # user-defined non-SMWC collection entry
 SEARCH_RESULTS = "results"         # manual search returned options
 
 ASSOCIATION_CONFIG_KEY = "save_sync_associations"
@@ -83,6 +85,7 @@ SAVE_DIRECTORIES_CONFIG_KEY = "save_sync_dirs"
 LEGACY_SAVE_DIRECTORY_CONFIG_KEY = "save_sync_dir"
 MATCH_SOURCE_COLLECTION = "collection"
 MATCH_SOURCE_SAVED_ALIAS = "saved_alias"
+MATCH_SOURCE_LOCAL = "local_custom"
 AUTO_SCAN_INTERVAL_CHOICES = (5, 15, 30, 60)
 DEFAULT_AUTO_SCAN_INTERVAL_MINUTES = 15
 
@@ -392,6 +395,7 @@ class SyncCandidate:
     resolution: str = RESOLUTION_NONE
     resolved_hack: object = None      # raw SMWC hack dict for a new import
     resolved_hack_id: str = ""
+    local_entry: object = None
     match_source: str = ""
     manual_selection: bool = False
 
@@ -485,7 +489,8 @@ def _diagnostic_match_state(candidate):
     resolved = resolution in {RESOLUTION_RESOLVED, RESOLUTION_EXISTS} and bool(
         resolved_hack_id
     )
-    pre_resolved = bool(direct_hack_id) and not resolved
+    local_custom = resolution == RESOLUTION_LOCAL and bool(resolved_hack_id)
+    pre_resolved = bool(direct_hack_id) and not resolved and not local_custom
     source = candidate.match_source or MATCH_SOURCE_COLLECTION
     saved_association = pre_resolved and source == MATCH_SOURCE_SAVED_ALIAS
     direct = pre_resolved and not saved_association
@@ -497,6 +502,9 @@ def _diagnostic_match_state(candidate):
         effective_hack_id = resolved_hack_id
     elif resolution == RESOLUTION_RESOLVED and resolved_hack_id:
         source = "smwc_new"
+        effective_hack_id = resolved_hack_id
+    elif local_custom:
+        source = MATCH_SOURCE_LOCAL
         effective_hack_id = resolved_hack_id
     else:
         source = "none"
@@ -566,6 +574,9 @@ def build_diagnostic_report(candidates, generated_at=None):
     saved_association_count = sum(
         row["match"]["saved_association"] for row in rows
     )
+    local_custom_count = sum(
+        row["match"]["source"] == MATCH_SOURCE_LOCAL for row in rows
+    )
     resolved_match_count = sum(
         row["match"]["resolved_through_smwc"] for row in rows
     )
@@ -584,6 +595,7 @@ def build_diagnostic_report(candidates, generated_at=None):
             "candidate_count": len(rows),
             "direct_match_count": direct_match_count,
             "saved_association_count": saved_association_count,
+            "local_custom_count": local_custom_count,
             "resolved_through_smwc_count": resolved_match_count,
             "effective_matched_count": effective_match_count,
             "unresolved_count": unresolved_count,
@@ -827,6 +839,72 @@ def _smwc_entry_fields(hack):
     }
 
 
+def local_entry_id(save_name, title):
+    """Return a deterministic path-free ID for a user-defined save entry."""
+
+    identity = f"{association_key(save_name)}\0{_normalize(title)}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return f"usr_save_{digest}"
+
+
+def build_local_entry(save_name, title, total_exits):
+    """Build a collection entry for a hack that is not listed on SMWCentral."""
+
+    from utils import get_sorted_folder_name
+
+    clean_title = str(title or "").strip()
+    if not clean_title:
+        raise ValueError("A local hack title is required.")
+    try:
+        exits = int(total_exits)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Total exits must be a whole number.") from exc
+    if exits < 0 or exits > 999:
+        raise ValueError("Total exits must be between 0 and 999.")
+
+    hack_id = local_entry_id(save_name, clean_title)
+    return hack_id, {
+        "title": clean_title,
+        "difficulty_id": "",
+        "current_difficulty": "No Difficulty",
+        "folder_name": get_sorted_folder_name("No Difficulty"),
+        "hack_type": "standard",
+        "hack_types": ["standard"],
+        "hall_of_fame": False,
+        "sa1_compatibility": False,
+        "collaboration": False,
+        "demo": False,
+        "authors": [],
+        "exits": exits,
+        "time": 0,
+        "date": "",
+        "obsolete": False,
+        "file_path": "",
+        "additional_paths": [],
+        "local_save_entry": True,
+    }
+
+
+def resolution_for_local_entry(save_name, title, total_exits, existing_ids):
+    """Build an explicit resolution for a non-SMWC local collection entry."""
+
+    hack_id, entry = build_local_entry(save_name, title, total_exits)
+    existing = {str(existing_id) for existing_id in existing_ids}
+    if hack_id in existing:
+        return {
+            "status": RESOLUTION_EXISTS,
+            "hack": None,
+            "hack_id": hack_id,
+            "local_entry": entry,
+        }
+    return {
+        "status": RESOLUTION_LOCAL,
+        "hack": None,
+        "hack_id": hack_id,
+        "local_entry": entry,
+    }
+
+
 def resolve_orphan(save_name, existing_ids, fetch_fn=None, log=None):
     """Resolve an unmatched save filename to an SMWC hack via name search.
 
@@ -1000,10 +1078,12 @@ def attach_resolution(candidate, resolution, data_manager, mark_all=False):
     status = resolution.get("status", RESOLUTION_NO_MATCH)
     hack = resolution.get("hack")
     hack_id = resolution.get("hack_id", "")
+    local_entry = resolution.get("local_entry")
 
     candidate.resolution = status
     candidate.resolved_hack = hack
     candidate.resolved_hack_id = hack_id
+    candidate.local_entry = local_entry
 
     if status == RESOLUTION_EXISTS and hack_id in data_manager.data:
         existing = data_manager.data[hack_id]
@@ -1022,7 +1102,40 @@ def attach_resolution(candidate, resolution, data_manager, mark_all=False):
         candidate.status = classify(
             candidate.collected_exits, candidate.total_exits, False, mark_all,
         )
+    elif status == RESOLUTION_LOCAL and isinstance(local_entry, dict):
+        candidate.title = local_entry["title"]
+        candidate.total_exits = int(local_entry.get("exits", 0) or 0)
+        candidate.status = classify(
+            candidate.collected_exits, candidate.total_exits, False, mark_all,
+        )
     return candidate
+
+
+def import_local_orphan(candidate, data_manager, mark_all=False):
+    """Create a user-defined collection entry for an explicitly matched save."""
+
+    entry = candidate.local_entry
+    hack_id = str(candidate.resolved_hack_id or "")
+    if (
+        candidate.resolution != RESOLUTION_LOCAL
+        or not isinstance(entry, dict)
+        or not hack_id
+        or hack_id in data_manager.data
+    ):
+        return False
+
+    entry = dict(entry)
+    status = classify(candidate.collected_exits, entry["exits"], False, mark_all)
+    completed = status == STATUS_COMPLETED
+    entry.update({
+        "completed": completed,
+        "completed_date": candidate.completed_date if completed else "",
+        "personal_rating": 0,
+        "notes": "",
+        "time_to_beat": 0,
+    })
+    data_manager.add_user_hack(hack_id, entry)
+    return True
 
 
 def import_orphan(candidate, data_manager, mark_all=False):

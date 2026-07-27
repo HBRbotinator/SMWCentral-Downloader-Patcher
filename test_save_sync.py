@@ -815,7 +815,7 @@ class DiagnosticReportTest(unittest.TestCase):
             self.assertTrue(Path(written).is_absolute())
             self.assertTrue(os.path.samefile(written, destination))
             payload = json.loads(destination.read_text(encoding="utf-8"))
-            self.assertEqual(payload["schema_version"], 3)
+            self.assertEqual(payload["schema_version"], 4)
             self.assertTrue(
                 destination.read_text(encoding="utf-8").endswith("\n")
             )
@@ -1161,7 +1161,7 @@ class SaveAssociationTest(unittest.TestCase):
             match_source=save_sync.MATCH_SOURCE_SAVED_ALIAS,
         )
         report = save_sync.build_diagnostic_report([candidate])
-        self.assertEqual(report["schema_version"], 3)
+        self.assertEqual(report["schema_version"], 4)
         self.assertEqual(report["summary"]["direct_match_count"], 0)
         self.assertEqual(report["summary"]["saved_association_count"], 1)
         match = report["candidates"][0]["match"]
@@ -1431,6 +1431,102 @@ class PeriodicSaveScanTest(unittest.TestCase):
         )
         self.assertIn("self._scan_saves(auto=True)", source)
         self.assertNotIn("apply_candidates(self._pending_auto_scan_candidates", source)
+
+class LocalSaveEntryTest(unittest.TestCase):
+    class DataManager:
+        def __init__(self):
+            self.data = {}
+
+        def add_user_hack(self, hack_id, entry):
+            self.data[hack_id] = dict(entry)
+            return True
+
+    def test_local_entry_id_is_deterministic_and_path_free(self):
+        first_id, first = save_sync.build_local_entry(
+            os.path.join("private", "QW2.srm"), "Unlisted Hack", 12
+        )
+        second_id, second = save_sync.build_local_entry(
+            os.path.join("other", "QW2.srm"), "Unlisted Hack", "12"
+        )
+        self.assertEqual(first_id, second_id)
+        self.assertTrue(first_id.startswith("usr_save_"))
+        self.assertNotIn("private", first_id)
+        self.assertEqual(first["exits"], 12)
+        self.assertTrue(first["local_save_entry"])
+        self.assertEqual(first, second)
+
+    def test_local_entry_validation_rejects_invalid_fields(self):
+        with self.assertRaises(ValueError):
+            save_sync.build_local_entry("save.srm", "", 4)
+        with self.assertRaises(ValueError):
+            save_sync.build_local_entry("save.srm", "Hack", "many")
+        with self.assertRaises(ValueError):
+            save_sync.build_local_entry("save.srm", "Hack", -1)
+
+    def test_attach_and_import_local_entry_preserve_review_boundary(self):
+        manager = self.DataManager()
+        candidate = save_sync.SyncCandidate(
+            save_path="/private/Unlisted.srm",
+            save_name="Unlisted.srm",
+            mtime=0,
+            collected_exits=5,
+        )
+        resolution = save_sync.resolution_for_local_entry(
+            candidate.save_name, "Unlisted Hack", 10, manager.data.keys()
+        )
+        save_sync.attach_resolution(candidate, resolution, manager)
+        self.assertEqual(candidate.resolution, save_sync.RESOLUTION_LOCAL)
+        self.assertEqual(candidate.status, save_sync.STATUS_IN_PROGRESS)
+        self.assertEqual(manager.data, {})
+
+        self.assertTrue(save_sync.import_local_orphan(candidate, manager))
+        entry = manager.data[candidate.resolved_hack_id]
+        self.assertEqual(entry["title"], "Unlisted Hack")
+        self.assertFalse(entry["completed"])
+        self.assertTrue(entry["local_save_entry"])
+
+
+    def test_existing_local_entry_can_be_relinked(self):
+        hack_id, _entry = save_sync.build_local_entry(
+            "Unlisted.srm", "Unlisted Hack", 10
+        )
+        resolution = save_sync.resolution_for_local_entry(
+            "Unlisted.srm", "Unlisted Hack", 10, {hack_id}
+        )
+        self.assertEqual(resolution["status"], save_sync.RESOLUTION_EXISTS)
+        self.assertEqual(resolution["hack_id"], hack_id)
+
+    def test_diagnostics_identify_local_custom_resolution(self):
+        manager = self.DataManager()
+        candidate = save_sync.SyncCandidate(
+            save_path="/private/Unlisted.srm",
+            save_name="Unlisted.srm",
+            mtime=0,
+            collected_exits=10,
+        )
+        resolution = save_sync.resolution_for_local_entry(
+            candidate.save_name, "Unlisted Hack", 10, manager.data.keys()
+        )
+        save_sync.attach_resolution(candidate, resolution, manager)
+        report = save_sync.build_diagnostic_report([candidate])
+        self.assertEqual(report["schema_version"], 4)
+        self.assertEqual(report["summary"]["local_custom_count"], 1)
+        match = report["candidates"][0]["match"]
+        self.assertEqual(match["source"], "local_custom")
+        self.assertTrue(match["effective"])
+        self.assertFalse(match["resolved_through_smwc"])
+
+    def test_review_ui_exposes_explicit_local_entry_creation(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).parent / "ui" / "save_sync_dialog.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("class LocalSaveEntryDialog", source)
+        self.assertIn('text="Create Local Entry..."', source)
+        self.assertIn("save_sync.resolution_for_local_entry", source)
+        self.assertIn("save_sync.import_local_orphan", source)
+        self.assertIn("Apply Selected", source)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

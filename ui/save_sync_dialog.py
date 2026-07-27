@@ -52,9 +52,14 @@ _RESOLUTION_LABEL = {
     save_sync.RESOLUTION_NO_MATCH: "No match",
     save_sync.RESOLUTION_AMBIGUOUS: "Ambiguous",
     save_sync.RESOLUTION_ERROR: "Lookup error",
+    save_sync.RESOLUTION_LOCAL: "Create local",
 }
 # Orphan resolutions the user can actually act on.
-_ORPHAN_ACTIONABLE = {save_sync.RESOLUTION_RESOLVED, save_sync.RESOLUTION_EXISTS}
+_ORPHAN_ACTIONABLE = {
+    save_sync.RESOLUTION_RESOLVED,
+    save_sync.RESOLUTION_EXISTS,
+    save_sync.RESOLUTION_LOCAL,
+}
 
 
 class ManualSmwcSearchDialog:
@@ -278,6 +283,104 @@ class ManualSmwcSearchDialog:
             pass
 
 
+class LocalSaveEntryDialog:
+    """Modal editor for a non-SMWC save-backed collection entry."""
+
+    def __init__(self, parent, candidate, existing_ids, on_selected=None):
+        self.parent = parent
+        self.candidate = candidate
+        self.existing_ids = set(existing_ids)
+        self.on_selected = on_selected
+        self.win = None
+        self.title_var = None
+        self.exits_var = None
+
+    def show(self):
+        self.win = tk.Toplevel(self.parent)
+        self.win.title(f"Create Local Entry - {self.candidate.save_name}")
+        self.win.geometry("520x230")
+        self.win.transient(self.parent)
+        self.win.grab_set()
+
+        container = ttk.Frame(self.win, padding=15)
+        container.pack(fill="both", expand=True)
+        ttk.Label(
+            container,
+            text="Create a collection entry for a hack that is not listed on "
+                 "SMWCentral. The save file remains unchanged.",
+            wraplength=480,
+        ).pack(anchor="w", pady=(0, 12))
+
+        form = ttk.Frame(container)
+        form.pack(fill="x")
+        form.columnconfigure(1, weight=1)
+        ttk.Label(form, text="Title:").grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.title_var = tk.StringVar(
+            value=save_sync.make_search_query(self.candidate.save_name)
+        )
+        title_entry = ttk.Entry(form, textvariable=self.title_var)
+        title_entry.grid(row=0, column=1, sticky="ew", pady=4)
+
+        ttk.Label(form, text="Total exits:").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.exits_var = tk.StringVar(value="0")
+        exits_entry = ttk.Entry(form, textvariable=self.exits_var, width=10)
+        exits_entry.grid(row=1, column=1, sticky="w", pady=4)
+
+        ttk.Label(
+            container,
+            text="Use 0 when the total is unknown. Progress will remain "
+                 "uncertain until a total is supplied.",
+            foreground="gray",
+            wraplength=480,
+        ).pack(anchor="w", pady=(8, 0))
+
+        buttons = ttk.Frame(container)
+        buttons.pack(fill="x", pady=(14, 0))
+        ttk.Button(buttons, text="Create", command=self._confirm).pack(
+            side="right"
+        )
+        ttk.Button(buttons, text="Cancel", command=self.win.destroy).pack(
+            side="right", padx=(0, 8)
+        )
+
+        self.win.update_idletasks()
+        try:
+            x = self.parent.winfo_x() + (
+                self.parent.winfo_width() - self.win.winfo_width()
+            ) // 2
+            y = self.parent.winfo_y() + (
+                self.parent.winfo_height() - self.win.winfo_height()
+            ) // 2
+            self.win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+        title_entry.focus_set()
+        title_entry.selection_range(0, "end")
+        return self.win
+
+    def _confirm(self):
+        try:
+            resolution = save_sync.resolution_for_local_entry(
+                self.candidate.save_name,
+                self.title_var.get(),
+                self.exits_var.get(),
+                self.existing_ids,
+            )
+        except ValueError as exc:
+            messagebox.showerror(
+                "Save Data Sync", str(exc), parent=self.win
+            )
+            return
+
+        if self.on_selected:
+            self.on_selected(resolution)
+        self.win.destroy()
+
+
 class SaveSyncDialog:
     """Modal preview dialog for applying save-sync results."""
 
@@ -314,6 +417,7 @@ class SaveSyncDialog:
         self.orph_cand = {}
         self.orph_iid = {}  # candidate id() -> iid, for background updates
         self.manual_search_button = None
+        self.local_entry_button = None
 
         self._cancel_lookup = False
         self._lookup_running = False
@@ -536,7 +640,8 @@ class SaveSyncDialog:
             tab,
             text="These saves matched no hack in your collection. Use the checked "
                  "lookup for strict exact-title matches, or select one row and search "
-                 "SMWCentral manually for abbreviations and alternate names.",
+                 "SMWCentral manually for abbreviations and alternate names, "
+                 "or create a local entry for a non-SMWC hack.",
             wraplength=780, foreground="gray",
         ).pack(anchor="w", pady=(0, 8))
 
@@ -565,6 +670,11 @@ class SaveSyncDialog:
             command=self._manual_search_selected,
         )
         self.manual_search_button.pack(side="left", padx=(12, 0))
+        self.local_entry_button = ttk.Button(
+            controls, text="Create Local Entry...",
+            command=self._create_local_entry_selected,
+        )
+        self.local_entry_button.pack(side="left", padx=(8, 0))
 
         self.lookup_button = ttk.Button(
             controls, text="Look up checked on SMWC", command=self._toggle_lookup
@@ -632,6 +742,32 @@ class SaveSyncDialog:
             self.orph_tree.heading("check", text=CHECKED if all_on else UNCHECKED)
         except tk.TclError:
             pass
+
+    def _create_local_entry_selected(self):
+        if self._lookup_running:
+            return
+        selected = self.orph_tree.selection()
+        if len(selected) != 1:
+            messagebox.showinfo(
+                "Save Data Sync",
+                "Select one unmatched save row first.",
+                parent=self.win,
+            )
+            return
+
+        iid = selected[0]
+        candidate = self.orph_cand.get(iid)
+        if candidate is None:
+            return
+        dialog = LocalSaveEntryDialog(
+            self.win,
+            candidate,
+            self.data_manager.data.keys(),
+            on_selected=lambda resolution: self._set_orphan_resolution(
+                iid, resolution, manual=True
+            ),
+        )
+        dialog.show()
 
     def _manual_search_selected(self):
         if self._lookup_running:
@@ -702,6 +838,7 @@ class SaveSyncDialog:
         self._lookup_running = True
         self.lookup_button.config(text="Cancel Lookup")
         self.manual_search_button.config(state="disabled")
+        self.local_entry_button.config(state="disabled")
         self._update_apply_state()
 
         existing_ids = set(self.data_manager.data.keys())
@@ -742,6 +879,8 @@ class SaveSyncDialog:
             difficulty = save_sync._smwc_entry_fields(
                 cand.resolved_hack
             )["current_difficulty"]
+        elif cand.resolution == save_sync.RESOLUTION_LOCAL:
+            difficulty = "Local"
         elif cand.resolution == save_sync.RESOLUTION_EXISTS:
             existing = self.data_manager.data.get(cand.resolved_hack_id, {})
             difficulty = existing.get("current_difficulty", "")
@@ -782,6 +921,7 @@ class SaveSyncDialog:
         try:
             self.lookup_button.config(text="Look up checked on SMWC", state="normal")
             self.manual_search_button.config(state="normal")
+            self.local_entry_button.config(state="normal")
             self.lookup_status.config(text="")
         except tk.TclError:
             pass
@@ -916,6 +1056,10 @@ class SaveSyncDialog:
             c for c in orphans
             if c.resolution == save_sync.RESOLUTION_RESOLVED
         ]
+        local_imports = [
+            c for c in orphans
+            if c.resolution == save_sync.RESOLUTION_LOCAL
+        ]
         existing_updates = [
             c for c in orphans
             if c.resolution == save_sync.RESOLUTION_EXISTS
@@ -933,7 +1077,13 @@ class SaveSyncDialog:
             for cand in new_imports:
                 if save_sync.import_orphan(cand, self.data_manager, self.mark_all):
                     imported += 1
-            if imported or new_imports:
+            local_created = 0
+            for cand in local_imports:
+                if save_sync.import_local_orphan(
+                    cand, self.data_manager, self.mark_all
+                ):
+                    local_created += 1
+            if imported or new_imports or local_created or local_imports:
                 self.data_manager.force_save()
 
             remembered = 0
@@ -954,7 +1104,8 @@ class SaveSyncDialog:
         if self.logger:
             self.logger.log(
                 f"Save Data Sync: {marked} completion update(s), "
-                f"{imported} hack(s) imported, "
+                f"{imported} SMWC hack(s) imported, "
+                f"{local_created} local hack(s) created, "
                 f"{remembered} saved match(es)",
                 "Information",
             )
@@ -970,7 +1121,8 @@ class SaveSyncDialog:
         messagebox.showinfo(
             "Save Data Sync",
             f"Marked {marked} hack(s) completed, imported {imported} "
-            f"new hack(s), and remembered {remembered} manual match(es).",
+            f"SMWC hack(s), created {local_created} local hack(s), and "
+            f"remembered {remembered} manual match(es).",
             parent=self.parent.winfo_toplevel(),
         )
 
