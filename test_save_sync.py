@@ -1375,10 +1375,10 @@ class StartupSaveScanTest(unittest.TestCase):
         self.assertIn("self._scan_saves(auto=True)", source)
         self.assertIn("interactive=not auto", source)
         self.assertIn(
-            "review_candidates = "
-            "save_sync.auto_review_candidates(candidates)",
+            "review_candidates = save_sync.auto_review_candidates(",
             source,
         )
+        self.assertIn("collection=collection", source)
         self.assertIn("def _review_auto_scan", source)
         self.assertNotIn(
             "apply_candidates(review_candidates",
@@ -1775,6 +1775,88 @@ class LocalSaveEntryManagementTest(unittest.TestCase):
         self.assertIn("save_sync.update_local_entry(", source)
         self.assertIn("save_sync.remove_local_entry(", source)
         self.assertIn("The save file will not be deleted", source)
+
+class AutomaticReviewFreshnessTest(unittest.TestCase):
+    @staticmethod
+    def _candidate(hack_id, status, already_completed=False):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            hack_id=hack_id,
+            status=status,
+            already_completed=already_completed,
+        )
+
+    def test_auto_review_excludes_scan_evidence_already_completed(self):
+        candidate = self._candidate(
+            "123",
+            save_sync.STATUS_COMPLETED,
+            already_completed=True,
+        )
+
+        result = save_sync.auto_review_candidates([candidate])
+
+        self.assertEqual(result, [])
+
+    def test_auto_review_excludes_stale_completion_from_current_collection(self):
+        candidate = self._candidate(
+            "123",
+            save_sync.STATUS_COMPLETED,
+        )
+
+        result = save_sync.auto_review_candidates(
+            [candidate],
+            collection={"123": {"completed": True}},
+        )
+
+        self.assertEqual(result, [])
+        self.assertTrue(candidate.already_completed)
+        self.assertEqual(
+            candidate.status,
+            save_sync.STATUS_ALREADY_COMPLETED,
+        )
+
+    def test_auto_review_keeps_current_completion_and_unmatched_save(self):
+        completion = self._candidate(
+            "123",
+            save_sync.STATUS_COMPLETED,
+        )
+        unmatched = self._candidate(
+            "",
+            save_sync.STATUS_UNMATCHED,
+        )
+
+        result = save_sync.auto_review_candidates(
+            [completion, unmatched],
+            collection={"123": {"completed": False}},
+        )
+
+        self.assertEqual(result, [completion, unmatched])
+
+    def test_settings_revalidate_pending_review_and_use_automatic_wording(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+        ).read_text(encoding="utf-8")
+        method = source.split(
+            "    def _review_auto_scan", 1
+        )[1].split("    def _show_save_sync_dialog", 1)[0]
+
+        self.assertIn("save_sync.auto_review_candidates(", method)
+        self.assertIn("collection=collection", method)
+        self.assertIn(
+            'text="Auto-scan: no changes to review"',
+            method,
+        )
+        self.assertIn(
+            "Save Data Sync automatic scan skipped ",
+            source,
+        )
+        self.assertNotIn(
+            "Save Data Sync startup scan skipped ",
+            source,
+        )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

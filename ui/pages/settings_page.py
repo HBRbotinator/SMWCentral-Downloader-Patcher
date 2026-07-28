@@ -1537,7 +1537,7 @@ class SettingsPage:
                 )
                 if self.logger:
                     self.logger.log(
-                        "Save Data Sync startup scan skipped because no "
+                        "Save Data Sync automatic scan skipped because no "
                         "configured folder was available.",
                         "Information",
                     )
@@ -1558,7 +1558,7 @@ class SettingsPage:
                 return []
         elif unavailable and self.logger:
             self.logger.log(
-                "Save Data Sync startup scan skipped "
+                "Save Data Sync automatic scan skipped "
                 f"{len(unavailable)} unavailable configured folder(s).",
                 "Information",
             )
@@ -1718,7 +1718,11 @@ class SettingsPage:
             return
 
         if auto:
-            review_candidates = save_sync.auto_review_candidates(candidates)
+            collection = getattr(self.data_manager, "data", {})
+            review_candidates = save_sync.auto_review_candidates(
+                candidates,
+                collection=collection,
+            )
             self._pending_auto_scan_candidates = review_candidates
             if not review_candidates:
                 self.review_auto_scan_button.config(state="disabled")
@@ -1769,13 +1773,23 @@ class SettingsPage:
         self._show_save_sync_dialog(candidates)
 
     def _review_auto_scan(self):
-        """Open the normal explicit review for retained startup results."""
+        """Open retained results only when they still require review."""
 
-        candidates = list(self._pending_auto_scan_candidates)
-        if not candidates:
-            return
+        import save_sync
+
+        collection = getattr(self.data_manager, "data", {})
+        candidates = save_sync.auto_review_candidates(
+            self._pending_auto_scan_candidates,
+            collection=collection,
+        )
         self._pending_auto_scan_candidates = []
         self.review_auto_scan_button.config(state="disabled")
+        if not candidates:
+            self.save_sync_status_label.config(
+                text="Auto-scan: no changes to review",
+                foreground=STATUS_COLOR_SUCCESS,
+            )
+            return
         self._show_save_sync_dialog(candidates)
 
     def _show_save_sync_dialog(self, candidates):

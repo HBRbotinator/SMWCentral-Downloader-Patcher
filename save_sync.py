@@ -445,20 +445,31 @@ class SyncCandidate:
 
 
 
-def auto_review_candidates(candidates):
-    """Return startup-scan results that merit an explicit user review.
+def auto_review_candidates(candidates, collection=None):
+    """Return automatic-scan results that still merit explicit review.
 
-    Automatic scans never write collection data. Completed candidates can
-    propose a collection update, while unmatched saves may need a manual SMWC
-    association. In-progress, uncertain, and already-completed matches remain
-    available through a normal manual scan but do not create a startup prompt.
+    Automatic scans never write collection data. Unmatched saves may need a
+    manual resolution, while matched saves are retained only when they still
+    propose a completion against the latest collection state. ``collection``
+    may be the data manager's current ID-to-entry mapping; consulting it closes
+    the race where a scan started before another review marked the hack done.
     """
 
-    return [
-        candidate
-        for candidate in candidates
-        if candidate.status == STATUS_COMPLETED or not candidate.hack_id
-    ]
+    current = collection if isinstance(collection, dict) else {}
+    review = []
+    for candidate in candidates:
+        if not candidate.hack_id:
+            review.append(candidate)
+            continue
+        if candidate.status != STATUS_COMPLETED or candidate.already_completed:
+            continue
+        entry = current.get(str(candidate.hack_id), {})
+        if isinstance(entry, dict) and entry.get("completed", False):
+            candidate.already_completed = True
+            candidate.status = STATUS_ALREADY_COMPLETED
+            continue
+        review.append(candidate)
+    return review
 
 
 def _utc_timestamp(value=None):
