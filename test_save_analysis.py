@@ -572,6 +572,192 @@ class ExpandedSramGuardTest(unittest.TestCase):
             save_analysis.PROFILE_EXPANDED_SRAM_UNKNOWN,
         )
 
+class RelocatedStandardSmwSlotAnalysisTest(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory(
+            prefix="relocated_standard_smw_"
+        )
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _write_copy(
+        self,
+        image: bytearray,
+        *,
+        region_offset: int,
+        slot: str,
+        copy_kind: str,
+        value: int,
+    ) -> None:
+        offsets = {
+            name: {
+                save_analysis.COPY_PRIMARY: primary,
+                save_analysis.COPY_BACKUP: backup,
+            }
+            for name, primary, backup
+            in save_analysis.STANDARD_SLOT_OFFSETS
+        }
+        offset = region_offset + offsets[slot][copy_kind]
+        slot_data = bytearray(save_analysis.STANDARD_SLOT_DATA_SIZE)
+        slot_data[save_analysis.STANDARD_EVENT_COUNTER_OFFSET] = value
+        checksum = save_analysis.calculate_standard_checksum(
+            bytes(slot_data)
+        )
+        image[
+            offset : offset + save_analysis.STANDARD_SLOT_DATA_SIZE
+        ] = slot_data
+        checksum_start = offset + save_analysis.STANDARD_CHECKSUM_OFFSET
+        image[checksum_start : checksum_start + 2] = checksum.to_bytes(
+            2,
+            "little",
+        )
+
+    def _analyze(self, image: bytearray):
+        path = self.root / "expanded.srm"
+        path.write_bytes(image)
+        return save_analysis.analyze_save(path)
+
+    def test_matching_relocated_copies_are_medium_confidence(self):
+        image = bytearray(128 * 1024)
+        region = 0x1C000
+        for copy_kind in (
+            save_analysis.COPY_PRIMARY,
+            save_analysis.COPY_BACKUP,
+        ):
+            self._write_copy(
+                image,
+                region_offset=region,
+                slot="C",
+                copy_kind=copy_kind,
+                value=13,
+            )
+
+        result = self._analyze(image)
+
+        self.assertEqual(
+            result.profile,
+            save_analysis.PROFILE_RELOCATED_STANDARD_SMW_SLOTS,
+        )
+        self.assertEqual(result.confidence, save_analysis.CONFIDENCE_MEDIUM)
+        self.assertEqual(result.selected_value, 13)
+        self.assertEqual(result.selected_slot, "C")
+        self.assertEqual(result.selected_copy, save_analysis.COPY_PRIMARY)
+        self.assertEqual(result.valid_slots, ("C",))
+        self.assertTrue(any("0x1C000" in item for item in result.warnings))
+        accepted_offsets = {
+            attempt.counter_offset
+            for attempt in result.attempts
+            if attempt.accepted
+        }
+        self.assertEqual(
+            accepted_offsets,
+            {
+                region + 0x11E + save_analysis.STANDARD_EVENT_COUNTER_OFFSET,
+                region + 0x2CB + save_analysis.STANDARD_EVENT_COUNTER_OFFSET,
+            },
+        )
+
+    def test_single_relocated_copy_fails_closed(self):
+        image = bytearray(128 * 1024)
+        self._write_copy(
+            image,
+            region_offset=0x1C000,
+            slot="C",
+            copy_kind=save_analysis.COPY_PRIMARY,
+            value=13,
+        )
+
+        result = self._analyze(image)
+
+        self.assertEqual(
+            result.profile,
+            save_analysis.PROFILE_EXPANDED_SRAM_UNKNOWN,
+        )
+        self.assertEqual(result.confidence, save_analysis.CONFIDENCE_NONE)
+        self.assertIsNone(result.selected_value)
+
+    def test_divergent_relocated_copies_fail_closed(self):
+        image = bytearray(128 * 1024)
+        self._write_copy(
+            image,
+            region_offset=0x1C000,
+            slot="C",
+            copy_kind=save_analysis.COPY_PRIMARY,
+            value=13,
+        )
+        self._write_copy(
+            image,
+            region_offset=0x1C000,
+            slot="C",
+            copy_kind=save_analysis.COPY_BACKUP,
+            value=14,
+        )
+
+        result = self._analyze(image)
+
+        self.assertEqual(
+            result.profile,
+            save_analysis.PROFILE_EXPANDED_SRAM_UNKNOWN,
+        )
+        self.assertIsNone(result.selected_value)
+
+    def test_conflicting_relocated_regions_fail_closed(self):
+        image = bytearray(128 * 1024)
+        for region, value in ((0x18000, 9), (0x1C000, 13)):
+            for copy_kind in (
+                save_analysis.COPY_PRIMARY,
+                save_analysis.COPY_BACKUP,
+            ):
+                self._write_copy(
+                    image,
+                    region_offset=region,
+                    slot="C",
+                    copy_kind=copy_kind,
+                    value=value,
+                )
+
+        result = self._analyze(image)
+
+        self.assertEqual(
+            result.profile,
+            save_analysis.PROFILE_EXPANDED_SRAM_UNKNOWN,
+        )
+        self.assertIsNone(result.selected_value)
+        self.assertTrue(
+            any("ambiguous" in warning for warning in result.warnings)
+        )
+
+    def test_scan_classifies_relocated_standard_progress(self):
+        image = bytearray(128 * 1024)
+        for copy_kind in (
+            save_analysis.COPY_PRIMARY,
+            save_analysis.COPY_BACKUP,
+        ):
+            self._write_copy(
+                image,
+                region_offset=0x1C000,
+                slot="C",
+                copy_kind=copy_kind,
+                value=13,
+            )
+        path = self.root / "Known Hack.srm"
+        path.write_bytes(image)
+
+        candidates = save_sync.scan_saves(
+            str(self.root),
+            [{"id": "1", "title": "Known Hack", "exits": 13}],
+        )
+
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        self.assertEqual(candidate.collected_exits, 13)
+        self.assertEqual(candidate.status, save_sync.STATUS_COMPLETED)
+        self.assertEqual(
+            candidate.profile,
+            save_analysis.PROFILE_RELOCATED_STANDARD_SMW_SLOTS,
+        )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -13,7 +13,7 @@ credible progress evidence in those layouts.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 # Inherited raw-counter location. The name deliberately avoids calling the byte
@@ -38,6 +38,11 @@ STANDARD_SRAM_SIZE = 0x35A
 # layout validates it, so the legacy fallback is suppressed at this boundary.
 EXPANDED_SRAM_MIN_SIZE = 0x10000
 
+# Expanded images may contain an ordinary SMW SRAM block in a later 8 KiB
+# bank. Relocated detection scans only bank-aligned windows and requires
+# matching checksum-valid primary and backup copies for the same slot.
+RELOCATED_SRAM_ALIGNMENT = 0x2000
+
 STANDARD_SLOT_OFFSETS = (
     ("A", 0x000, 0x1AD),
     ("B", 0x08F, 0x23C),
@@ -51,6 +56,7 @@ CONFIDENCE_MEDIUM = "medium"
 PROFILE_UNREADABLE = "unreadable"
 PROFILE_UNKNOWN = "unknown"
 PROFILE_STANDARD_SMW_SLOTS = "standard_smw_slots"
+PROFILE_RELOCATED_STANDARD_SMW_SLOTS = "relocated_standard_smw_slots"
 PROFILE_EXPANDED_SRAM_UNKNOWN = "expanded_sram_unknown"
 PROFILE_LEGACY_RAW_COUNTER = "legacy_raw_counter"
 
@@ -164,6 +170,8 @@ def _standard_copy_attempt(
     slot: str,
     copy_kind: str,
     offset: int,
+    profile: str = PROFILE_STANDARD_SMW_SLOTS,
+    region_offset: int = 0,
 ) -> ProfileAttempt:
     slot_bytes = data[offset : offset + STANDARD_SLOT_SIZE]
     slot_data = slot_bytes[:STANDARD_SLOT_DATA_SIZE]
@@ -176,24 +184,34 @@ def _standard_copy_attempt(
     counter_value = slot_data[STANDARD_EVENT_COUNTER_OFFSET]
     counter_offset = offset + STANDARD_EVENT_COUNTER_OFFSET
 
+    location = ""
+    if region_offset:
+        location = f" at relocated SRAM base 0x{region_offset:X}"
+
     if not checksum_valid:
         reason = (
-            f"Slot {slot} {copy_kind} checksum mismatch: stored "
+            f"Slot {slot} {copy_kind}{location} checksum mismatch: stored "
             f"0x{stored_checksum:04X}, expected 0x{expected_checksum:04X}"
         )
         accepted = False
         confidence = CONFIDENCE_NONE
     elif counter_value == UNINITIALIZED_BYTE:
-        reason = f"Slot {slot} {copy_kind} is checksum-valid but uninitialized"
+        reason = (
+            f"Slot {slot} {copy_kind}{location} is checksum-valid but "
+            "uninitialized"
+        )
         accepted = False
         confidence = CONFIDENCE_NONE
     else:
-        reason = f"Slot {slot} {copy_kind} has a valid standard SMW checksum"
+        reason = (
+            f"Slot {slot} {copy_kind}{location} has a valid standard "
+            "SMW checksum"
+        )
         accepted = True
         confidence = CONFIDENCE_MEDIUM
 
     return ProfileAttempt(
-        profile=PROFILE_STANDARD_SMW_SLOTS,
+        profile=profile,
         accepted=accepted,
         confidence=confidence,
         reason=reason,
@@ -211,8 +229,12 @@ def _standard_copy_attempt(
 def _analyze_standard_slots(
     absolute: str,
     data: bytes,
+    *,
+    region_offset: int = 0,
+    profile: str = PROFILE_STANDARD_SMW_SLOTS,
+    require_matching_copies: bool = False,
 ) -> tuple[SaveAnalysis | None, tuple[ProfileAttempt, ...]]:
-    if len(data) < STANDARD_SRAM_SIZE:
+    if len(data) < region_offset + STANDARD_SRAM_SIZE:
         return None, ()
 
     attempts: list[ProfileAttempt] = []
@@ -222,7 +244,9 @@ def _analyze_standard_slots(
                 data,
                 slot=slot,
                 copy_kind=COPY_PRIMARY,
-                offset=primary_offset,
+                offset=region_offset + primary_offset,
+                profile=profile,
+                region_offset=region_offset,
             )
         )
         attempts.append(
@@ -230,52 +254,116 @@ def _analyze_standard_slots(
                 data,
                 slot=slot,
                 copy_kind=COPY_BACKUP,
-                offset=backup_offset,
+                offset=region_offset + backup_offset,
+                profile=profile,
+                region_offset=region_offset,
             )
         )
+
+    accepted_slots: set[str] | None = None
+    if require_matching_copies:
+        accepted_slots = set()
+        for slot, _, _ in STANDARD_SLOT_OFFSETS:
+            copies = [
+                attempt
+                for attempt in attempts
+                if attempt.slot == slot and attempt.accepted
+            ]
+            copy_kinds = {attempt.copy_kind for attempt in copies}
+            values = {attempt.counter_value for attempt in copies}
+            if (
+                copy_kinds == {COPY_PRIMARY, COPY_BACKUP}
+                and len(values) == 1
+            ):
+                accepted_slots.add(slot)
+
+        adjusted: list[ProfileAttempt] = []
+        for attempt in attempts:
+            if attempt.accepted and attempt.slot not in accepted_slots:
+                adjusted.append(
+                    replace(
+                        attempt,
+                        accepted=False,
+                        confidence=CONFIDENCE_NONE,
+                        reason=(
+                            attempt.reason
+                            + "; relocated blocks require matching "
+                            "primary and backup copies"
+                        ),
+                    )
+                )
+            else:
+                adjusted.append(attempt)
+        attempts = adjusted
 
     accepted = [attempt for attempt in attempts if attempt.accepted]
     if not accepted:
         return None, tuple(attempts)
 
-    slot_order = {slot: index for index, (slot, _, _) in enumerate(STANDARD_SLOT_OFFSETS)}
+    slot_order = {
+        slot: index
+        for index, (slot, _, _) in enumerate(STANDARD_SLOT_OFFSETS)
+    }
     selected = max(
         accepted,
         key=lambda attempt: (
-            attempt.counter_value if attempt.counter_value is not None else -1,
+            attempt.counter_value
+            if attempt.counter_value is not None
+            else -1,
             attempt.copy_kind == COPY_PRIMARY,
             -slot_order.get(attempt.slot or "", len(slot_order)),
         ),
     )
 
-    warnings = [
-        "Checksum-valid standard SMW slot data was found, but the selected "
-        "overworld-event counter may not equal the hack's advertised exits"
-    ]
-    for slot, _, _ in STANDARD_SLOT_OFFSETS:
-        copies = [attempt for attempt in attempts if attempt.slot == slot]
-        usable = [attempt for attempt in copies if attempt.accepted]
-        if len(usable) == 2 and usable[0].counter_value != usable[1].counter_value:
-            warnings.append(
-                f"Slot {slot} primary and backup counters differ; the higher "
-                "checksum-valid value was selected"
-            )
-        elif len(usable) == 1:
-            other = next(attempt for attempt in copies if attempt is not usable[0])
-            if other.counter_value != UNINITIALIZED_BYTE:
+    if region_offset:
+        warnings = [
+            "Matching checksum-valid standard SMW primary and backup "
+            f"copies were found at relocated SRAM base 0x{region_offset:X}",
+            "The selected overworld-event counter may not equal the hack's "
+            "advertised exits",
+        ]
+    else:
+        warnings = [
+            "Checksum-valid standard SMW slot data was found, but the "
+            "selected overworld-event counter may not equal the hack's "
+            "advertised exits"
+        ]
+
+    if not require_matching_copies:
+        for slot, _, _ in STANDARD_SLOT_OFFSETS:
+            copies = [attempt for attempt in attempts if attempt.slot == slot]
+            usable = [attempt for attempt in copies if attempt.accepted]
+            if (
+                len(usable) == 2
+                and usable[0].counter_value != usable[1].counter_value
+            ):
                 warnings.append(
-                    f"Slot {slot} has only one usable checksum-valid copy"
+                    f"Slot {slot} primary and backup counters differ; the "
+                    "higher checksum-valid value was selected"
                 )
+            elif len(usable) == 1:
+                other = next(
+                    attempt
+                    for attempt in copies
+                    if attempt is not usable[0]
+                )
+                if other.counter_value != UNINITIALIZED_BYTE:
+                    warnings.append(
+                        f"Slot {slot} has only one usable checksum-valid copy"
+                    )
 
     valid_slots = tuple(
         slot
         for slot, _, _ in STANDARD_SLOT_OFFSETS
-        if any(attempt.accepted and attempt.slot == slot for attempt in attempts)
+        if any(
+            attempt.accepted and attempt.slot == slot
+            for attempt in attempts
+        )
     )
     analysis = SaveAnalysis(
         path=absolute,
         size=len(data),
-        profile=PROFILE_STANDARD_SMW_SLOTS,
+        profile=profile,
         confidence=CONFIDENCE_MEDIUM,
         counter_kind=COUNTER_OVERWORLD_EVENTS,
         selected_value=selected.counter_value,
@@ -288,11 +376,46 @@ def _analyze_standard_slots(
     return analysis, tuple(attempts)
 
 
+def _analyze_relocated_standard_slots(
+    absolute: str,
+    data: bytes,
+) -> tuple[SaveAnalysis | None, str | None]:
+    """Find one corroborated standard SMW block in an expanded image."""
+
+    candidates: list[SaveAnalysis] = []
+    last_start = len(data) - STANDARD_SRAM_SIZE
+    for region_offset in range(
+        RELOCATED_SRAM_ALIGNMENT,
+        last_start + 1,
+        RELOCATED_SRAM_ALIGNMENT,
+    ):
+        analysis, _ = _analyze_standard_slots(
+            absolute,
+            data,
+            region_offset=region_offset,
+            profile=PROFILE_RELOCATED_STANDARD_SMW_SLOTS,
+            require_matching_copies=True,
+        )
+        if analysis is not None:
+            candidates.append(analysis)
+
+    if len(candidates) == 1:
+        return candidates[0], None
+    if len(candidates) > 1:
+        return (
+            None,
+            "Multiple relocated checksum-valid standard SMW blocks were "
+            "found; progress was suppressed because the layout is ambiguous",
+        )
+    return None, None
+
+
 
 def _expanded_sram_analysis(
     absolute: str,
     data: bytes,
     prior_attempts: tuple[ProfileAttempt, ...],
+    extra_warning: str | None = None,
 ) -> SaveAnalysis:
     """Reject an unvalidated raw counter in an expanded SRAM image.
 
@@ -322,6 +445,9 @@ def _expanded_sram_analysis(
         counter_kind=COUNTER_UNKNOWN,
         counter_value=raw_value,
     )
+    warnings = (reason,)
+    if extra_warning:
+        warnings = (extra_warning, reason)
     return SaveAnalysis(
         path=absolute,
         size=len(data),
@@ -329,7 +455,7 @@ def _expanded_sram_analysis(
         confidence=CONFIDENCE_NONE,
         counter_kind=COUNTER_UNKNOWN,
         selected_value=None,
-        warnings=(reason,),
+        warnings=warnings,
         attempts=prior_attempts + (attempt,),
     )
 
@@ -505,5 +631,16 @@ def analyze_save(path: os.PathLike[str] | str) -> SaveAnalysis:
     if standard is not None:
         return standard
     if len(data) >= EXPANDED_SRAM_MIN_SIZE:
-        return _expanded_sram_analysis(absolute, data, standard_attempts)
+        relocated, relocation_warning = _analyze_relocated_standard_slots(
+            absolute,
+            data,
+        )
+        if relocated is not None:
+            return relocated
+        return _expanded_sram_analysis(
+            absolute,
+            data,
+            standard_attempts,
+            relocation_warning,
+        )
     return _legacy_analysis(absolute, data, standard_attempts)
