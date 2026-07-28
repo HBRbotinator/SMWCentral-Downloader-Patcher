@@ -51,7 +51,29 @@ meaning. An expanded save without a validated compatible layout fails closed:
 the raw counter is retained only as evidence and the candidate remains
 uncertain.
 
+Some expanded SA-1/BW-RAM images contain a standard SMW save block in a later
+8 KiB-aligned bank. Such a relocated block is accepted only when matching
+checksum-valid primary and backup copies prove one unambiguous slot value. It
+remains medium-confidence evidence and is reported with profile
+`relocated_standard_smw_slots`.
+
 The scanner does not guess custom layouts from filenames or hack titles.
+
+### Confidence in the review window
+
+Both review tabs show a **Confidence** column and a selected-row evidence
+summary. The values mean:
+
+- **Medium** — checksum-validated standard structure, including a safely proven
+  relocated block;
+- **Low** — a plausible but unvalidated legacy raw counter;
+- **None** — no trusted progress value was established.
+
+Medium is currently the highest automatic grade because a checksum-valid
+overworld-event counter still may not equal the hack's advertised exit total.
+
+Low-confidence completion candidates remain reviewable but are not checked by
+default. The user must select them explicitly before **Apply Selected**.
 
 ## Candidate states
 

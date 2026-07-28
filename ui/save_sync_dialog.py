@@ -61,6 +61,91 @@ _ORPHAN_ACTIONABLE = {
     save_sync.RESOLUTION_LOCAL,
 }
 
+_CONFIDENCE_LABEL = {
+    "medium": "Medium",
+    "low": "Low",
+    "none": "None",
+}
+
+
+def _candidate_evidence(candidate):
+    """Return analysis evidence without assuming a concrete analysis class."""
+
+    try:
+        evidence = candidate.evidence()
+    except (AttributeError, TypeError, ValueError):
+        evidence = {}
+    return evidence if isinstance(evidence, dict) else {}
+
+
+def _confidence_key(candidate):
+    evidence = _candidate_evidence(candidate)
+    confidence = evidence.get(
+        "confidence", getattr(candidate, "confidence", "none")
+    )
+    key = str(confidence or "none").strip().lower()
+    return key if key in _CONFIDENCE_LABEL else "none"
+
+
+def _confidence_label(candidate):
+    return _CONFIDENCE_LABEL[_confidence_key(candidate)]
+
+
+def _accepted_copy_kinds(evidence, slot):
+    copies = set()
+    for attempt in evidence.get("attempts", []) or []:
+        if not isinstance(attempt, dict):
+            continue
+        if not attempt.get("accepted") or attempt.get("slot") != slot:
+            continue
+        copy_kind = attempt.get("copy_kind")
+        if copy_kind:
+            copies.add(str(copy_kind))
+    return copies
+
+
+def _analysis_summary(candidate):
+    """Return a concise explanation suitable for the review interface."""
+
+    evidence = _candidate_evidence(candidate)
+    profile = str(evidence.get("profile") or getattr(
+        candidate, "profile", "unknown"
+    ))
+    slot = evidence.get("selected_slot")
+    value = evidence.get("selected_value")
+
+    if profile == "relocated_standard_smw_slots":
+        explanation = f"Relocated standard slot {slot or '?'} + backup"
+    elif profile == "standard_smw_slots":
+        copies = _accepted_copy_kinds(evidence, slot)
+        if {"primary", "backup"}.issubset(copies):
+            explanation = f"Standard slot {slot or '?'} + backup"
+        elif copies:
+            copy_name = sorted(copies)[0].title()
+            explanation = f"Standard slot {slot or '?'} ({copy_name} only)"
+        else:
+            explanation = f"Checksum-valid standard slot {slot or '?'}"
+    elif profile == "legacy_raw_counter":
+        explanation = "Unvalidated legacy raw counter"
+    elif profile == "expanded_sram_unknown":
+        explanation = "Unknown expanded SRAM layout"
+    elif value is None:
+        explanation = "No trusted progress value"
+    else:
+        explanation = profile.replace("_", " ").strip().title()
+
+    if isinstance(value, int):
+        explanation += f" · {value} detected event(s)"
+    return explanation
+
+
+def _analysis_detail(candidate):
+    if candidate is None:
+        return "Select a row to see its save-analysis evidence."
+    confidence = _confidence_label(candidate)
+    prefix = "No confidence" if confidence == "None" else f"{confidence} confidence"
+    return f"{prefix} · {_analysis_summary(candidate)}"
+
 
 class ManualSmwcSearchDialog:
     """Modal free-text SMWC search for one unresolved save."""
@@ -504,6 +589,8 @@ class SaveSyncDialog:
         self.orph_iid = {}  # candidate id() -> iid, for background updates
         self.manual_search_button = None
         self.local_entry_button = None
+        self.comp_analysis_label = None
+        self.orph_analysis_label = None
 
         self._cancel_lookup = False
         self._lookup_running = False
@@ -513,7 +600,7 @@ class SaveSyncDialog:
     def show(self):
         self.win = tk.Toplevel(self.parent)
         self.win.title("Save Data Sync - Review Changes")
-        self.win.geometry("820x620")
+        self.win.geometry("980x650")
         self.win.transient(self.parent.winfo_toplevel())
         self.win.grab_set()
         self.win.bind("<Destroy>", self._on_destroy)
@@ -560,18 +647,30 @@ class SaveSyncDialog:
                       save_sync.STATUS_UNCERTAIN, save_sync.STATUS_ALREADY_COMPLETED)
             if counts.get(s)
         ) or "No matching saves"
-        ttk.Label(tab, text=summary, foreground="gray").pack(anchor="w", pady=(0, 8))
+        ttk.Label(tab, text=summary, foreground="gray").pack(
+            anchor="w", pady=(0, 3)
+        )
+        ttk.Label(
+            tab,
+            text="Medium = checksum-validated structure; Low = unvalidated "
+                 "fallback; None = no trusted progress. Low-confidence "
+                 "completions require manual selection.",
+            foreground="gray",
+            wraplength=920,
+        ).pack(anchor="w", pady=(0, 8))
 
         columns = (
-            "check", "title", "file", "decision", "source", "date", "exits"
+            "check", "title", "file", "decision", "confidence", "source",
+            "date", "exits"
         )
         self.comp_tree = self._make_tree(
             tab, columns,
             {
                 "check": ("", 34, "center", False),
-                "title": ("Hack", 205, "w", True),
-                "file": ("Save File", 175, "w", True),
-                "decision": ("Decision", 90, "w", False),
+                "title": ("Hack", 195, "w", True),
+                "file": ("Save File", 165, "w", True),
+                "decision": ("Decision", 85, "w", False),
+                "confidence": ("Confidence", 92, "center", False),
                 "source": ("Match", 80, "w", False),
                 "date": ("Play Date", 90, "center", False),
                 "exits": ("Exits", 70, "center", False),
@@ -583,7 +682,16 @@ class SaveSyncDialog:
             "<<TreeviewSelect>>", self._completion_selection_changed
         )
         # Clicking the check-column header toggles all rows.
-        self.comp_tree.heading("check", text=UNCHECKED, command=self._comp_toggle_all)
+        self.comp_tree.heading(
+            "check", text=UNCHECKED, command=self._comp_toggle_all
+        )
+        self.comp_analysis_label = ttk.Label(
+            tab,
+            text=_analysis_detail(None),
+            foreground="gray",
+            wraplength=920,
+        )
+        self.comp_analysis_label.pack(anchor="w", pady=(7, 0))
 
         btns = ttk.Frame(tab)
         btns.pack(fill="x", pady=(8, 0))
@@ -615,7 +723,10 @@ class SaveSyncDialog:
     def _populate_completion(self):
         for cand in self.matched:
             checkable = cand.status in _CHECKABLE
-            default_checked = cand.status == save_sync.STATUS_COMPLETED
+            default_checked = (
+                cand.status == save_sync.STATUS_COMPLETED
+                and _confidence_key(cand) == "medium"
+            )
             if cand.status == save_sync.STATUS_ALREADY_COMPLETED:
                 glyph = LOCKED
             else:
@@ -634,6 +745,7 @@ class SaveSyncDialog:
                     cand.title,
                     cand.save_name,
                     _STATUS_LABEL.get(cand.status, cand.status),
+                    _confidence_label(cand),
                     (
                         "Saved"
                         if cand.match_source == save_sync.MATCH_SOURCE_SAVED_ALIAS
@@ -697,6 +809,7 @@ class SaveSyncDialog:
 
     def _completion_selection_changed(self, _event=None):
         iid, candidate, local_entry = self._selected_local_completion()
+        self._set_analysis_detail(self.comp_analysis_label, candidate)
         forget_enabled = bool(
             candidate
             and candidate.match_source == save_sync.MATCH_SOURCE_SAVED_ALIAS
@@ -751,7 +864,7 @@ class SaveSyncDialog:
         values = list(self.comp_tree.item(iid, "values"))
         values[1] = candidate.title
         values[3] = _STATUS_LABEL.get(candidate.status, candidate.status)
-        values[6] = candidate.exits_display
+        values[7] = candidate.exits_display
         self.comp_tree.item(iid, values=values)
         self._update_apply_state()
         if self.on_applied:
@@ -844,21 +957,36 @@ class SaveSyncDialog:
             wraplength=780, foreground="gray",
         ).pack(anchor="w", pady=(0, 8))
 
-        columns = ("check", "file", "result", "hack", "difficulty")
+        columns = (
+            "check", "file", "confidence", "result", "hack", "difficulty"
+        )
         self.orph_tree = self._make_tree(
             tab, columns,
             {
                 "check": ("", 34, "center", False),
-                "file": ("Save File", 240, "w", True),
-                "result": ("Result", 110, "w", False),
-                "hack": ("Resolved Hack", 230, "w", True),
-                "difficulty": ("Difficulty", 110, "w", False),
+                "file": ("Save File", 220, "w", True),
+                "confidence": ("Confidence", 92, "center", False),
+                "result": ("Result", 105, "w", False),
+                "hack": ("Resolved Hack", 215, "w", True),
+                "difficulty": ("Difficulty", 105, "w", False),
             },
             selectmode="browse",
         )
         self.orph_tree.bind("<Button-1>", self._on_orph_click)
+        self.orph_tree.bind(
+            "<<TreeviewSelect>>", self._orphan_selection_changed
+        )
         # Clicking the check-column header toggles all selectable rows.
-        self.orph_tree.heading("check", text=UNCHECKED, command=self._orph_toggle_all)
+        self.orph_tree.heading(
+            "check", text=UNCHECKED, command=self._orph_toggle_all
+        )
+        self.orph_analysis_label = ttk.Label(
+            tab,
+            text=_analysis_detail(None),
+            foreground="gray",
+            wraplength=920,
+        )
+        self.orph_analysis_label.pack(anchor="w", pady=(7, 0))
 
         controls = ttk.Frame(tab)
         controls.pack(fill="x", pady=(8, 0))
@@ -887,8 +1015,10 @@ class SaveSyncDialog:
         for cand in self.unmatched:
             iid = self.orph_tree.insert(
                 "", "end",
-                values=(UNCHECKED, cand.save_name,
-                        _RESOLUTION_LABEL[save_sync.RESOLUTION_NONE], "", ""),
+                values=(
+                    UNCHECKED, cand.save_name, _confidence_label(cand),
+                    _RESOLUTION_LABEL[save_sync.RESOLUTION_NONE], "", ""
+                ),
             )
             self.orph_cand[iid] = cand
             self.orph_checked[iid] = False
@@ -941,6 +1071,13 @@ class SaveSyncDialog:
             self.orph_tree.heading("check", text=CHECKED if all_on else UNCHECKED)
         except tk.TclError:
             pass
+
+    def _orphan_selection_changed(self, _event=None):
+        selected = self.orph_tree.selection() if self.orph_tree else ()
+        candidate = (
+            self.orph_cand.get(selected[0]) if len(selected) == 1 else None
+        )
+        self._set_analysis_detail(self.orph_analysis_label, candidate)
 
     def _create_local_entry_selected(self):
         if self._lookup_running:
@@ -1099,6 +1236,7 @@ class SaveSyncDialog:
         values = (
             CHECKED if checked else UNCHECKED,
             cand.save_name,
+            _confidence_label(cand),
             label,
             hack_name,
             difficulty,
@@ -1139,14 +1277,24 @@ class SaveSyncDialog:
             tree.heading(col, text=text)
             tree.column(col, width=width, anchor=anchor, stretch=stretch)
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=vsb.set)
+        hsb = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         tree.tag_configure("locked", foreground="gray")
         tree.tag_configure("uncertain", foreground="#b8860b")
         return tree
+
+    def _set_analysis_detail(self, label, candidate):
+        if label is None:
+            return
+        try:
+            label.config(text=_analysis_detail(candidate))
+        except tk.TclError:
+            pass
 
     def _hit_check(self, tree, event):
         """Return the row iid if the click landed in the check column, else None."""

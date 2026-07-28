@@ -1858,5 +1858,169 @@ class AutomaticReviewFreshnessTest(unittest.TestCase):
             source,
         )
 
+class ConfidenceReviewUiTest(unittest.TestCase):
+    class Candidate:
+        def __init__(
+            self,
+            confidence,
+            profile,
+            selected_value=None,
+            selected_slot=None,
+            attempts=None,
+        ):
+            self.confidence = confidence
+            self.profile = profile
+            self.status = save_sync.STATUS_COMPLETED
+            self.hack_id = "123"
+            self.title = "Example Hack"
+            self.save_name = "Example Hack.srm"
+            self.completed_date = ""
+            self.exits_display = "13 / 13"
+            self.match_source = "collection"
+            self._evidence = {
+                "confidence": confidence,
+                "profile": profile,
+                "selected_value": selected_value,
+                "selected_slot": selected_slot,
+                "attempts": list(attempts or []),
+            }
+
+        def evidence(self):
+            return dict(self._evidence)
+
+    class Tree:
+        def insert(self, _parent, _index, values, tags=()):
+            self.values = values
+            self.tags = tags
+            return "row"
+
+        def heading(self, *_args, **_kwargs):
+            return None
+
+    def test_confidence_labels_and_selected_row_evidence(self):
+        from ui import save_sync_dialog
+
+        relocated = self.Candidate(
+            "medium",
+            "relocated_standard_smw_slots",
+            selected_value=13,
+            selected_slot="C",
+        )
+        legacy = self.Candidate(
+            "low",
+            "legacy_raw_counter",
+            selected_value=14,
+        )
+        expanded = self.Candidate(
+            "none",
+            "expanded_sram_unknown",
+        )
+
+        self.assertEqual(
+            save_sync_dialog._confidence_label(relocated),
+            "Medium",
+        )
+        self.assertIn(
+            "Relocated standard slot C + backup",
+            save_sync_dialog._analysis_detail(relocated),
+        )
+        self.assertEqual(
+            save_sync_dialog._confidence_label(legacy),
+            "Low",
+        )
+        self.assertIn(
+            "Unvalidated legacy raw counter",
+            save_sync_dialog._analysis_detail(legacy),
+        )
+        self.assertEqual(
+            save_sync_dialog._confidence_label(expanded),
+            "None",
+        )
+        self.assertIn(
+            "No confidence · Unknown expanded SRAM layout",
+            save_sync_dialog._analysis_detail(expanded),
+        )
+
+    def test_standard_summary_identifies_matching_backup(self):
+        from ui import save_sync_dialog
+
+        candidate = self.Candidate(
+            "medium",
+            "standard_smw_slots",
+            selected_value=11,
+            selected_slot="A",
+            attempts=[
+                {
+                    "accepted": True,
+                    "slot": "A",
+                    "copy_kind": "primary",
+                },
+                {
+                    "accepted": True,
+                    "slot": "A",
+                    "copy_kind": "backup",
+                },
+            ],
+        )
+
+        self.assertIn(
+            "Standard slot A + backup",
+            save_sync_dialog._analysis_detail(candidate),
+        )
+
+    def test_low_confidence_completion_requires_manual_selection(self):
+        from ui import save_sync_dialog
+
+        results = {}
+        for confidence, expected in (("medium", True), ("low", False)):
+            candidate = self.Candidate(
+                confidence,
+                (
+                    "standard_smw_slots"
+                    if confidence == "medium"
+                    else "legacy_raw_counter"
+                ),
+                selected_value=13,
+                selected_slot="A",
+            )
+            dialog = object.__new__(save_sync_dialog.SaveSyncDialog)
+            dialog.matched = [candidate]
+            dialog.comp_tree = self.Tree()
+            dialog.comp_cand = {}
+            dialog.comp_checked = {}
+            dialog._update_comp_header = lambda: None
+
+            dialog._populate_completion()
+            results[confidence] = dialog.comp_checked["row"]
+
+        self.assertEqual(results, {"medium": True, "low": False})
+
+    def test_review_ui_and_guide_expose_confidence_contract(self):
+        from pathlib import Path
+
+        root = Path(__file__).parent
+        source = (
+            root / "ui" / "save_sync_dialog.py"
+        ).read_text(encoding="utf-8")
+        guide = (root / "SAVE_DATA_SYNC.md").read_text(encoding="utf-8")
+
+        self.assertGreaterEqual(
+            source.count('"confidence": ("Confidence"'),
+            2,
+        )
+        self.assertIn("self.comp_analysis_label", source)
+        self.assertIn("self.orph_analysis_label", source)
+        self.assertIn("xscrollcommand=hsb.set", source)
+        self.assertIn(
+            'and _confidence_key(cand) == "medium"',
+            source,
+        )
+        self.assertIn("### Confidence in the review window", guide)
+        self.assertIn(
+            "Low-confidence completion candidates remain reviewable",
+            guide,
+        )
+        self.assertIn("`relocated_standard_smw_slots`", guide)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
