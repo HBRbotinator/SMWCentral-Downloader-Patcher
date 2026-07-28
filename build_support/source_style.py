@@ -22,6 +22,10 @@ DEFAULT_PATHS = (
     "test_release_gate.py",
     "test_update_policy.py",
     "test_documentation.py",
+    "save_analysis.py",
+    "save_sync.py",
+    "test_save_analysis.py",
+    "test_save_sync.py",
 )
 
 

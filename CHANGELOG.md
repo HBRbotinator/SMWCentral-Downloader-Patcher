@@ -4,6 +4,27 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+<!-- save-data-sync-expansion:start -->
+### Save Data Sync expansion
+
+- Added structured save-analysis evidence for standard slots, backup copies,
+  low-confidence legacy counters, and fail-closed expanded SRAM handling.
+- Added privacy-safe diagnostic JSON export with effective matching summaries.
+- Added explicit manual SMWCentral search and remembered filename associations,
+  including a safe **Forget Saved Match** lifecycle.
+- Added ordered multiple save-source folders with legacy-setting migration,
+  deduplication, and unavailable-source handling.
+- Added opt-in startup and periodic review scans that never apply collection
+  changes automatically.
+- Added local save-backed collection entries for non-SMWCentral hacks, including
+  stable IDs, metadata editing, safe association removal, and record removal
+  that never deletes save or ROM files.
+- Preserved **Apply Selected** as the required boundary for every collection
+  write.
+- Documented the full workflow, confidence model, privacy boundary, and known
+  limitations in `SAVE_DATA_SYNC.md`.
+<!-- save-data-sync-expansion:end -->
+
 ## [5.1] - 2026-07-01
 
 ### Added

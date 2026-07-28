@@ -16,8 +16,8 @@ from ui_constants import get_page_padding, get_section_padding, STATUS_COLOR_INF
 
 class SettingsPage:
     """Settings page implementation"""
-    
-    def __init__(self, parent, run_pipeline_func, setup_section, filter_section, 
+
+    def __init__(self, parent, run_pipeline_func, setup_section, filter_section,
                  difficulty_section, logger):
         self.parent = parent
         self.setup_section = setup_section
@@ -26,10 +26,17 @@ class SettingsPage:
         self.frame = None
         self.log_level_combo = None
         self.update_policy = current_update_policy()
-        
+
         # Callback for emulator settings changes
         self.emulator_settings_callback = None
-    
+
+        # Opt-in startup scan state. Automatic scans only prepare a review;
+        # they never write collection data without the existing dialog.
+        self._auto_scan_started = False
+        self._auto_scan_running = False
+        self._pending_auto_scan_candidates = []
+        self._periodic_scan_job = None
+
     def update_theme_colors(self):
         """Update cancel button colors when theme changes"""
         # No longer needed - button keeps its original style
@@ -40,26 +47,26 @@ class SettingsPage:
         try:
             from colors import get_colors
             colors = get_colors()
-            
+
             # Create completely independent cancel button style
             style = ttk.Style()
-            
+
             # First, clear any existing Cancel.TButton configuration
             try:
                 style.configure("Cancel.TButton")  # Reset to defaults
             except:
                 pass
-            
+
             # Get the current TButton configuration to see what might be interfering
             try:
                 button_config = style.configure("TButton")
                 print(f"DEBUG: Current TButton config: {button_config}")
             except:
                 pass
-            
+
             # Force complete reconfiguration to override any interference
             # Configure Cancel.TButton to be completely independent of TButton
-            style.configure("Cancel.TButton", 
+            style.configure("Cancel.TButton",
                            font=("Segoe UI", 10, "bold"),  # Explicit font - larger than default
                            padding=(20, 10),               # Explicit padding
                            background=colors["cancel_bg"],
@@ -68,7 +75,7 @@ class SettingsPage:
                            relief="flat",
                            width=None,      # Let text determine width
                            height=None)     # Let font+padding determine height
-            
+
             # Also configure the style mapping to prevent inheritance issues
             style.map("Cancel.TButton",
                      background=[('active', colors["cancel_hover"]),
@@ -99,17 +106,17 @@ class SettingsPage:
                      bordercolor=[('', colors["cancel_bg"]), ('focus', colors["cancel_bg"])],
                      lightcolor=[('', colors["cancel_bg"])],
                      darkcolor=[('', colors["cancel_bg"])])
-            
+
             # Ensure the button is using our style and force refresh
             if self.download_button:
                 self.download_button.configure(style="Cancel.TButton")
                 # Force widget to recalculate its size
                 self.download_button.update_idletasks()
-                
+
                 # DEBUG: Check what style the button is actually using
                 actual_style = self.download_button.cget('style')
                 print(f"DEBUG: Button is using style: {actual_style}")
-                
+
         except Exception as e:
             print(f"Error configuring cancel button style: {e}")
 
@@ -118,7 +125,7 @@ class SettingsPage:
         # No padding here: the canvas/scrollbar fill the frame so the scrollbar
         # sits flush to the window edge. Page padding lives on `content` below.
         self.frame = ttk.Frame(self.parent)
-        
+
         # Configure styles
         style = ttk.Style()
         for widget in ("TCheckbutton", "TRadiobutton", "TButton", "TCombobox", "TLabel"):
@@ -148,19 +155,19 @@ class SettingsPage:
         # Top row: Setup section on left, Multi-type options on right - EQUAL WIDTHS
         top_row_frame = ttk.Frame(content)
         top_row_frame.pack(fill="x", pady=(0, 20))
-        
+
         # Setup section (left side) - equal width, no extra wrapper
         setup_frame = ttk.Frame(top_row_frame)
         setup_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
-        
+
         self.setup_section.parent = setup_frame
         setup_content = self.setup_section.create(self.font)
         setup_content.pack(fill="both", expand=True)
-        
+
         # Multi-Type Download Options Section (right side) - equal width
         multi_type_frame = ttk.LabelFrame(top_row_frame, text="Multi-Type Download Options", padding=(15, 10, 15, 15))
         multi_type_frame.pack(side="right", fill="both", expand=True, padx=(10, 0))
-        
+
         # Multi-type enabled checkbox
         self.multi_type_enabled_var = tk.BooleanVar()
         self.multi_type_enabled_checkbox = ttk.Checkbutton(
@@ -170,19 +177,19 @@ class SettingsPage:
             style="Custom.TCheckbutton"
         )
         self.multi_type_enabled_checkbox.pack(anchor="w", pady=(0, 12))
-        
+
         # Download mode selection
         mode_frame = ttk.Frame(multi_type_frame)
         mode_frame.pack(fill="x", pady=(0, 12))
-        
+
         ttk.Label(mode_frame, text="Download Mode:", style="Custom.TLabel").pack(anchor="w", pady=(0, 4))
-        
+
         self.download_mode_var = tk.StringVar()
         mode_options = [
             ("primary_only", "Primary type only"),
             ("copy_all", "Copy to all type folders")
         ]
-        
+
         for value, description in mode_options:
             ttk.Radiobutton(
                 mode_frame,
@@ -191,10 +198,10 @@ class SettingsPage:
                 value=value,
                 style="Custom.TRadiobutton"
             ).pack(anchor="w", padx=(15, 0), pady=2)
-        
+
         # Load current settings FIRST
         self._load_multi_type_settings()
-        
+
         # Bind changes to save settings (cross-version tkinter compatibility)
         try:
             # Python 3.6+
@@ -204,18 +211,18 @@ class SettingsPage:
             # Older Python versions
             self.multi_type_enabled_var.trace("w", self._save_multi_type_settings)
             self.download_mode_var.trace("w", self._save_multi_type_settings)
-        
+
         # Update section
         update_frame = ttk.Frame(multi_type_frame)
         update_frame.pack(fill="x", pady=(12, 0))
-        
+
         # Separator line
         separator = ttk.Separator(update_frame, orient="horizontal")
         separator.pack(fill="x", pady=(0, 12))
-        
+
         # Update section label
         ttk.Label(update_frame, text="Application Updates:", style="Custom.TLabel", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 8))
-        
+
         # Check for updates button
         self.check_updates_button = ttk.Button(
             update_frame,
@@ -224,7 +231,7 @@ class SettingsPage:
             style="Custom.TButton"
         )
         self.check_updates_button.pack(anchor="w", pady=(0, 4))
-        
+
         # Auto-check updates setting
         self.auto_check_updates_var = tk.BooleanVar()
         self.auto_check_updates_checkbox = ttk.Checkbutton(
@@ -249,34 +256,34 @@ class SettingsPage:
                 wraplength=620,
                 justify="left",
             ).pack(anchor="w", pady=(8, 0))
-        
+
         # Load auto-check setting
         self._load_auto_check_setting()
 
         # Second row: Emulator and Difficulty Migration side by side
         second_row_frame = ttk.Frame(content)
         second_row_frame.pack(fill="x", pady=(5, 20))
-        
+
         # Emulator Configuration Section (left side)
         emulator_frame = ttk.LabelFrame(second_row_frame, text="Emulator Configuration", padding=(15, 10, 15, 15))
         emulator_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
-        
+
         # Emulator path
         emulator_path_frame = ttk.Frame(emulator_frame)
         emulator_path_frame.pack(fill="x", pady=(0, 8))
-        
+
         ttk.Label(emulator_path_frame, text="Emulator Path:", style="Custom.TLabel").pack(side="left", padx=(0, 10))
-        
+
         self.emulator_path_entry = ttk.Entry(emulator_path_frame, width=50)
         self.emulator_path_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        
+
         ttk.Button(
             emulator_path_frame,
             text="Browse",
             command=self._browse_emulator,
             style="Custom.TButton"
         ).pack(side="left")
-        
+
         # Emulator arguments checkbox
         self.emulator_args_enabled_var = tk.BooleanVar()
         self.emulator_args_checkbox = ttk.Checkbutton(
@@ -287,16 +294,16 @@ class SettingsPage:
             command=self._on_emulator_args_toggle
         )
         self.emulator_args_checkbox.pack(anchor="w", pady=(0, 8))
-        
+
         # Emulator arguments
         emulator_args_frame = ttk.Frame(emulator_frame)
         emulator_args_frame.pack(fill="x", pady=(0, 8))
-        
+
         ttk.Label(emulator_args_frame, text="Command Line Arguments:", style="Custom.TLabel").pack(side="left", padx=(0, 10))
-        
+
         self.emulator_args_entry = ttk.Entry(emulator_args_frame, width=50)
         self.emulator_args_entry.pack(side="left", fill="x", expand=True)
-        
+
         # Multi-file picker checkbox
         self.show_rom_picker_var = tk.BooleanVar()
         ttk.Checkbutton(
@@ -320,10 +327,10 @@ class SettingsPage:
             foreground="gray"
         )
         help_text.pack(anchor="w", pady=(0, 8))
-        
+
         # Load emulator settings
         self._load_emulator_settings()
-        
+
         # Bind changes to save settings
         self.emulator_path_entry.bind("<FocusOut>", self._save_emulator_settings)
         self.emulator_args_entry.bind("<FocusOut>", self._save_emulator_settings)
@@ -332,7 +339,7 @@ class SettingsPage:
         # Data Migration Section (right side)
         migration_frame = ttk.LabelFrame(second_row_frame, text="Data Migration", padding=(15, 10))
         migration_frame.pack(side="right", fill="both", expand=True, padx=(10, 0))
-        
+
         ttk.Label(
             migration_frame,
             text="Manage your collection data. Fetch missing details (like release dates) from SMWCentral, "
@@ -340,7 +347,7 @@ class SettingsPage:
             style="Custom.TLabel",
             wraplength=380
         ).pack(anchor="w", pady=(0, 10))
-        
+
         # Status label
         self.migration_status_label = ttk.Label(
             migration_frame,
@@ -348,11 +355,11 @@ class SettingsPage:
             style="Custom.TLabel"
         )
         self.migration_status_label.pack(anchor="w", pady=(0, 10))
-        
+
         # Buttons
         migration_buttons = ttk.Frame(migration_frame)
         migration_buttons.pack(fill="x")
-        
+
         self.check_migration_button = ttk.Button(
             migration_buttons,
             text="Check Difficulties",
@@ -360,7 +367,7 @@ class SettingsPage:
             style="Custom.TButton"
         )
         self.check_migration_button.pack(side="left", padx=(0, 10))
-        
+
         self.apply_migration_button = ttk.Button(
             migration_buttons,
             text="Apply Fixes",
@@ -369,7 +376,7 @@ class SettingsPage:
             state="disabled"
         )
         self.apply_migration_button.pack(side="left", padx=(0, 10))
-        
+
         # NEW: Fetch Metadata Button
         self.fetch_metadata_button = ttk.Button(
             migration_buttons,
@@ -385,28 +392,58 @@ class SettingsPage:
 
         ttk.Label(
             save_sync_frame,
-            text="Point this at your emulator/console SAVE folder (.srm or .sav files). Matching hacks in "
+            text="Add one or more emulator/console SAVE folders (.srm or .sav files). Matching hacks in "
                  "your collection are marked completed, with the completion date taken from each save's "
                  "last-modified time. Play time is not stored in SNES saves, so it is left untouched.",
             style="Custom.TLabel",
             wraplength=760
         ).pack(anchor="w", pady=(0, 10))
 
-        # Directory picker row
-        save_dir_frame = ttk.Frame(save_sync_frame)
-        save_dir_frame.pack(fill="x", pady=(0, 8))
+        # Persisted save source folders
+        ttk.Label(
+            save_sync_frame,
+            text="Save Folders:",
+            style="Custom.TLabel",
+        ).pack(anchor="w", pady=(0, 4))
 
-        ttk.Label(save_dir_frame, text="Save Directory:", style="Custom.TLabel").pack(side="left", padx=(0, 10))
+        save_dirs_frame = ttk.Frame(save_sync_frame)
+        save_dirs_frame.pack(fill="x", pady=(0, 8))
 
-        self.save_sync_dir_entry = ttk.Entry(save_dir_frame, width=50)
-        self.save_sync_dir_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        save_dirs_list_frame = ttk.Frame(save_dirs_frame)
+        save_dirs_list_frame.pack(side="left", fill="both", expand=True)
+
+        self.save_sync_dirs_listbox = tk.Listbox(
+            save_dirs_list_frame,
+            height=4,
+            exportselection=False,
+        )
+        save_dirs_scrollbar = ttk.Scrollbar(
+            save_dirs_list_frame,
+            orient="vertical",
+            command=self.save_sync_dirs_listbox.yview,
+        )
+        self.save_sync_dirs_listbox.configure(
+            yscrollcommand=save_dirs_scrollbar.set
+        )
+        self.save_sync_dirs_listbox.pack(side="left", fill="both", expand=True)
+        save_dirs_scrollbar.pack(side="right", fill="y")
+
+        save_dirs_buttons = ttk.Frame(save_dirs_frame)
+        save_dirs_buttons.pack(side="left", padx=(10, 0), anchor="n")
 
         ttk.Button(
-            save_dir_frame,
-            text="Browse",
-            command=self._browse_save_dir,
-            style="Custom.TButton"
-        ).pack(side="left")
+            save_dirs_buttons,
+            text="Add Folder...",
+            command=self._add_save_dir,
+            style="Custom.TButton",
+        ).pack(fill="x", pady=(0, 5))
+
+        ttk.Button(
+            save_dirs_buttons,
+            text="Remove Selected",
+            command=self._remove_save_dir,
+            style="Custom.TButton",
+        ).pack(fill="x")
 
         # Mark-all toggle
         self.save_sync_mark_all_var = tk.BooleanVar()
@@ -418,6 +455,52 @@ class SettingsPage:
             style="Custom.TCheckbutton",
             command=self._save_save_sync_settings
         ).pack(anchor="w", pady=(0, 8))
+
+        self.save_sync_auto_scan_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            save_sync_frame,
+            text="Check save folders automatically on startup "
+                 "(review required; nothing is applied automatically)",
+            variable=self.save_sync_auto_scan_var,
+            style="Custom.TCheckbutton",
+            command=self._save_save_sync_settings,
+        ).pack(anchor="w", pady=(0, 5))
+
+        periodic_row = ttk.Frame(save_sync_frame)
+        periodic_row.pack(fill="x", pady=(0, 8))
+        self.save_sync_periodic_scan_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            periodic_row,
+            text="Continue checking while the application is open "
+                 "(review required)",
+            variable=self.save_sync_periodic_scan_var,
+            style="Custom.TCheckbutton",
+            command=self._save_periodic_scan_settings,
+        ).pack(side="left")
+
+        ttk.Label(
+            periodic_row,
+            text="Every:",
+            style="Custom.TLabel",
+        ).pack(side="left", padx=(16, 5))
+        self.save_sync_scan_interval_var = tk.StringVar()
+        self.save_sync_scan_interval_combo = ttk.Combobox(
+            periodic_row,
+            textvariable=self.save_sync_scan_interval_var,
+            values=("5", "15", "30", "60"),
+            state="readonly",
+            width=5,
+        )
+        self.save_sync_scan_interval_combo.pack(side="left")
+        self.save_sync_scan_interval_combo.bind(
+            "<<ComboboxSelected>>",
+            self._save_periodic_scan_settings,
+        )
+        ttk.Label(
+            periodic_row,
+            text="minutes",
+            style="Custom.TLabel",
+        ).pack(side="left", padx=(5, 0))
 
         # Scan button + status
         scan_row = ttk.Frame(save_sync_frame)
@@ -431,6 +514,15 @@ class SettingsPage:
         )
         self.scan_saves_button.pack(side="left")
 
+        self.review_auto_scan_button = ttk.Button(
+            scan_row,
+            text="Review Auto-Scan...",
+            command=self._review_auto_scan,
+            style="Custom.TButton",
+            state="disabled",
+        )
+        self.review_auto_scan_button.pack(side="left", padx=(8, 0))
+
         self.save_sync_status_label = ttk.Label(
             scan_row,
             text="",
@@ -440,15 +532,17 @@ class SettingsPage:
 
         # Load persisted save-sync settings
         self._load_save_sync_settings()
-        self.save_sync_dir_entry.bind("<FocusOut>", self._save_save_sync_settings)
+        self._update_periodic_scan_controls()
+        self.frame.after(2000, self.start_save_sync_auto_scan)
+        self.frame.after(2500, self.start_save_sync_periodic_scan)
 
         # Log section with level dropdown and clear button
         log_header_frame = ttk.Frame(content)
         log_header_frame.pack(fill="x", pady=(0, 5))
-        
+
         # Log level dropdown (left side)
         ttk.Label(log_header_frame, text="Log Level:", style="Custom.TLabel").pack(side="left")
-        
+
         self.log_level_combo = ttk.Combobox(
             log_header_frame,
             values=["Information", "Debug", "Error"],
@@ -458,17 +552,17 @@ class SettingsPage:
         )
         self.log_level_combo.set("Information")
         self.log_level_combo.pack(side="left", padx=(10, 0))
-        
+
         # Bind log level change
         self.log_level_combo.bind("<<ComboboxSelected>>", self._on_log_level_changed)
-        
+
         # Clear button (right side)
         ttk.Button(
             log_header_frame,
             text="Clear",
             command=self.logger.clear_log
         ).pack(side="right")
-        
+
         # Log text area - takes remaining space to bottom
         log_text = self.logger.setup(content)
         log_text.pack(fill="both", expand=True, pady=(2, 5))
@@ -481,7 +575,7 @@ class SettingsPage:
         self._setup_page_scrolling(content, log_text)
 
         return self.frame
-    
+
     def _setup_page_scrolling(self, content, log_text):
         """Make the settings page scroll vertically and keep the log usable.
 
@@ -525,7 +619,7 @@ class SettingsPage:
         if self.log_level_combo:
             new_level = self.log_level_combo.get()
             self.logger.set_log_level(new_level)
-    
+
     def _on_download_mode_changed(self, *args):
         """Show/hide duplicate method options based on download mode"""
         mode = self.download_mode_var.get()
@@ -535,42 +629,42 @@ class SettingsPage:
         else:
             # Hide the entire duplicate frame
             self.duplicate_frame.pack_forget()
-    
+
     def _load_multi_type_settings(self):
         """Load multi-type settings from config"""
         try:
             # Use shared config instead of creating new instance
             config = self.setup_section.config
-            
+
             # Load settings with defaults
             enabled = config.get("multi_type_enabled", True)
             mode = config.get("multi_type_download_mode", "primary_only")
-            
+
             self.multi_type_enabled_var.set(enabled)
             self.download_mode_var.set(mode)
-            
+
         except Exception as e:
             print(f"Error loading multi-type settings: {e}")
             # Set defaults
             self.multi_type_enabled_var.set(True)
             self.download_mode_var.set("primary_only")
-    
+
     def _save_multi_type_settings(self, *args):
         """Save multi-type settings to config"""
         try:
             # Use shared config instead of creating new instance
             config = self.setup_section.config
-            
+
             enabled = self.multi_type_enabled_var.get()
             mode = self.download_mode_var.get()
-            
+
             config.set("multi_type_enabled", enabled)
-            config.set("multi_type_download_mode", mode)  
+            config.set("multi_type_download_mode", mode)
             config.save()  # Critical: Save changes to disk!
-            
+
         except Exception as e:
             print(f"Error saving multi-type settings: {e}")
-    
+
     def _check_for_updates(self):
         """Check for updates manually"""
         if not self.update_policy.checks_enabled:
@@ -583,26 +677,26 @@ class SettingsPage:
         try:
             # Import here to avoid circular imports
             from updater import Updater, UpdateDialog
-            
+
             # Disable button during check
             self.check_updates_button.config(state="disabled", text="Checking...")
             self.frame.update()
-            
+
             def check_updates():
                 try:
                     updater = Updater(VERSION.lstrip('v'))
                     update_info = updater.check_for_updates(silent=True)  # Use silent=True to avoid duplicate dialogs
-                    
+
                     # Schedule UI updates on the main thread
                     def update_ui():
                         try:
                             # Re-enable button
                             self.check_updates_button.config(state="normal", text="Check for Updates")
-                            
+
                             if update_info:
                                 # Add current version to update info
                                 update_info['current_version'] = VERSION.lstrip('v')
-                                
+
                                 # Show update dialog
                                 root = self.parent.winfo_toplevel()
                                 dialog = UpdateDialog(root, update_info)
@@ -612,31 +706,31 @@ class SettingsPage:
                                 messagebox.showinfo("No Updates", "You are already using the latest version!")
                         except Exception as e:
                             print(f"UI update error: {e}")
-                    
+
                     # Schedule UI update on main thread
                     root = self.parent.winfo_toplevel()
                     root.after(0, update_ui)
-                        
+
                 except Exception as e:
                     # Schedule error handling on main thread
                     def handle_error():
                         self.check_updates_button.config(state="normal", text="Check for Updates")
                         messagebox.showerror("Update Check Failed", f"Failed to check for updates: {str(e)}")
                         print(f"Update check error: {e}")  # Debug print
-                    
+
                     root = self.parent.winfo_toplevel()
                     root.after(0, handle_error)
-            
+
             # Run check in background thread
             import threading
             thread = threading.Thread(target=check_updates, daemon=True)
             thread.start()
-            
+
         except Exception as e:
             self.check_updates_button.config(state="normal", text="Check for Updates")
             messagebox.showerror("Update Check Failed", f"Failed to check for updates: {str(e)}")
             print(f"Outer update check error: {e}")  # Debug print
-    
+
     def _save_auto_check_setting(self):
         """Save auto-check updates setting"""
         if not self.update_policy.checks_enabled:
@@ -645,14 +739,14 @@ class SettingsPage:
         try:
             # Use shared config instead of creating new instance
             config = self.setup_section.config
-            
+
             auto_check = self.auto_check_updates_var.get()
             config.set("auto_check_updates", auto_check)
             config.save()  # Critical: Save changes to disk!
-            
+
         except Exception as e:
             print(f"Error saving auto-check setting: {e}")
-    
+
     def _load_auto_check_setting(self):
         """Load auto-check updates setting"""
         if not self.update_policy.checks_enabled:
@@ -662,26 +756,26 @@ class SettingsPage:
         try:
             # Use shared config instead of creating new instance
             config = self.setup_section.config
-            
+
             auto_check = config.get("auto_check_updates", False)
             self.auto_check_updates_var.set(auto_check)
-            
+
         except Exception as e:
             print(f"Error loading auto-check setting: {e}")
             self.auto_check_updates_var.set(True)  # Default to True
-    
+
     def _check_difficulty_migration(self):
         """Check if difficulty migrations are needed"""
         self.check_migration_button.config(state="disabled", text="Checking...")
         self.frame.update_idletasks()
-        
+
         try:
             from difficulty_migration import DifficultyMigrator
             from config_manager import ConfigManager
-            
+
             config = ConfigManager()
             output_dir = config.get("output_dir", "")
-            
+
             if not output_dir or not os.path.exists(output_dir):
                 self.migration_status_label.config(
                     text="⚠️ Configure output directory first",
@@ -690,15 +784,15 @@ class SettingsPage:
                 self.apply_migration_button.config(state="disabled")
                 self.check_migration_button.config(state="normal", text="Check for Migrations")
                 return
-            
+
             # Check for missing difficulty_id fields first
             migrator = DifficultyMigrator(output_dir)
             backfill_check = migrator.backfill_difficulty_ids(dry_run=True)
             backfill_count = backfill_check.get("backfilled_count", 0)
-            
+
             # Auto-detect renames
             detected = migrator.detect_renames_from_data()
-            
+
             if not detected and backfill_count == 0:
                 self.migration_status_label.config(
                     text="✅ Everything is up to date!",
@@ -707,32 +801,32 @@ class SettingsPage:
                 self.apply_migration_button.config(state="disabled")
                 self.check_migration_button.config(state="normal", text="Check for Migrations")
                 return
-            
+
             # Build status message
             status_parts = []
-            
+
             # Add backfill info if needed
             if backfill_count > 0:
                 status_parts.append(f"{backfill_count:,} hacks need difficulty_id backfill")
-            
+
             # Add rename info if needed
             if detected:
                 rename_count = len(detected)
                 total_hacks = sum(count for _, count in detected.values())
-                
+
                 if rename_count == 1:
                     old_name, (new_name, count) = list(detected.items())[0]
                     status_parts.append(f"'{old_name}' → '{new_name}' ({count:,} hacks)")
                 else:
                     renames = [f"'{old}' → '{new}'" for old, (new, _) in detected.items()]
                     status_parts.append(f"{rename_count} difficulty renames ({total_hacks:,} hacks)")
-            
+
             status_text = "⚠️ " + " | ".join(status_parts)
-            
+
             self.migration_status_label.config(text=status_text, foreground="orange")
             self.apply_migration_button.config(state="normal")
             self.check_migration_button.config(state="normal", text="Check for Migrations")
-                
+
         except Exception as e:
             self.migration_status_label.config(
                 text=f"❌ Check failed: {str(e)}",
@@ -742,74 +836,74 @@ class SettingsPage:
             self.check_migration_button.config(state="normal", text="Check for Migrations")
             if self.logger:
                 self.logger.log(f"Error checking difficulty migrations: {str(e)}", "Error")
-        
+
         self.frame.update_idletasks()
-    
+
     def _apply_difficulty_migration(self):
         """Apply difficulty migrations"""
         try:
             from difficulty_migration import DifficultyMigrator
             from config_manager import ConfigManager
             from tkinter import messagebox
-            
+
             config = ConfigManager()
             output_dir = config.get("output_dir", "")
-            
+
             if not output_dir or not os.path.exists(output_dir):
                 messagebox.showerror("Migration Error", "Output directory not configured or doesn't exist")
                 return
-            
+
             # Check for backfill needs and auto-detect renames
             migrator = DifficultyMigrator(output_dir)
             backfill_check = migrator.backfill_difficulty_ids(dry_run=True)
             detected = migrator.detect_renames_from_data()
-            
+
             backfill_count = backfill_check.get("backfilled_count", 0)
-            
+
             if not detected and backfill_count == 0:
                 messagebox.showinfo(
-                    "No Migrations Needed", 
+                    "No Migrations Needed",
                     "Everything is up to date! Your hacks are already using the latest difficulty categories from SMWCentral."
                 )
                 return
-            
+
             # Build confirmation message
             confirm_parts = []
-            
+
             if backfill_count > 0:
                 confirm_parts.append(f"Add missing difficulty_id field to {backfill_count:,} hacks")
-            
+
             if detected:
                 total_hacks = sum(count for _, count in detected.values())
                 renames = [f"  • '{old}' will become '{new}' ({count:,} hacks)" for old, (new, count) in detected.items()]
                 confirm_parts.append(f"Update difficulty names for {total_hacks:,} hacks:\n" + "\n".join(renames))
-            
+
             confirm_msg = "The following updates will be applied:\n\n" + "\n\n".join(confirm_parts)
             confirm_msg += f"\n\nThis will:\n• Backfill missing difficulty_id fields (for old hacks)\n• Rename your difficulty folders to match SMWCentral\n• Update all hack records in your database\n• Create a backup before making any changes\n\nDo you want to proceed?"
-            
+
             if not messagebox.askyesno("Confirm Migration", confirm_msg, icon='warning'):
                 return
-            
+
             # Disable button during migration
             self.apply_migration_button.config(state="disabled", text="Applying...")
             self.migration_status_label.config(text="⏳ Applying migrations...", foreground="blue")
             self.frame.update_idletasks()
-            
+
             # Lock collection page during migration
             from download_state_manager import set_download_active
             set_download_active(True)
-            
+
             try:
                 # Apply migrations
                 results = migrator.perform_migrations(dry_run=False)
-                
+
                 if results.get("success"):
                     summary = results.get("summary", {})
                     folders = summary.get("folders_renamed", 0)
                     json_entries = summary.get("json_entries_updated", 0)
                     backfilled = summary.get("difficulty_ids_backfilled", 0)
                     synced = summary.get("difficulty_fields_synced", 0)
-                    
+
                     success_msg = f"✅ Update Complete!\n\n"
                     if backfilled > 0:
                         success_msg += f"• Backfilled {backfilled} difficulty_id field(s)\n"
@@ -820,15 +914,15 @@ class SettingsPage:
                     success_msg += "Your collection now uses the latest difficulty categories from SMWCentral!\n"
                     if folders > 0:
                         success_msg += "(A backup was created in case you need to undo this change)"
-                    
+
                     messagebox.showinfo("Update Complete", success_msg)
-                    
+
                     self.migration_status_label.config(
                         text="✅ Migrations applied successfully",
                         foreground=STATUS_COLOR_SUCCESS
                     )
                     self.apply_migration_button.config(state="disabled", text="Apply Migrations")
-                    
+
                     if self.logger:
                         if backfilled > 0:
                             self.logger.log(f"Backfilled {backfilled} difficulty_id fields", "Information")
@@ -836,7 +930,7 @@ class SettingsPage:
                             self.logger.log(f"Synced {synced} difficulty fields", "Information")
                         for old_name, (new_name, count) in detected.items():
                             self.logger.log(f"Migrated '{old_name}' → '{new_name}' ({count:,} hacks)", "Information")
-                        
+
                         # Build comprehensive summary message
                         summary_parts = []
                         if backfilled > 0:
@@ -847,7 +941,7 @@ class SettingsPage:
                             summary_parts.append(f"{folders} folders renamed")
                         if json_entries > 0:
                             summary_parts.append(f"{json_entries} entries updated")
-                        
+
                         if summary_parts:
                             self.logger.log(f"Difficulty migration completed: {', '.join(summary_parts)}", "Information")
                         else:
@@ -856,24 +950,24 @@ class SettingsPage:
                     errors = results.get("errors", [])
                     error_msg = "Migration failed:\n\n" + "\n".join(errors) if errors else "Unknown error occurred"
                     messagebox.showerror("Migration Failed", error_msg)
-                    
+
                     self.migration_status_label.config(text="❌ Migration failed", foreground=STATUS_COLOR_ERROR)
                     self.apply_migration_button.config(state="normal", text="Apply Migrations")
             finally:
                 # Always unlock collection page when migration finishes
                 set_download_active(False)
-                
+
         except Exception as e:
             messagebox.showerror("Migration Error", f"Failed to apply migrations: {str(e)}")
             self.migration_status_label.config(text=f"❌ Error: {str(e)}", foreground=STATUS_COLOR_ERROR)
             self.apply_migration_button.config(state="normal", text="Apply Migrations")
-            
+
             if self.logger:
                 self.logger.log(f"Error applying difficulty migrations: {str(e)}", "Error")
     def _fetch_missing_metadata(self):
         """Fetch missing metadata (release dates, etc.) for existing hacks"""
         if not messagebox.askyesno(
-            "Fetch Metadata", 
+            "Fetch Metadata",
             "This will verify all hacks in your collection and fetch missing data (like Release Dates) from SMWCentral.\n\n"
             "This uses efficient bulk API requests to quickly update your collection.\n"
             "Typically completes in under a minute for most collections.\n\n"
@@ -884,90 +978,90 @@ class SettingsPage:
 
         # Setup cancellation flag
         self._cancel_fetch = False
-        
+
         def cancel_fetch():
             """Called when user clicks Cancel button"""
             if messagebox.askyesno("Cancel Fetch", "Are you sure you want to cancel the metadata fetch?"):
                 self._cancel_fetch = True
                 self.fetch_metadata_button.config(state="disabled", text="Cancelling...")
                 self.migration_status_label.config(text="⏳ Cancelling fetch...", foreground=STATUS_COLOR_WARNING)
-        
+
         # Change button to Cancel mode
         self.fetch_metadata_button.config(
-            state="normal", 
+            state="normal",
             text="Cancel Fetch",
             command=cancel_fetch
         )
         self.migration_status_label.config(text="⏳ Fetching metadata...", foreground=STATUS_COLOR_INFO)
-        
+
         # Lock collection page during metadata fetch
         from download_state_manager import set_download_active
         set_download_active(True)
-        
+
         def run_backfill():
             try:
                 import api_pipeline
                 from config_manager import ConfigManager
-                
+
                 # Setup logging callback
                 def log_cb(msg, level="Information"):
                     if self.logger:
                         self.logger.log(msg, level)
-                        
+
                 log_cb("Starting metadata backfill...", "Information")
-                
+
                 # Setup cancellation check
                 def check_cancel():
                     return self._cancel_fetch
-                
+
                 # Run the pipeline function with cancellation support
                 count = api_pipeline.backfill_metadata(log_callback=log_cb, cancel_check=check_cancel)
-                
+
                 # Check if cancelled
                 if count == -1:
                     log_cb("Metadata fetch cancelled by user", "Warning")
-                    
+
                     def update_ui_cancelled():
                         self.fetch_metadata_button.config(
-                            state="normal", 
+                            state="normal",
                             text="Fetch Metadata",
                             command=self._fetch_missing_metadata
                         )
                         self.migration_status_label.config(
-                            text="⚠️ Fetch cancelled", 
+                            text="⚠️ Fetch cancelled",
                             foreground=STATUS_COLOR_WARNING
                         )
-                        
+
                         # Unlock collection page
                         set_download_active(False)
-                        
+
                         messagebox.showinfo("Cancelled", "Metadata fetch was cancelled. No changes were made.")
-                    
+
                     self.frame.after(0, update_ui_cancelled)
                     return
-                
+
                 log_cb(f"Backfill completed: {count} hacks updated", "Information")
-                
+
                 # Update UI on main thread
                 def update_ui_success():
                     self.fetch_metadata_button.config(
-                        state="normal", 
+                        state="normal",
                         text="Fetch Metadata",
                         command=self._fetch_missing_metadata
                     )
                     self.migration_status_label.config(
-                        text=f"✅ Metadata updated for {count} hacks", 
+                        text=f"✅ Metadata updated for {count} hacks",
                         foreground=STATUS_COLOR_SUCCESS
                     )
-                    
+
                     # Unlock collection page
                     set_download_active(False)
-                    
+
                     if count > 0:
                         messagebox.showinfo("Complete", f"Successfully updated metadata for {count} hacks.")
                     else:
                         messagebox.showinfo("Complete", "All hacks already have metadata - nothing to update.")
-                    
+
                     # Trigger Collection Page Reload via injected callback
                     if hasattr(self, 'reload_collection_callback') and self.reload_collection_callback:
                         try:
@@ -975,29 +1069,29 @@ class SettingsPage:
                             self.reload_collection_callback()
                         except Exception as e:
                             print(f"DEBUG: Failed to reload collection callback: {e}")
-                    
+
                 self.frame.after(0, update_ui_success)
-                
+
             except Exception as e:
                 import traceback
                 error_details = traceback.format_exc()
                 print(f"ERROR in backfill: {error_details}")
-                
+
                 def update_ui_error():
                     self.fetch_metadata_button.config(
-                        state="normal", 
+                        state="normal",
                         text="Fetch Metadata",
                         command=self._fetch_missing_metadata
                     )
                     self.migration_status_label.config(text="❌ Fetch failed", foreground=STATUS_COLOR_ERROR)
-                    
+
                     # Unlock collection page
                     set_download_active(False)
-                    
+
                     messagebox.showerror("Error", f"Failed to fetch metadata: {str(e)}")
                     if self.logger:
                         self.logger.log(f"Metadata backfill error: {str(e)}", "Error")
-                
+
                 self.frame.after(0, update_ui_error)
 
         import threading
@@ -1087,29 +1181,29 @@ class SettingsPage:
 
             self.emulator_path_entry.delete(0, tk.END)
             self.emulator_path_entry.insert(0, filename)
-            
+
             # Auto-fill command line arguments for known emulators
             if hasattr(self, '_auto_fill_emulator_args'):
                 self._auto_fill_emulator_args(filename)
-                
+
             self._save_emulator_settings()
 
         except Exception as e:
             if self.logger:
                 self.logger.log(f"Failed to browse for emulator: {e}", "Error")
             messagebox.showerror("Browse Error", f"Failed to browse for emulator:\n\n{e}")
-    
+
     def _auto_fill_emulator_args(self, emulator_path):
         """Auto-fill command line arguments for known emulators if args field is empty"""
         # Only auto-fill if the args field is currently empty
         current_args = self.emulator_args_entry.get().strip()
         if current_args:
             return  # Don't overwrite existing arguments
-        
+
         emulator_lower = emulator_path.lower()
         system = platform.system()
         suggested_args = None
-        
+
         # RetroArch detection
         if "retroarch" in emulator_lower:
             if system == "Darwin":  # macOS
@@ -1118,31 +1212,31 @@ class SettingsPage:
                 suggested_args = '-L cores/snes9x_libretro.dll "%1"'
             else:  # Linux
                 suggested_args = '-L ~/.config/retroarch/cores/snes9x_libretro.so "%1"'
-        
+
         # Apply suggested arguments if found
         if suggested_args:
             self.emulator_args_entry.delete(0, tk.END)
             self.emulator_args_entry.insert(0, suggested_args)
             self.emulator_args_enabled_var.set(True)
             self._on_emulator_args_toggle()  # Update UI state
-            
+
             if self.logger:
                 self.logger.log(f"Auto-filled RetroArch command line arguments", "Information")
-    
+
     def _convert_app_to_executable(self, app_path):
         """Convert macOS .app bundle path to actual executable path"""
         # Extract app name from path
         app_name = os.path.basename(app_path).replace(".app", "")
-        
+
         # Standard macOS app structure: AppName.app/Contents/MacOS/AppName
         executable_path = os.path.join(app_path, "Contents", "MacOS", app_name)
-        
+
         # Check if the standard executable exists
         if os.path.exists(executable_path):
             if self.logger:
                 self.logger.log(f"Converted .app bundle to executable: {executable_path}", "Information")
             return executable_path
-        
+
         # Fallback: Try to find any executable in Contents/MacOS/
         macos_dir = os.path.join(app_path, "Contents", "MacOS")
         if os.path.exists(macos_dir):
@@ -1152,27 +1246,27 @@ class SettingsPage:
                     if self.logger:
                         self.logger.log(f"Found executable in .app bundle: {file_path}", "Information")
                     return file_path
-        
+
         # If no executable found, return original path with warning
         if self.logger:
             self.logger.log(f"Could not find executable in .app bundle, using bundle path", "Warning")
         return app_path
-    
+
     def _load_emulator_settings(self):
         """Load emulator settings from config"""
         try:
             config = self.setup_section.config
-            
+
             emulator_path = config.get("emulator_path", "")
             emulator_args = config.get("emulator_args", "")
             emulator_args_enabled = config.get("emulator_args_enabled", False)
-            
+
             self.emulator_path_entry.delete(0, tk.END)
             self.emulator_path_entry.insert(0, emulator_path)
-            
+
             self.emulator_args_entry.delete(0, tk.END)
             self.emulator_args_entry.insert(0, emulator_args)
-            
+
             self.emulator_args_enabled_var.set(emulator_args_enabled)
 
             show_rom_picker = config.get("show_rom_picker", False)
@@ -1180,31 +1274,31 @@ class SettingsPage:
 
             # Update entry state based on checkbox
             self._on_emulator_args_toggle()
-            
+
         except Exception as e:
             print(f"Error loading emulator settings: {e}")
-    
+
     def _save_emulator_settings(self, event=None):
         """Save emulator settings to config"""
         try:
             config = self.setup_section.config
-            
+
             emulator_path = self.emulator_path_entry.get().strip()
             emulator_args = self.emulator_args_entry.get().strip()
             emulator_args_enabled = self.emulator_args_enabled_var.get()
-            
+
             config.set("emulator_path", emulator_path)
             config.set("emulator_args", emulator_args)
             config.set("emulator_args_enabled", emulator_args_enabled)
             config.set("show_rom_picker", self.show_rom_picker_var.get())
-            
+
             # Save the config
             config.save()
-            
+
             # Show success message briefly or via log
             if self.logger:
                 self.logger.log(f"Emulator settings saved - path: '{emulator_path}'", "Information")
-            
+
             # Notify callback if registered (e.g., collection page to refresh cache)
             if self.emulator_settings_callback:
                 if self.logger:
@@ -1234,10 +1328,10 @@ class SettingsPage:
                 except Exception as e:
                     if self.logger:
                         self.logger.log(f"Error triggering collection reload: {e}", "Error")
-            
+
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save emulator settings: {e}")
-    
+
     def _on_emulator_args_toggle(self):
         """Handle toggle of emulator args checkbox"""
         enabled = self.emulator_args_enabled_var.get()
@@ -1249,112 +1343,460 @@ class SettingsPage:
     # Save Data Sync
     # ------------------------------------------------------------------ #
 
+    def _save_sync_directories_from_widget(self):
+        """Return the currently displayed save source folders."""
+
+        return [
+            self.save_sync_dirs_listbox.get(index)
+            for index in range(self.save_sync_dirs_listbox.size())
+        ]
+
+    def _populate_save_sync_directories(self, directories):
+        """Replace the save source list while preserving configured order."""
+
+        self.save_sync_dirs_listbox.delete(0, tk.END)
+        for directory in directories:
+            self.save_sync_dirs_listbox.insert(tk.END, directory)
+
     def _load_save_sync_settings(self):
         """Load save-sync settings from config into the widgets."""
+
         try:
+            import save_sync
+
             config = self.setup_section.config
-            self.save_sync_dir_entry.delete(0, tk.END)
-            self.save_sync_dir_entry.insert(0, config.get("save_sync_dir", ""))
-            self.save_sync_mark_all_var.set(config.get("save_sync_mark_all", False))
+            directories = save_sync.get_save_directories(config)
+            self._populate_save_sync_directories(directories)
+            self.save_sync_mark_all_var.set(
+                config.get("save_sync_mark_all", False)
+            )
+            self.save_sync_auto_scan_var.set(
+                config.get("save_sync_auto_scan", False)
+            )
+            self.save_sync_periodic_scan_var.set(
+                config.get("save_sync_periodic_scan", False)
+            )
+            self.save_sync_scan_interval_var.set(
+                str(
+                    save_sync.normalize_auto_scan_interval(
+                        config.get(
+                            "save_sync_scan_interval_minutes", 15
+                        )
+                    )
+                )
+            )
         except Exception as e:
             print(f"Error loading save sync settings: {e}")
 
     def _save_save_sync_settings(self, event=None):
         """Persist save-sync settings to config."""
+
         try:
+            import save_sync
+
             config = self.setup_section.config
-            config.set("save_sync_dir", self.save_sync_dir_entry.get().strip())
+            save_sync.set_save_directories(
+                config,
+                self._save_sync_directories_from_widget(),
+            )
             config.set("save_sync_mark_all", self.save_sync_mark_all_var.get())
-            config.save()
+            config.set(
+                "save_sync_auto_scan",
+                self.save_sync_auto_scan_var.get(),
+            )
+            config.set(
+                "save_sync_periodic_scan",
+                self.save_sync_periodic_scan_var.get(),
+            )
+            config.set(
+                "save_sync_scan_interval_minutes",
+                save_sync.normalize_auto_scan_interval(
+                    self.save_sync_scan_interval_var.get()
+                ),
+            )
         except Exception as e:
             print(f"Error saving save sync settings: {e}")
 
-    def _browse_save_dir(self):
-        """Browse for the emulator/console save directory."""
+    def _update_periodic_scan_controls(self):
+        """Enable interval selection only while periodic review scans are on."""
+
+        state = (
+            "readonly"
+            if self.save_sync_periodic_scan_var.get()
+            else "disabled"
+        )
+        self.save_sync_scan_interval_combo.config(state=state)
+
+    def _save_periodic_scan_settings(self, event=None):
+        """Persist and reschedule the review-only periodic scan."""
+
+        self._update_periodic_scan_controls()
+        self._save_save_sync_settings()
+        self._restart_periodic_save_sync_scan()
+
+    def _add_save_dir(self):
+        """Add another emulator or console save source folder."""
+
         try:
+            import save_sync
             from platform_utils import pick_directory
-            current = self.save_sync_dir_entry.get().strip()
+
+            directories = self._save_sync_directories_from_widget()
+            selected_indices = self.save_sync_dirs_listbox.curselection()
+            if selected_indices:
+                current = self.save_sync_dirs_listbox.get(selected_indices[0])
+            else:
+                current = directories[0] if directories else ""
+
             selected = pick_directory(
-                title="Select Save Directory",
-                initial_dir=current if current and os.path.isdir(current) else None,
+                title="Add Save Folder",
+                initial_dir=(
+                    current if current and os.path.isdir(current) else None
+                ),
             )
             if not selected:
                 return
-            self.save_sync_dir_entry.delete(0, tk.END)
-            self.save_sync_dir_entry.insert(0, selected)
-            self._save_save_sync_settings()
-        except Exception as e:
-            messagebox.showerror("Save Data Sync", f"Failed to pick directory: {e}")
 
-    def _scan_saves(self):
-        """Scan the save directory and open the review dialog."""
-        directory = self.save_sync_dir_entry.get().strip()
-        if not directory or not os.path.isdir(directory):
+            save_sync.add_save_directory(self.setup_section.config, selected)
+            self._populate_save_sync_directories(
+                save_sync.get_save_directories(self.setup_section.config)
+            )
+        except Exception as e:
             messagebox.showerror(
                 "Save Data Sync",
-                "Please select a valid save directory first."
+                f"Failed to add save folder: {e}",
             )
+
+    def _remove_save_dir(self):
+        """Remove the selected source without touching files on disk."""
+
+        selected_indices = self.save_sync_dirs_listbox.curselection()
+        if not selected_indices:
+            messagebox.showinfo(
+                "Save Data Sync",
+                "Select a save folder to remove first.",
+            )
+            return
+
+        try:
+            import save_sync
+
+            directory = self.save_sync_dirs_listbox.get(selected_indices[0])
+            save_sync.remove_save_directory(
+                self.setup_section.config,
+                directory,
+            )
+            self._populate_save_sync_directories(
+                save_sync.get_save_directories(self.setup_section.config)
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "Save Data Sync",
+                f"Failed to remove save folder: {e}",
+            )
+
+    def _available_save_directories(self, interactive):
+        """Return available configured sources for manual or startup scans."""
+
+        import save_sync
+
+        directories = save_sync.get_save_directories(
+            self.setup_section.config
+        )
+        if not directories:
+            if interactive:
+                messagebox.showerror(
+                    "Save Data Sync",
+                    "Add at least one save folder first.",
+                )
+            else:
+                self.save_sync_status_label.config(
+                    text="Auto-scan skipped: no save folders",
+                    foreground=STATUS_COLOR_WARNING,
+                )
+            return []
+
+        available = [
+            directory for directory in directories if os.path.isdir(directory)
+        ]
+        unavailable = [
+            directory for directory in directories
+            if not os.path.isdir(directory)
+        ]
+        if not available:
+            if interactive:
+                messagebox.showerror(
+                    "Save Data Sync",
+                    "None of the configured save folders are currently "
+                    "available.",
+                )
+            else:
+                self.save_sync_status_label.config(
+                    text="Auto-scan skipped: folders unavailable",
+                    foreground=STATUS_COLOR_WARNING,
+                )
+                if self.logger:
+                    self.logger.log(
+                        "Save Data Sync automatic scan skipped because no "
+                        "configured folder was available.",
+                        "Information",
+                    )
+            return []
+
+        if unavailable and interactive:
+            missing_names = "\n".join(
+                f"• {directory}" for directory in unavailable
+            )
+            proceed = messagebox.askyesno(
+                "Unavailable Save Folders",
+                "These configured folders are unavailable and will be "
+                "skipped:\n\n"
+                f"{missing_names}\n\n"
+                f"Continue with the {len(available)} available folder(s)?",
+            )
+            if not proceed:
+                return []
+        elif unavailable and self.logger:
+            self.logger.log(
+                "Save Data Sync automatic scan skipped "
+                f"{len(unavailable)} unavailable configured folder(s).",
+                "Information",
+            )
+
+        return available
+
+    def start_save_sync_periodic_scan(self):
+        """Schedule opt-in review scans while the settings page is alive."""
+
+        self._restart_periodic_save_sync_scan()
+
+    def _restart_periodic_save_sync_scan(self):
+        """Cancel the old timer and schedule the current configured interval."""
+
+        if self._periodic_scan_job is not None:
+            try:
+                self.frame.after_cancel(self._periodic_scan_job)
+            except (AttributeError, tk.TclError):
+                pass
+            self._periodic_scan_job = None
+
+        if not self.save_sync_periodic_scan_var.get():
+            return
+
+        import save_sync
+
+        minutes = save_sync.normalize_auto_scan_interval(
+            self.save_sync_scan_interval_var.get()
+        )
+        self._periodic_scan_job = self.frame.after(
+            minutes * 60 * 1000,
+            self._run_periodic_save_sync_scan,
+        )
+
+    def _run_periodic_save_sync_scan(self):
+        """Run a noninteractive scan unless work or review is already pending."""
+
+        self._periodic_scan_job = None
+        if not self.save_sync_periodic_scan_var.get():
+            return
+
+        if not self._auto_scan_running and not self._pending_auto_scan_candidates:
+            self._scan_saves(auto=True)
+
+        self._restart_periodic_save_sync_scan()
+
+    def start_save_sync_auto_scan(self):
+        """Run one opt-in startup scan without opening or applying a dialog."""
+
+        if self._auto_scan_started:
+            return
+        self._auto_scan_started = True
+        if not self.save_sync_auto_scan_var.get():
+            return
+        self._scan_saves(auto=True)
+
+    def _scan_saves(self, auto=False):
+        """Scan configured sources manually or prepare an opt-in review."""
+
+        import save_sync
+
+        if auto and self._auto_scan_running:
+            return
+        if not auto:
+            self._pending_auto_scan_candidates = []
+
+        available = self._available_save_directories(interactive=not auto)
+        if not available:
             return
 
         data_manager = getattr(self, "data_manager", None)
         if data_manager is None:
-            messagebox.showerror(
-                "Save Data Sync",
-                "Collection data is not available yet. Open the Collection tab once, then try again."
-            )
+            if auto:
+                self.save_sync_status_label.config(
+                    text="Auto-scan skipped: collection unavailable",
+                    foreground=STATUS_COLOR_WARNING,
+                )
+            else:
+                messagebox.showerror(
+                    "Save Data Sync",
+                    "Collection data is not available yet. Open the Collection "
+                    "tab once, then try again.",
+                )
             return
 
         self._save_save_sync_settings()
         mark_all = self.save_sync_mark_all_var.get()
-
+        self._auto_scan_running = auto
         self.scan_saves_button.config(state="disabled", text="Scanning...")
-        self.save_sync_status_label.config(text="⏳ Scanning saves...", foreground=STATUS_COLOR_INFO)
+        self.review_auto_scan_button.config(state="disabled")
+        prefix = "Auto-scanning" if auto else "Scanning"
+        self.save_sync_status_label.config(
+            text=f"⏳ {prefix} {len(available)} folder(s)...",
+            foreground=STATUS_COLOR_INFO,
+        )
         self.frame.update_idletasks()
 
         def worker():
             error = None
             candidates = []
             try:
-                import save_sync
                 hacks = data_manager.get_all_hacks(include_obsolete=False)
-                candidates = save_sync.scan_saves(directory, hacks, mark_all=mark_all)
-            except Exception as e:
-                error = e
+                existing_ids = {str(hack.get("id", "")) for hack in hacks}
+                associations, removed = save_sync.prune_save_associations(
+                    self.setup_section.config.get(
+                        save_sync.ASSOCIATION_CONFIG_KEY, {}
+                    ),
+                    existing_ids,
+                )
+                if removed:
+                    self.setup_section.config.set(
+                        save_sync.ASSOCIATION_CONFIG_KEY,
+                        associations,
+                    )
+                candidates = save_sync.scan_save_directories(
+                    available,
+                    hacks,
+                    mark_all=mark_all,
+                    associations=associations,
+                )
+            except Exception as exc:
+                error = exc
 
-            # Marshal results back to the Tk main thread.
-            self.frame.after(0, lambda: self._on_scan_complete(candidates, error))
+            self.frame.after(
+                0,
+                lambda: self._on_scan_complete(
+                    candidates, error, auto=auto
+                ),
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_scan_complete(self, candidates, error):
-        """Handle scan results on the main thread and show the review dialog."""
+    def _on_scan_complete(self, candidates, error, auto=False):
+        """Handle manual results or retain startup results for later review."""
+
+        import save_sync
+
+        self._auto_scan_running = False
         self.scan_saves_button.config(state="normal", text="Scan Saves")
 
         if error is not None:
-            self.save_sync_status_label.config(text="❌ Scan failed", foreground=STATUS_COLOR_ERROR)
-            messagebox.showerror("Save Data Sync", f"Failed to scan saves:\n{error}")
+            label = "Auto-scan failed" if auto else "Scan failed"
+            self.save_sync_status_label.config(
+                text=f"❌ {label}",
+                foreground=STATUS_COLOR_ERROR,
+            )
+            if not auto:
+                messagebox.showerror(
+                    "Save Data Sync",
+                    f"Failed to scan saves:\n{error}",
+                )
             if self.logger:
-                self.logger.log(f"Save data scan failed: {error}", "Error")
+                self.logger.log(
+                    f"Save data scan failed: {error}",
+                    "Error",
+                )
+            return
+
+        if auto:
+            collection = getattr(self.data_manager, "data", {})
+            review_candidates = save_sync.auto_review_candidates(
+                candidates,
+                collection=collection,
+            )
+            self._pending_auto_scan_candidates = review_candidates
+            if not review_candidates:
+                self.review_auto_scan_button.config(state="disabled")
+                self.save_sync_status_label.config(
+                    text="Auto-scan: no changes to review",
+                    foreground=STATUS_COLOR_SUCCESS,
+                )
+                return
+
+            completions = sum(
+                candidate.status == save_sync.STATUS_COMPLETED
+                for candidate in review_candidates
+            )
+            unmatched = sum(
+                not candidate.hack_id for candidate in review_candidates
+            )
+            self.review_auto_scan_button.config(state="normal")
+            self.save_sync_status_label.config(
+                text=(
+                    f"Auto-scan ready: {completions} completion(s) · "
+                    f"{unmatched} unmatched"
+                ),
+                foreground=STATUS_COLOR_SUCCESS,
+            )
             return
 
         if not candidates:
             self.save_sync_status_label.config(
-                text="No .srm/.sav files found", foreground=STATUS_COLOR_WARNING
+                text="No .srm/.sav files found",
+                foreground=STATUS_COLOR_WARNING,
             )
             messagebox.showinfo(
                 "Save Data Sync",
-                "No .srm or .sav files were found in that directory."
+                "No .srm or .sav files were found in the configured folders.",
             )
             return
 
-        matched = [c for c in candidates if c.hack_id]
-        unmatched = [c for c in candidates if not c.hack_id]
+        matched = [
+            candidate for candidate in candidates if candidate.hack_id
+        ]
+        unmatched = [
+            candidate for candidate in candidates if not candidate.hack_id
+        ]
         self.save_sync_status_label.config(
             text=f"{len(matched)} matched · {len(unmatched)} unmatched",
-            foreground=STATUS_COLOR_SUCCESS
+            foreground=STATUS_COLOR_SUCCESS,
         )
+        self._show_save_sync_dialog(candidates)
+
+    def _review_auto_scan(self):
+        """Open retained results only when they still require review."""
+
+        import save_sync
+
+        collection = getattr(self.data_manager, "data", {})
+        candidates = save_sync.auto_review_candidates(
+            self._pending_auto_scan_candidates,
+            collection=collection,
+        )
+        self._pending_auto_scan_candidates = []
+        self.review_auto_scan_button.config(state="disabled")
+        if not candidates:
+            self.save_sync_status_label.config(
+                text="Auto-scan: no changes to review",
+                foreground=STATUS_COLOR_SUCCESS,
+            )
+            return
+        self._show_save_sync_dialog(candidates)
+
+    def _show_save_sync_dialog(self, candidates):
+        """Open the existing review dialog; no scan path applies directly."""
 
         from ui.save_sync_dialog import SaveSyncDialog
+
         reload_cb = getattr(self, "reload_collection_callback", None)
         dialog = SaveSyncDialog(
             self.frame,
@@ -1363,5 +1805,6 @@ class SettingsPage:
             logger=self.logger,
             on_applied=reload_cb,
             mark_all=self.save_sync_mark_all_var.get(),
+            config_manager=self.setup_section.config,
         )
         dialog.show()

@@ -17,7 +17,7 @@ import os
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, filedialog, messagebox
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -52,29 +52,525 @@ _RESOLUTION_LABEL = {
     save_sync.RESOLUTION_NO_MATCH: "No match",
     save_sync.RESOLUTION_AMBIGUOUS: "Ambiguous",
     save_sync.RESOLUTION_ERROR: "Lookup error",
+    save_sync.RESOLUTION_LOCAL: "Create local",
 }
 # Orphan resolutions the user can actually act on.
-_ORPHAN_ACTIONABLE = {save_sync.RESOLUTION_RESOLVED, save_sync.RESOLUTION_EXISTS}
+_ORPHAN_ACTIONABLE = {
+    save_sync.RESOLUTION_RESOLVED,
+    save_sync.RESOLUTION_EXISTS,
+    save_sync.RESOLUTION_LOCAL,
+}
+
+_CONFIDENCE_LABEL = {
+    "medium": "Medium",
+    "low": "Low",
+    "none": "None",
+}
+
+
+def _candidate_evidence(candidate):
+    """Return analysis evidence without assuming a concrete analysis class."""
+
+    try:
+        evidence = candidate.evidence()
+    except (AttributeError, TypeError, ValueError):
+        evidence = {}
+    return evidence if isinstance(evidence, dict) else {}
+
+
+def _confidence_key(candidate):
+    evidence = _candidate_evidence(candidate)
+    confidence = evidence.get(
+        "confidence", getattr(candidate, "confidence", "none")
+    )
+    key = str(confidence or "none").strip().lower()
+    return key if key in _CONFIDENCE_LABEL else "none"
+
+
+def _confidence_label(candidate):
+    return _CONFIDENCE_LABEL[_confidence_key(candidate)]
+
+
+def _accepted_copy_kinds(evidence, slot):
+    copies = set()
+    for attempt in evidence.get("attempts", []) or []:
+        if not isinstance(attempt, dict):
+            continue
+        if not attempt.get("accepted") or attempt.get("slot") != slot:
+            continue
+        copy_kind = attempt.get("copy_kind")
+        if copy_kind:
+            copies.add(str(copy_kind))
+    return copies
+
+
+def _analysis_summary(candidate):
+    """Return a concise explanation suitable for the review interface."""
+
+    evidence = _candidate_evidence(candidate)
+    profile = str(evidence.get("profile") or getattr(
+        candidate, "profile", "unknown"
+    ))
+    slot = evidence.get("selected_slot")
+    value = evidence.get("selected_value")
+
+    if profile == "relocated_standard_smw_slots":
+        explanation = f"Relocated standard slot {slot or '?'} + backup"
+    elif profile == "standard_smw_slots":
+        copies = _accepted_copy_kinds(evidence, slot)
+        if {"primary", "backup"}.issubset(copies):
+            explanation = f"Standard slot {slot or '?'} + backup"
+        elif copies:
+            copy_name = sorted(copies)[0].title()
+            explanation = f"Standard slot {slot or '?'} ({copy_name} only)"
+        else:
+            explanation = f"Checksum-valid standard slot {slot or '?'}"
+    elif profile == "legacy_raw_counter":
+        explanation = "Unvalidated legacy raw counter"
+    elif profile == "expanded_sram_unknown":
+        explanation = "Unknown expanded SRAM layout"
+    elif value is None:
+        explanation = "No trusted progress value"
+    else:
+        explanation = profile.replace("_", " ").strip().title()
+
+    if isinstance(value, int):
+        explanation += f" · {value} detected event(s)"
+    return explanation
+
+
+def _analysis_detail(candidate):
+    if candidate is None:
+        return "Select a row to see its save-analysis evidence."
+    confidence = _confidence_label(candidate)
+    prefix = "No confidence" if confidence == "None" else f"{confidence} confidence"
+    return f"{prefix} · {_analysis_summary(candidate)}"
+
+
+class ManualSmwcSearchDialog:
+    """Modal free-text SMWC search for one unresolved save."""
+
+    def __init__(self, parent, candidate, existing_ids, fetch_fn=None,
+                 logger=None, on_selected=None):
+        self.parent = parent
+        self.candidate = candidate
+        self.existing_ids = set(existing_ids)
+        self.fetch_fn = fetch_fn
+        self.logger = logger
+        self.on_selected = on_selected
+
+        self.win = None
+        self.query_var = None
+        self.result_tree = None
+        self.search_button = None
+        self.use_button = None
+        self.status_label = None
+        self.options = {}
+        self._search_running = False
+
+    def show(self):
+        self.win = tk.Toplevel(self.parent)
+        self.win.title(f"Search SMWCentral - {self.candidate.save_name}")
+        self.win.geometry("760x470")
+        self.win.transient(self.parent)
+        self.win.grab_set()
+        self.win.protocol("WM_DELETE_WINDOW", self._close)
+
+        container = ttk.Frame(self.win, padding=15)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(
+            container,
+            text="Search SMWCentral manually, select the correct hack, then "
+                 "confirm the selection. No result is chosen automatically.",
+            wraplength=720,
+        ).pack(anchor="w", pady=(0, 10))
+
+        query_row = ttk.Frame(container)
+        query_row.pack(fill="x", pady=(0, 10))
+        ttk.Label(query_row, text="Search:").pack(side="left")
+        self.query_var = tk.StringVar(
+            value=save_sync.make_search_query(self.candidate.save_name)
+        )
+        entry = ttk.Entry(query_row, textvariable=self.query_var)
+        entry.pack(side="left", fill="x", expand=True, padx=(8, 8))
+        entry.bind("<Return>", lambda _event: self._start_search())
+        self.search_button = ttk.Button(
+            query_row, text="Search", command=self._start_search
+        )
+        self.search_button.pack(side="right")
+
+        columns = ("name", "difficulty", "release", "collection")
+        frame = ttk.Frame(container)
+        frame.pack(fill="both", expand=True)
+        self.result_tree = ttk.Treeview(
+            frame, columns=columns, show="headings", selectmode="browse"
+        )
+        headings = {
+            "name": ("Hack", 330, "w", True),
+            "difficulty": ("Difficulty", 120, "w", False),
+            "release": ("Release", 100, "w", False),
+            "collection": ("Collection", 120, "w", False),
+        }
+        for column, (label, width, anchor, stretch) in headings.items():
+            self.result_tree.heading(column, text=label)
+            self.result_tree.column(
+                column, width=width, anchor=anchor, stretch=stretch
+            )
+        scrollbar = ttk.Scrollbar(
+            frame, orient="vertical", command=self.result_tree.yview
+        )
+        self.result_tree.configure(yscrollcommand=scrollbar.set)
+        self.result_tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        self.result_tree.bind("<<TreeviewSelect>>", self._selection_changed)
+        self.result_tree.bind("<Double-1>", self._use_selected)
+
+        footer = ttk.Frame(container)
+        footer.pack(fill="x", pady=(10, 0))
+        self.status_label = ttk.Label(footer, text="", foreground="gray")
+        self.status_label.pack(side="left")
+        self.use_button = ttk.Button(
+            footer, text="Use Selected", state="disabled",
+            command=self._use_selected,
+        )
+        self.use_button.pack(side="right")
+        ttk.Button(footer, text="Cancel", command=self._close).pack(
+            side="right", padx=(0, 8)
+        )
+
+        self._center()
+        entry.focus_set()
+        entry.selection_range(0, "end")
+        return self.win
+
+    def _start_search(self):
+        if self._search_running:
+            return
+        query = self.query_var.get().strip()
+        if not query:
+            self.status_label.config(text="Enter a search term.")
+            return
+
+        self._search_running = True
+        self.search_button.config(state="disabled")
+        self.use_button.config(state="disabled")
+        self.status_label.config(text="Searching SMWCentral...")
+        self.options.clear()
+        for iid in self.result_tree.get_children():
+            self.result_tree.delete(iid)
+
+        threading.Thread(
+            target=self._search_worker, args=(query,), daemon=True
+        ).start()
+
+    def _search_worker(self, query):
+        result = save_sync.search_orphan_options(
+            query,
+            self.existing_ids,
+            fetch_fn=self.fetch_fn,
+            log=self.logger.log if self.logger else None,
+        )
+        self._ui(self._show_results, result)
+
+    def _show_results(self, result):
+        self._search_running = False
+        try:
+            self.search_button.config(state="normal")
+        except tk.TclError:
+            return
+
+        options = result.get("options", [])
+        for option in options:
+            release = "Obsolete" if option["obsolete"] else "Current"
+            collection = "Already added" if option["in_collection"] else "New"
+            iid = self.result_tree.insert(
+                "",
+                "end",
+                values=(
+                    option["name"],
+                    option["difficulty"] or "-",
+                    release,
+                    collection,
+                ),
+            )
+            self.options[iid] = option
+
+        if result.get("status") == save_sync.RESOLUTION_ERROR:
+            message = "SMWCentral search failed. Check the log and try again."
+        elif options:
+            message = f"Found {len(options)} result(s). Select the correct hack."
+        else:
+            message = "No results found. Try a different search term."
+        self.status_label.config(text=message)
+        self._selection_changed()
+
+    def _selection_changed(self, _event=None):
+        selected = self.result_tree.selection() if self.result_tree else ()
+        state = (
+            "normal"
+            if len(selected) == 1 and not self._search_running
+            else "disabled"
+        )
+        try:
+            self.use_button.config(state=state)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _use_selected(self, _event=None):
+        selected = self.result_tree.selection()
+        if len(selected) != 1:
+            return
+        option = self.options.get(selected[0])
+        if not option:
+            return
+
+        resolution = save_sync.resolution_for_selected_hack(
+            option["hack"], self.existing_ids
+        )
+        if resolution["status"] not in _ORPHAN_ACTIONABLE:
+            self.status_label.config(text="The selected result cannot be used.")
+            return
+
+        if self.on_selected:
+            self.on_selected(resolution)
+        self._close()
+
+    def _ui(self, func, *args):
+        try:
+            if self.win and self.win.winfo_exists():
+                self.win.after(0, lambda: func(*args))
+        except tk.TclError:
+            pass
+
+    def _close(self):
+        try:
+            if self.win and self.win.winfo_exists():
+                self.win.destroy()
+            if self.parent and self.parent.winfo_exists():
+                self.parent.grab_set()
+        except tk.TclError:
+            pass
+
+    def _center(self):
+        self.win.update_idletasks()
+        try:
+            x = self.parent.winfo_x() + (
+                self.parent.winfo_width() - self.win.winfo_width()
+            ) // 2
+            y = self.parent.winfo_y() + (
+                self.parent.winfo_height() - self.win.winfo_height()
+            ) // 2
+            self.win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+
+
+class LocalSaveEntryDialog:
+    """Modal editor for a non-SMWC save-backed collection entry."""
+
+    def __init__(self, parent, candidate, existing_ids, on_selected=None):
+        self.parent = parent
+        self.candidate = candidate
+        self.existing_ids = set(existing_ids)
+        self.on_selected = on_selected
+        self.win = None
+        self.title_var = None
+        self.exits_var = None
+
+    def show(self):
+        self.win = tk.Toplevel(self.parent)
+        self.win.title(f"Create Local Entry - {self.candidate.save_name}")
+        self.win.geometry("520x230")
+        self.win.transient(self.parent)
+        self.win.grab_set()
+
+        container = ttk.Frame(self.win, padding=15)
+        container.pack(fill="both", expand=True)
+        ttk.Label(
+            container,
+            text="Create a collection entry for a hack that is not listed on "
+                 "SMWCentral. The save file remains unchanged.",
+            wraplength=480,
+        ).pack(anchor="w", pady=(0, 12))
+
+        form = ttk.Frame(container)
+        form.pack(fill="x")
+        form.columnconfigure(1, weight=1)
+        ttk.Label(form, text="Title:").grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.title_var = tk.StringVar(
+            value=save_sync.make_search_query(self.candidate.save_name)
+        )
+        title_entry = ttk.Entry(form, textvariable=self.title_var)
+        title_entry.grid(row=0, column=1, sticky="ew", pady=4)
+
+        ttk.Label(form, text="Total exits:").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.exits_var = tk.StringVar(value="0")
+        exits_entry = ttk.Entry(form, textvariable=self.exits_var, width=10)
+        exits_entry.grid(row=1, column=1, sticky="w", pady=4)
+
+        ttk.Label(
+            container,
+            text="Use 0 when the total is unknown. Progress will remain "
+                 "uncertain until a total is supplied.",
+            foreground="gray",
+            wraplength=480,
+        ).pack(anchor="w", pady=(8, 0))
+
+        buttons = ttk.Frame(container)
+        buttons.pack(fill="x", pady=(14, 0))
+        ttk.Button(buttons, text="Create", command=self._confirm).pack(
+            side="right"
+        )
+        ttk.Button(buttons, text="Cancel", command=self.win.destroy).pack(
+            side="right", padx=(0, 8)
+        )
+
+        self.win.update_idletasks()
+        try:
+            x = self.parent.winfo_x() + (
+                self.parent.winfo_width() - self.win.winfo_width()
+            ) // 2
+            y = self.parent.winfo_y() + (
+                self.parent.winfo_height() - self.win.winfo_height()
+            ) // 2
+            self.win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+        title_entry.focus_set()
+        title_entry.selection_range(0, "end")
+        return self.win
+
+    def _confirm(self):
+        try:
+            resolution = save_sync.resolution_for_local_entry(
+                self.candidate.save_name,
+                self.title_var.get(),
+                self.exits_var.get(),
+                self.existing_ids,
+            )
+        except ValueError as exc:
+            messagebox.showerror(
+                "Save Data Sync", str(exc), parent=self.win
+            )
+            return
+
+        if self.on_selected:
+            self.on_selected(resolution)
+        self.win.destroy()
+
+
+class EditLocalSaveEntryDialog:
+    """Modal editor for metadata on an existing local save entry."""
+
+    def __init__(self, parent, candidate, entry, on_saved=None):
+        self.parent = parent
+        self.candidate = candidate
+        self.entry = entry
+        self.on_saved = on_saved
+        self.win = None
+        self.title_var = None
+        self.exits_var = None
+
+    def show(self):
+        self.win = tk.Toplevel(self.parent)
+        self.win.title(f"Edit Local Entry - {self.candidate.save_name}")
+        self.win.geometry("520x220")
+        self.win.transient(self.parent)
+        self.win.grab_set()
+
+        container = ttk.Frame(self.win, padding=15)
+        container.pack(fill="both", expand=True)
+        ttk.Label(
+            container,
+            text="Edit the local collection metadata. The saved association "
+                 "and save file remain unchanged.",
+            wraplength=480,
+        ).pack(anchor="w", pady=(0, 12))
+
+        form = ttk.Frame(container)
+        form.pack(fill="x")
+        form.columnconfigure(1, weight=1)
+        ttk.Label(form, text="Title:").grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.title_var = tk.StringVar(value=self.entry.get("title", ""))
+        title_entry = ttk.Entry(form, textvariable=self.title_var)
+        title_entry.grid(row=0, column=1, sticky="ew", pady=4)
+
+        ttk.Label(form, text="Total exits:").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.exits_var = tk.StringVar(value=str(self.entry.get("exits", 0)))
+        ttk.Entry(form, textvariable=self.exits_var, width=10).grid(
+            row=1, column=1, sticky="w", pady=4
+        )
+
+        buttons = ttk.Frame(container)
+        buttons.pack(fill="x", pady=(14, 0))
+        ttk.Button(buttons, text="Save", command=self._confirm).pack(
+            side="right"
+        )
+        ttk.Button(buttons, text="Cancel", command=self.win.destroy).pack(
+            side="right", padx=(0, 8)
+        )
+
+        self.win.update_idletasks()
+        try:
+            x = self.parent.winfo_x() + (
+                self.parent.winfo_width() - self.win.winfo_width()
+            ) // 2
+            y = self.parent.winfo_y() + (
+                self.parent.winfo_height() - self.win.winfo_height()
+            ) // 2
+            self.win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+        title_entry.focus_set()
+        title_entry.selection_range(0, "end")
+        return self.win
+
+    def _confirm(self):
+        try:
+            title, exits = save_sync.validate_local_entry_fields(
+                self.title_var.get(), self.exits_var.get()
+            )
+        except ValueError as exc:
+            messagebox.showerror("Save Data Sync", str(exc), parent=self.win)
+            return
+
+        if self.on_saved:
+            self.on_saved(title, exits)
+        self.win.destroy()
 
 
 class SaveSyncDialog:
     """Modal preview dialog for applying save-sync results."""
 
     def __init__(self, parent, candidates, data_manager, logger=None,
-                 on_applied=None, fetch_fn=None, mark_all=False):
+                 on_applied=None, fetch_fn=None, mark_all=False,
+                 config_manager=None):
         self.parent = parent
         self.data_manager = data_manager
         self.logger = logger
         self.on_applied = on_applied
         self.fetch_fn = fetch_fn
         self.mark_all = mark_all
+        self.config_manager = config_manager
+        self.candidates = list(candidates)
 
         self.matched = sorted(
-            (c for c in candidates if c.hack_id),
+            (c for c in self.candidates if c.hack_id),
             key=lambda c: (_STATUS_ORDER.get(c.status, 9), c.title.lower()),
         )
         self.unmatched = sorted(
-            (c for c in candidates if not c.hack_id),
+            (c for c in self.candidates if not c.hack_id),
             key=lambda c: c.save_name.lower(),
         )
 
@@ -83,11 +579,18 @@ class SaveSyncDialog:
         self.comp_tree = None
         self.comp_checked = {}
         self.comp_cand = {}
+        self.forget_match_button = None
+        self.edit_local_button = None
+        self.remove_local_button = None
         # Orphan tab state
         self.orph_tree = None
         self.orph_checked = {}
         self.orph_cand = {}
         self.orph_iid = {}  # candidate id() -> iid, for background updates
+        self.manual_search_button = None
+        self.local_entry_button = None
+        self.comp_analysis_label = None
+        self.orph_analysis_label = None
 
         self._cancel_lookup = False
         self._lookup_running = False
@@ -97,7 +600,7 @@ class SaveSyncDialog:
     def show(self):
         self.win = tk.Toplevel(self.parent)
         self.win.title("Save Data Sync - Review Changes")
-        self.win.geometry("820x620")
+        self.win.geometry("980x650")
         self.win.transient(self.parent.winfo_toplevel())
         self.win.grab_set()
         self.win.bind("<Destroy>", self._on_destroy)
@@ -144,34 +647,86 @@ class SaveSyncDialog:
                       save_sync.STATUS_UNCERTAIN, save_sync.STATUS_ALREADY_COMPLETED)
             if counts.get(s)
         ) or "No matching saves"
-        ttk.Label(tab, text=summary, foreground="gray").pack(anchor="w", pady=(0, 8))
+        ttk.Label(tab, text=summary, foreground="gray").pack(
+            anchor="w", pady=(0, 3)
+        )
+        ttk.Label(
+            tab,
+            text="Medium = checksum-validated structure; Low = unvalidated "
+                 "fallback; None = no trusted progress. Low-confidence "
+                 "completions require manual selection.",
+            foreground="gray",
+            wraplength=920,
+        ).pack(anchor="w", pady=(0, 8))
 
-        columns = ("check", "title", "file", "decision", "date", "exits")
+        columns = (
+            "check", "title", "file", "decision", "confidence", "source",
+            "date", "exits"
+        )
         self.comp_tree = self._make_tree(
             tab, columns,
             {
                 "check": ("", 34, "center", False),
-                "title": ("Hack", 220, "w", True),
-                "file": ("Save File", 190, "w", True),
-                "decision": ("Decision", 90, "w", False),
+                "title": ("Hack", 195, "w", True),
+                "file": ("Save File", 165, "w", True),
+                "decision": ("Decision", 85, "w", False),
+                "confidence": ("Confidence", 92, "center", False),
+                "source": ("Match", 80, "w", False),
                 "date": ("Play Date", 90, "center", False),
                 "exits": ("Exits", 70, "center", False),
             },
+            selectmode="browse",
         )
         self.comp_tree.bind("<Button-1>", self._on_comp_click)
+        self.comp_tree.bind(
+            "<<TreeviewSelect>>", self._completion_selection_changed
+        )
         # Clicking the check-column header toggles all rows.
-        self.comp_tree.heading("check", text=UNCHECKED, command=self._comp_toggle_all)
+        self.comp_tree.heading(
+            "check", text=UNCHECKED, command=self._comp_toggle_all
+        )
+        self.comp_analysis_label = ttk.Label(
+            tab,
+            text=_analysis_detail(None),
+            foreground="gray",
+            wraplength=920,
+        )
+        self.comp_analysis_label.pack(anchor="w", pady=(7, 0))
 
         btns = ttk.Frame(tab)
         btns.pack(fill="x", pady=(8, 0))
         ttk.Button(btns, text="Select All", command=lambda: self._comp_set_all(True)).pack(side="left")
         ttk.Button(btns, text="Select None", command=lambda: self._comp_set_all(False)).pack(side="left", padx=(8, 0))
+        self.remove_local_button = ttk.Button(
+            btns,
+            text="Remove Local Entry...",
+            state="disabled",
+            command=self._remove_selected_local_entry,
+        )
+        self.remove_local_button.pack(side="right")
+        self.edit_local_button = ttk.Button(
+            btns,
+            text="Edit Local Entry...",
+            state="disabled",
+            command=self._edit_selected_local_entry,
+        )
+        self.edit_local_button.pack(side="right", padx=(0, 8))
+        self.forget_match_button = ttk.Button(
+            btns,
+            text="Forget Saved Match",
+            state="disabled",
+            command=self._forget_selected_match,
+        )
+        self.forget_match_button.pack(side="right", padx=(0, 8))
         return tab
 
     def _populate_completion(self):
         for cand in self.matched:
             checkable = cand.status in _CHECKABLE
-            default_checked = cand.status == save_sync.STATUS_COMPLETED
+            default_checked = (
+                cand.status == save_sync.STATUS_COMPLETED
+                and _confidence_key(cand) == "medium"
+            )
             if cand.status == save_sync.STATUS_ALREADY_COMPLETED:
                 glyph = LOCKED
             else:
@@ -185,9 +740,20 @@ class SaveSyncDialog:
 
             iid = self.comp_tree.insert(
                 "", "end",
-                values=(glyph, cand.title, cand.save_name,
-                        _STATUS_LABEL.get(cand.status, cand.status),
-                        cand.completed_date or "-", cand.exits_display),
+                values=(
+                    glyph,
+                    cand.title,
+                    cand.save_name,
+                    _STATUS_LABEL.get(cand.status, cand.status),
+                    _confidence_label(cand),
+                    (
+                        "Saved"
+                        if cand.match_source == save_sync.MATCH_SOURCE_SAVED_ALIAS
+                        else "Automatic"
+                    ),
+                    cand.completed_date or "-",
+                    cand.exits_display,
+                ),
                 tags=tags,
             )
             self.comp_cand[iid] = cand
@@ -224,6 +790,159 @@ class SaveSyncDialog:
         except tk.TclError:
             pass
 
+    def _selected_local_completion(self):
+        if self.comp_tree is None:
+            return None, None, None
+        selected = self.comp_tree.selection()
+        if len(selected) != 1:
+            return None, None, None
+        iid = selected[0]
+        candidate = self.comp_cand.get(iid)
+        entry = (
+            self.data_manager.data.get(candidate.hack_id)
+            if candidate is not None
+            else None
+        )
+        if not isinstance(entry, dict) or not entry.get("local_save_entry"):
+            return iid, candidate, None
+        return iid, candidate, entry
+
+    def _completion_selection_changed(self, _event=None):
+        iid, candidate, local_entry = self._selected_local_completion()
+        self._set_analysis_detail(self.comp_analysis_label, candidate)
+        forget_enabled = bool(
+            candidate
+            and candidate.match_source == save_sync.MATCH_SOURCE_SAVED_ALIAS
+            and self.config_manager is not None
+        )
+        local_enabled = bool(iid and candidate and local_entry)
+        try:
+            self.forget_match_button.config(
+                state="normal" if forget_enabled else "disabled"
+            )
+            self.edit_local_button.config(
+                state="normal" if local_enabled else "disabled"
+            )
+            self.remove_local_button.config(
+                state="normal" if local_enabled else "disabled"
+            )
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _edit_selected_local_entry(self):
+        iid, candidate, entry = self._selected_local_completion()
+        if not iid or candidate is None or entry is None:
+            return
+        EditLocalSaveEntryDialog(
+            self.win,
+            candidate,
+            entry,
+            on_saved=lambda title, exits: self._apply_local_entry_edit(
+                iid, candidate, title, exits
+            ),
+        ).show()
+
+    def _apply_local_entry_edit(self, iid, candidate, title, exits):
+        if not save_sync.update_local_entry(
+            self.data_manager, candidate.hack_id, title, exits
+        ):
+            messagebox.showerror(
+                "Save Data Sync",
+                "The local collection entry could not be updated.",
+                parent=self.win,
+            )
+            return
+
+        candidate.title = title
+        candidate.total_exits = exits
+        candidate.status = save_sync.classify(
+            candidate.collected_exits,
+            exits,
+            candidate.already_completed,
+            self.mark_all,
+        )
+        values = list(self.comp_tree.item(iid, "values"))
+        values[1] = candidate.title
+        values[3] = _STATUS_LABEL.get(candidate.status, candidate.status)
+        values[7] = candidate.exits_display
+        self.comp_tree.item(iid, values=values)
+        self._update_apply_state()
+        if self.on_applied:
+            self.on_applied()
+        messagebox.showinfo(
+            "Save Data Sync",
+            "Local collection metadata updated. Completion state was not "
+            "changed automatically.",
+            parent=self.win,
+        )
+
+    def _remove_selected_local_entry(self):
+        _iid, candidate, entry = self._selected_local_completion()
+        if candidate is None or entry is None:
+            return
+        if not messagebox.askyesno(
+            "Remove Local Entry",
+            f"Remove '{entry.get('title', candidate.title)}' from the "
+            "collection?\n\nThe save file will not be deleted. Any saved "
+            "filename associations to this local entry will also be removed.",
+            parent=self.win,
+        ):
+            return
+
+        removed, association_count = save_sync.remove_local_entry(
+            self.data_manager, self.config_manager, candidate.hack_id
+        )
+        if not removed:
+            messagebox.showerror(
+                "Save Data Sync",
+                "The local collection entry could not be removed.",
+                parent=self.win,
+            )
+            return
+        if self.on_applied:
+            self.on_applied()
+        self.win.destroy()
+        messagebox.showinfo(
+            "Save Data Sync",
+            "Local collection entry removed. The save file was left "
+            f"untouched. Removed {association_count} saved match(es).",
+            parent=self.parent.winfo_toplevel(),
+        )
+
+    def _forget_selected_match(self):
+        selected = self.comp_tree.selection() if self.comp_tree else ()
+        if len(selected) != 1:
+            return
+        candidate = self.comp_cand.get(selected[0])
+        if not candidate or (
+            candidate.match_source != save_sync.MATCH_SOURCE_SAVED_ALIAS
+        ):
+            return
+
+        if not messagebox.askyesno(
+            "Save Data Sync",
+            f"Forget the saved match for {candidate.save_name}?\n\n"
+            "The review window will close. Scan again to choose another match.",
+            parent=self.win,
+        ):
+            return
+
+        if save_sync.forget_save_association(
+            self.config_manager, candidate.save_name
+        ):
+            if self.logger:
+                self.logger.log(
+                    f"Forgot saved match for {candidate.save_name}",
+                    "Information",
+                )
+            self.win.destroy()
+            messagebox.showinfo(
+                "Save Data Sync",
+                "Saved match forgotten. Scan the save directory again to "
+                "review or replace it.",
+                parent=self.parent.winfo_toplevel(),
+            )
+
     # -- orphan tab -----------------------------------------------------------
 
     def _build_orphan_tab(self, notebook):
@@ -231,31 +950,58 @@ class SaveSyncDialog:
 
         ttk.Label(
             tab,
-            text="These saves matched no hack in your collection. Check the ones you "
-                 "recognize, look them up on SMWCentral, then import the confident "
-                 "matches. Each lookup is a network request, so only check what you need.",
+            text="These saves matched no hack in your collection. Use the checked "
+                 "lookup for strict exact-title matches, or select one row and search "
+                 "SMWCentral manually for abbreviations and alternate names, "
+                 "or create a local entry for a non-SMWC hack.",
             wraplength=780, foreground="gray",
         ).pack(anchor="w", pady=(0, 8))
 
-        columns = ("check", "file", "result", "hack", "difficulty")
+        columns = (
+            "check", "file", "confidence", "result", "hack", "difficulty"
+        )
         self.orph_tree = self._make_tree(
             tab, columns,
             {
                 "check": ("", 34, "center", False),
-                "file": ("Save File", 240, "w", True),
-                "result": ("Result", 110, "w", False),
-                "hack": ("Resolved Hack", 230, "w", True),
-                "difficulty": ("Difficulty", 110, "w", False),
+                "file": ("Save File", 220, "w", True),
+                "confidence": ("Confidence", 92, "center", False),
+                "result": ("Result", 105, "w", False),
+                "hack": ("Resolved Hack", 215, "w", True),
+                "difficulty": ("Difficulty", 105, "w", False),
             },
+            selectmode="browse",
         )
         self.orph_tree.bind("<Button-1>", self._on_orph_click)
+        self.orph_tree.bind(
+            "<<TreeviewSelect>>", self._orphan_selection_changed
+        )
         # Clicking the check-column header toggles all selectable rows.
-        self.orph_tree.heading("check", text=UNCHECKED, command=self._orph_toggle_all)
+        self.orph_tree.heading(
+            "check", text=UNCHECKED, command=self._orph_toggle_all
+        )
+        self.orph_analysis_label = ttk.Label(
+            tab,
+            text=_analysis_detail(None),
+            foreground="gray",
+            wraplength=920,
+        )
+        self.orph_analysis_label.pack(anchor="w", pady=(7, 0))
 
         controls = ttk.Frame(tab)
         controls.pack(fill="x", pady=(8, 0))
         ttk.Button(controls, text="Select All", command=lambda: self._orph_set_all(True)).pack(side="left")
         ttk.Button(controls, text="Select None", command=lambda: self._orph_set_all(False)).pack(side="left", padx=(8, 0))
+        self.manual_search_button = ttk.Button(
+            controls, text="Search Selected...",
+            command=self._manual_search_selected,
+        )
+        self.manual_search_button.pack(side="left", padx=(12, 0))
+        self.local_entry_button = ttk.Button(
+            controls, text="Create Local Entry...",
+            command=self._create_local_entry_selected,
+        )
+        self.local_entry_button.pack(side="left", padx=(8, 0))
 
         self.lookup_button = ttk.Button(
             controls, text="Look up checked on SMWC", command=self._toggle_lookup
@@ -269,8 +1015,10 @@ class SaveSyncDialog:
         for cand in self.unmatched:
             iid = self.orph_tree.insert(
                 "", "end",
-                values=(UNCHECKED, cand.save_name,
-                        _RESOLUTION_LABEL[save_sync.RESOLUTION_NONE], "", ""),
+                values=(
+                    UNCHECKED, cand.save_name, _confidence_label(cand),
+                    _RESOLUTION_LABEL[save_sync.RESOLUTION_NONE], "", ""
+                ),
             )
             self.orph_cand[iid] = cand
             self.orph_checked[iid] = False
@@ -324,6 +1072,83 @@ class SaveSyncDialog:
         except tk.TclError:
             pass
 
+    def _orphan_selection_changed(self, _event=None):
+        selected = self.orph_tree.selection() if self.orph_tree else ()
+        candidate = (
+            self.orph_cand.get(selected[0]) if len(selected) == 1 else None
+        )
+        self._set_analysis_detail(self.orph_analysis_label, candidate)
+
+    def _create_local_entry_selected(self):
+        if self._lookup_running:
+            return
+        selected = self.orph_tree.selection()
+        if len(selected) != 1:
+            messagebox.showinfo(
+                "Save Data Sync",
+                "Select one unmatched save row first.",
+                parent=self.win,
+            )
+            return
+
+        iid = selected[0]
+        candidate = self.orph_cand.get(iid)
+        if candidate is None:
+            return
+        dialog = LocalSaveEntryDialog(
+            self.win,
+            candidate,
+            self.data_manager.data.keys(),
+            on_selected=lambda resolution: self._set_orphan_resolution(
+                iid, resolution, manual=True
+            ),
+        )
+        dialog.show()
+
+    def _manual_search_selected(self):
+        if self._lookup_running:
+            return
+        selected = self.orph_tree.selection()
+        if len(selected) != 1:
+            messagebox.showinfo(
+                "Save Data Sync",
+                "Select one unmatched save row to search manually.",
+                parent=self.win,
+            )
+            return
+
+        iid = selected[0]
+        cand = self.orph_cand.get(iid)
+        if cand is None:
+            return
+        if cand.resolution in _ORPHAN_ACTIONABLE:
+            messagebox.showinfo(
+                "Save Data Sync",
+                "This save already has a usable SMWCentral match.",
+                parent=self.win,
+            )
+            return
+
+        existing_ids = set(self.data_manager.data.keys())
+        ManualSmwcSearchDialog(
+            self.win,
+            cand,
+            existing_ids,
+            fetch_fn=self.fetch_fn,
+            logger=self.logger,
+            on_selected=lambda resolution: self._apply_manual_resolution(
+                iid, resolution
+            ),
+        ).show()
+
+    def _apply_manual_resolution(self, iid, resolution):
+        if self._set_orphan_resolution(iid, resolution, manual=True):
+            try:
+                self.lookup_status.config(text="Manual match selected")
+            except tk.TclError:
+                pass
+            self._update_apply_state()
+
     # -- SMWC lookup (threaded) ----------------------------------------------
 
     def _toggle_lookup(self):
@@ -348,6 +1173,8 @@ class SaveSyncDialog:
         self._cancel_lookup = False
         self._lookup_running = True
         self.lookup_button.config(text="Cancel Lookup")
+        self.manual_search_button.config(state="disabled")
+        self.local_entry_button.config(state="disabled")
         self._update_apply_state()
 
         existing_ids = set(self.data_manager.data.keys())
@@ -369,25 +1196,36 @@ class SaveSyncDialog:
         self._ui(self._lookup_done)
 
     def _apply_lookup_result(self, iid, resolution, index, total):
+        if self._set_orphan_resolution(iid, resolution):
+            self.lookup_status.config(text=f"Looked up {index}/{total}...")
+
+    def _set_orphan_resolution(self, iid, resolution, manual=False):
         cand = self.orph_cand.get(iid)
         if cand is None:
-            return
-        save_sync.attach_resolution(cand, resolution, self.data_manager, self.mark_all)
+            return False
+        cand.manual_selection = bool(manual)
+        save_sync.attach_resolution(
+            cand, resolution, self.data_manager, self.mark_all
+        )
 
         label = _RESOLUTION_LABEL.get(cand.resolution, cand.resolution)
         hack_name = cand.title if cand.resolution in _ORPHAN_ACTIONABLE else ""
         difficulty = ""
         if cand.resolution == save_sync.RESOLUTION_RESOLVED and cand.resolved_hack:
-            difficulty = save_sync._smwc_entry_fields(cand.resolved_hack)["current_difficulty"]
+            difficulty = save_sync._smwc_entry_fields(
+                cand.resolved_hack
+            )["current_difficulty"]
+        elif cand.resolution == save_sync.RESOLUTION_LOCAL:
+            difficulty = "Local"
         elif cand.resolution == save_sync.RESOLUTION_EXISTS:
             existing = self.data_manager.data.get(cand.resolved_hack_id, {})
             difficulty = existing.get("current_difficulty", "")
             if cand.already_completed:
-                label = _STATUS_LABEL[save_sync.STATUS_ALREADY_COMPLETED]  # "Already synced"
+                label = _STATUS_LABEL[save_sync.STATUS_ALREADY_COMPLETED]
 
-        # Auto-check actionable results; new imports always, existing only when
-        # the save actually meets the completion rule.
-        if cand.resolution == save_sync.RESOLUTION_RESOLVED:
+        if manual and cand.resolution in _ORPHAN_ACTIONABLE:
+            checked = True
+        elif cand.resolution == save_sync.RESOLUTION_RESOLVED:
             checked = True
         elif cand.resolution == save_sync.RESOLUTION_EXISTS:
             checked = cand.status == save_sync.STATUS_COMPLETED
@@ -395,20 +1233,33 @@ class SaveSyncDialog:
             checked = False
         self.orph_checked[iid] = checked
 
-        values = (CHECKED if checked else UNCHECKED, cand.save_name, label, hack_name, difficulty)
+        values = (
+            CHECKED if checked else UNCHECKED,
+            cand.save_name,
+            _confidence_label(cand),
+            label,
+            hack_name,
+            difficulty,
+        )
         try:
-            self.orph_tree.item(iid, values=values,
-                                tags=("locked",) if self._orph_locked(cand) else ())
+            self.orph_tree.item(
+                iid,
+                values=values,
+                tags=("locked",) if self._orph_locked(cand) else (),
+            )
         except tk.TclError:
-            return
-        self.lookup_status.config(text=f"Looked up {index}/{total}...")
+            return False
         self._update_orph_header()
+        self._update_apply_state()
+        return True
 
     def _lookup_done(self):
         self._lookup_running = False
         self._cancel_lookup = False
         try:
             self.lookup_button.config(text="Look up checked on SMWC", state="normal")
+            self.manual_search_button.config(state="normal")
+            self.local_entry_button.config(state="normal")
             self.lookup_status.config(text="")
         except tk.TclError:
             pass
@@ -416,22 +1267,34 @@ class SaveSyncDialog:
 
     # -- shared tree helpers --------------------------------------------------
 
-    def _make_tree(self, parent, columns, headings):
+    def _make_tree(self, parent, columns, headings, selectmode="none"):
         frame = ttk.Frame(parent)
         frame.pack(fill="both", expand=True)
-        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="none")
+        tree = ttk.Treeview(
+            frame, columns=columns, show="headings", selectmode=selectmode
+        )
         for col, (text, width, anchor, stretch) in headings.items():
             tree.heading(col, text=text)
             tree.column(col, width=width, anchor=anchor, stretch=stretch)
         vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=vsb.set)
+        hsb = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         tree.tag_configure("locked", foreground="gray")
         tree.tag_configure("uncertain", foreground="#b8860b")
         return tree
+
+    def _set_analysis_detail(self, label, candidate):
+        if label is None:
+            return
+        try:
+            label.config(text=_analysis_detail(candidate))
+        except tk.TclError:
+            pass
 
     def _hit_check(self, tree, event):
         """Return the row iid if the click landed in the check column, else None."""
@@ -482,6 +1345,46 @@ class SaveSyncDialog:
         )
         self.apply_button.pack(side="right")
         ttk.Button(bar, text="Cancel", command=self.win.destroy).pack(side="right", padx=(0, 8))
+        ttk.Button(
+            bar,
+            text="Export Diagnostics...",
+            command=self._export_diagnostics,
+        ).pack(side="left")
+
+    def _export_diagnostics(self):
+        destination = filedialog.asksaveasfilename(
+            parent=self.win,
+            title="Export Save Data Sync Diagnostics",
+            defaultextension=".json",
+            initialfile=save_sync.diagnostic_filename(),
+            filetypes=(("JSON diagnostic report", "*.json"), ("All files", "*.*")),
+        )
+        if not destination:
+            return
+
+        try:
+            written = save_sync.write_diagnostic_report(destination, self.candidates)
+        except Exception as exc:  # pragma: no cover - defensive UI boundary
+            if self.logger:
+                self.logger.log(f"Save diagnostic export failed: {exc}", "Error")
+            messagebox.showerror(
+                "Save Data Sync",
+                f"Failed to export diagnostics:\n{exc}",
+                parent=self.win,
+            )
+            return
+
+        if self.logger:
+            self.logger.log(
+                f"Save Data Sync diagnostics exported: {os.path.basename(written)}",
+                "Information",
+            )
+        messagebox.showinfo(
+            "Save Data Sync",
+            "Diagnostic report exported.\n\n"
+            "The report contains no absolute paths or raw save bytes.",
+            parent=self.win,
+        )
 
     def _update_apply_state(self):
         count = len(self._selected_completions()) + len(self._selected_orphans())
@@ -497,8 +1400,20 @@ class SaveSyncDialog:
             return
         completions = self._selected_completions()
         orphans = self._selected_orphans()
-        new_imports = [c for c in orphans if c.resolution == save_sync.RESOLUTION_RESOLVED]
-        existing_updates = [c for c in orphans if c.resolution == save_sync.RESOLUTION_EXISTS]
+        new_imports = [
+            c for c in orphans
+            if c.resolution == save_sync.RESOLUTION_RESOLVED
+        ]
+        local_imports = [
+            c for c in orphans
+            if c.resolution == save_sync.RESOLUTION_LOCAL
+        ]
+        existing_updates = [
+            c for c in orphans
+            if c.resolution == save_sync.RESOLUTION_EXISTS
+            and c.status == save_sync.STATUS_COMPLETED
+        ]
+        manual_matches = [c for c in orphans if c.manual_selection]
 
         if not completions and not orphans:
             return
@@ -510,8 +1425,24 @@ class SaveSyncDialog:
             for cand in new_imports:
                 if save_sync.import_orphan(cand, self.data_manager, self.mark_all):
                     imported += 1
-            if imported or new_imports:
+            local_created = 0
+            for cand in local_imports:
+                if save_sync.import_local_orphan(
+                    cand, self.data_manager, self.mark_all
+                ):
+                    local_created += 1
+            if imported or new_imports or local_created or local_imports:
                 self.data_manager.force_save()
+
+            remembered = 0
+            for cand in manual_matches:
+                target_id = str(cand.resolved_hack_id or "")
+                if target_id not in self.data_manager.data:
+                    continue
+                if save_sync.remember_save_association(
+                    self.config_manager, cand.save_name, target_id
+                ):
+                    remembered += 1
         except Exception as exc:  # pragma: no cover - defensive
             if self.logger:
                 self.logger.log(f"Save sync apply failed: {exc}", "Error")
@@ -520,7 +1451,10 @@ class SaveSyncDialog:
 
         if self.logger:
             self.logger.log(
-                f"Save Data Sync: {marked} completion update(s), {imported} hack(s) imported",
+                f"Save Data Sync: {marked} completion update(s), "
+                f"{imported} SMWC hack(s) imported, "
+                f"{local_created} local hack(s) created, "
+                f"{remembered} saved match(es)",
                 "Information",
             )
 
@@ -534,7 +1468,9 @@ class SaveSyncDialog:
         self.win.destroy()
         messagebox.showinfo(
             "Save Data Sync",
-            f"Marked {marked} hack(s) completed and imported {imported} new hack(s).",
+            f"Marked {marked} hack(s) completed, imported {imported} "
+            f"SMWC hack(s), created {local_created} local hack(s), and "
+            f"remembered {remembered} manual match(es).",
             parent=self.parent.winfo_toplevel(),
         )
 

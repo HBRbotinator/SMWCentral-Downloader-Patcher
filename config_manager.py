@@ -81,11 +81,16 @@ class ConfigManager:
             "emulator_args_enabled": False,
             # Save Data Sync settings
             "save_sync_dir": "",
+            "save_sync_dirs": [],
             "save_sync_mark_all": False,
+            "save_sync_auto_scan": False,
+            "save_sync_periodic_scan": False,
+            "save_sync_scan_interval_minutes": 15,
+            "save_sync_associations": {},
             # Difficulty lookup cache (automatically populated from SMWC API)
             "difficulty_lookup": {
                 "diff_1": "Newcomer",
-                "diff_2": "Casual", 
+                "diff_2": "Casual",
                 "diff_3": "Intermediate",
                 "diff_4": "Advanced",
                 "diff_5": "Expert",
@@ -104,7 +109,10 @@ class ConfigManager:
                         "multi_type_enabled", "multi_type_download_mode", "difficulty_lookup",
                         "emulator_path", "emulator_args", "emulator_args_enabled", "auto_check_updates",
                         "column_order", "visible_columns", "show_rom_picker",
-                        "save_sync_dir", "save_sync_mark_all"}
+                        "save_sync_dir", "save_sync_dirs", "save_sync_mark_all",
+                        "save_sync_auto_scan", "save_sync_periodic_scan",
+                        "save_sync_scan_interval_minutes",
+                        "save_sync_associations"}
         cleaned = {}
 
         for key, value in config.items():
@@ -147,12 +155,12 @@ class ConfigManager:
     def get_difficulty_lookup(self):
         """Get difficulty lookup, returns dict or None if not cached"""
         return self.config.get("difficulty_lookup")
-    
+
     def set_difficulty_lookup(self, lookup_dict):
         """Save difficulty lookup to config"""
         self.config["difficulty_lookup"] = lookup_dict
         self.save()
-    
+
     def get(self, key, default=""):
         """Get a configuration value with optional default"""
         return self.config.get(key, default)

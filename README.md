@@ -484,3 +484,19 @@ If clicking the play icon doesn't work:
 ---
 
 **Made for the Super Mario World ROM hacking community** ❤️
+
+<!-- save-data-sync-guide:start -->
+## 💾 Save Data Sync
+
+Save Data Sync can review `.srm` and `.sav` battery saves from multiple
+configured folders, inspect checksum-valid SMW slots and conservative fallback
+evidence, match saves to collection entries, and prepare completion updates.
+
+Manual SMWCentral selection, remembered filename associations, review-only
+startup or periodic scans, privacy-safe diagnostics, and local entries for
+non-SMWCentral hacks are supported. Save files are never modified, and no
+collection change is made until **Apply Selected** is pressed.
+
+See [SAVE_DATA_SYNC.md](SAVE_DATA_SYNC.md) for the complete workflow, safety
+rules, confidence model, privacy contract, and known limitations.
+<!-- save-data-sync-guide:end -->
