@@ -113,6 +113,10 @@ class PlannerStore:
         self.state = self._load_state()
         self.unsaved_changes = False
 
+    def has_entry(self, hack_id):
+        """Return whether an explicit Planner entry exists for a hack."""
+        return str(hack_id) in self.state["entries"]
+
     def get_entry(self, hack_id):
         """Return a normalized copy of one Planner entry."""
         hack_id = str(hack_id)
