@@ -15,6 +15,7 @@ Developer documentation: [CONTRIBUTING.md](CONTRIBUTING.md), [Build and Release 
 
 - [📥 Download & Install](#-download--install)
 - [🚀 How to Use](#-how-to-use)
+- [🗂️ Planner](PLANNER.md)
 - [🛠️ Troubleshooting](#️-troubleshooting)
 - [📝 What You Need](#-what-you-need)
 - [📝 Changelog](#-changelog)
@@ -484,6 +485,23 @@ If clicking the play icon doesn't work:
 ---
 
 **Made for the Super Mario World ROM hacking community** ❤️
+
+<!-- planner-guide:start -->
+## 🗂️ Planner
+
+The Planner organizes collection entries with independent lifecycle statuses,
+**Someday / Soon / Next** planning horizons, an ordered Next queue, and
+multi-membership custom lists. Search and filters can be combined to focus the
+backlog without storing a fixed Low/Normal/High priority.
+
+Edits are staged until **Save Changes** is pressed, and Planner state is stored
+separately from `processed.json`. Existing completed collection entries remain
+visible as Completed without requiring an automatic migration.
+
+See [PLANNER.md](PLANNER.md) for the complete workflow, persistence contract,
+filter behavior, compatibility rules, and the intended filter-driven Wheel
+design.
+<!-- planner-guide:end -->
 
 <!-- save-data-sync-guide:start -->
 ## 💾 Save Data Sync

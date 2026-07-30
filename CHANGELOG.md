@@ -4,6 +4,26 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+<!-- planner-foundation:start -->
+### Planner foundation
+
+- Added a Planner page that projects existing collection records into separate
+  lifecycle status, Someday/Soon/Next planning horizon, ordered Next queue, and
+  multi-membership custom-list fields.
+- Added staged single and bulk edits with explicit **Save Changes** and
+  **Discard Changes** boundaries.
+- Added custom-list creation, renaming, deletion, and bulk membership editing
+  with stable internal list IDs.
+- Added composable search and filtering shared by the Planner and the intended
+  future filter-driven Wheel pool.
+- Kept Planner state in a separate versioned `planner_state.json`, preserving
+  `processed.json` and inferring Completed for legacy completed records.
+- Replaced the prototype's fixed priority and per-hack wheel-eligibility model
+  with Someday/Soon/Next and filter-driven selection.
+- Documented the Planner workflow, compatibility behavior, persistence safety,
+  and current Wheel limitation in `PLANNER.md`.
+<!-- planner-foundation:end -->
+
 <!-- save-data-sync-expansion:start -->
 ### Save Data Sync expansion
 
@@ -103,11 +123,11 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 - **Metadata Fetch Dialog**: Updated text to reflect optimization and cancellation support
 
 ### Fixed
-- **Drag-and-Drop Column Configuration**: 
+- **Drag-and-Drop Column Configuration**:
   - Fixed TclError crashes when widgets were destroyed during rebuild
   - Added `winfo_exists()` checks before configuring widgets
   - Added try-except blocks for robust error handling
-- **Reset to Default Button**: 
+- **Reset to Default Button**:
   - Fixed button doing nothing (column_order/visible_columns not in config whitelist)
   - Now properly restores DEFAULT_COLUMNS constant
 - **Duplicate Reload Logging**: Fixed "Reloaded X hacks" appearing twice when clicking Refresh List
