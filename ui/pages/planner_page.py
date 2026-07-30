@@ -1,4 +1,4 @@
-"""Read-only Planner page built on the shared Planner query model."""
+"""Planner page for filtering and staging lifecycle planning edits."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from planner_page_model import PlannerPageModel
-from planner_store import PlannerStore
+from planner_store import LIFECYCLE_STATUSES, PLANNING_HORIZONS, PlannerStore
 from ui_constants import get_page_padding, get_section_padding
 
 
 class PlannerPage:
-    """Display Planner-enriched collection data without editing it yet."""
+    """Display and edit Planner state without touching core collection data."""
 
     COLUMNS = (
         ("next", "Next", 55, "center"),
@@ -28,6 +28,8 @@ class PlannerPage:
         "Title": "title",
         "Collection order": "collection",
     }
+    NO_STATUS_CHANGE = "No status change"
+    NO_HORIZON_CHANGE = "No planning change"
 
     def __init__(self, parent, data_manager, logger=None, planner_store=None):
         self.parent = parent
@@ -45,17 +47,26 @@ class PlannerPage:
         self.list_var = tk.StringVar(value="All lists")
         self.downloaded_var = tk.StringVar(value="Any download state")
         self.sort_var = tk.StringVar(value="Planning order")
+        self.edit_lifecycle_var = tk.StringVar(value=self.NO_STATUS_CHANGE)
+        self.edit_horizon_var = tk.StringVar(value=self.NO_HORIZON_CHANGE)
         self.lifecycle_combo = None
         self.horizon_combo = None
         self.list_combo = None
+        self.apply_button = None
+        self.move_up_button = None
+        self.move_down_button = None
+        self.save_button = None
+        self.discard_button = None
         self._list_name_to_id = {}
         self._filter_after_id = None
+        self._last_action = ""
 
     def create(self):
         """Create and return the Planner page frame."""
         self.frame = ttk.Frame(self.parent, padding=get_page_padding())
         self._create_header()
         self._create_filters()
+        self._create_editor()
         self._create_table()
         self.refresh()
         return self.frame
@@ -88,48 +99,48 @@ class PlannerPage:
         ttk.Label(
             text_frame,
             text=(
-                "Review what to play using lifecycle status, "
+                "Choose what to play using lifecycle status, "
                 "Someday/Soon/Next, and custom lists."
             ),
         ).pack(anchor="w", pady=(3, 0))
 
+        self.save_button = ttk.Button(
+            header,
+            text="Save Changes",
+            style="Accent.TButton",
+            command=self._save_changes,
+        )
+        self.save_button.pack(side="right")
+        self.discard_button = ttk.Button(
+            header,
+            text="Discard Changes",
+            command=self._discard_changes,
+        )
+        self.discard_button.pack(side="right", padx=(0, 8))
         ttk.Button(
             header,
             text="Refresh",
-            command=lambda: self.refresh(reload_planner=True),
-        ).pack(side="right")
+            command=self.refresh,
+        ).pack(side="right", padx=(0, 8))
 
     def _create_filters(self):
         _, section_padding_y = get_section_padding()
         filters = ttk.LabelFrame(self.frame, text="Filters", padding=10)
         filters.pack(fill="x", pady=(0, section_padding_y))
 
-        ttk.Label(filters, text="Search").grid(
-            row=0,
-            column=0,
-            sticky="w",
-        )
+        ttk.Label(filters, text="Search").grid(row=0, column=0, sticky="w")
         search_entry = ttk.Entry(filters, textvariable=self.search_var)
         search_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8))
         search_entry.bind("<KeyRelease>", self._schedule_filter_refresh)
 
         self.lifecycle_combo = self._filter_combo(
-            filters,
-            "Status",
-            self.lifecycle_var,
-            1,
+            filters, "Status", self.lifecycle_var, 1
         )
         self.horizon_combo = self._filter_combo(
-            filters,
-            "Planning",
-            self.horizon_var,
-            2,
+            filters, "Planning", self.horizon_var, 2
         )
         self.list_combo = self._filter_combo(
-            filters,
-            "List",
-            self.list_var,
-            3,
+            filters, "List", self.list_var, 3
         )
         self._filter_combo(
             filters,
@@ -154,12 +165,55 @@ class PlannerPage:
         for column in range(1, 6):
             filters.grid_columnconfigure(column, weight=1)
 
-    def _filter_combo(self, parent, label, variable, column, values=()):
-        ttk.Label(parent, text=label).grid(
-            row=0,
-            column=column,
-            sticky="w",
+    def _create_editor(self):
+        _, section_padding_y = get_section_padding()
+        editor = ttk.LabelFrame(
+            self.frame,
+            text="Edit selected entries",
+            padding=10,
         )
+        editor.pack(fill="x", pady=(0, section_padding_y))
+
+        ttk.Label(editor, text="Status").pack(side="left")
+        ttk.Combobox(
+            editor,
+            textvariable=self.edit_lifecycle_var,
+            values=(self.NO_STATUS_CHANGE, *LIFECYCLE_STATUSES),
+            state="readonly",
+            width=18,
+        ).pack(side="left", padx=(6, 14))
+
+        ttk.Label(editor, text="Planning").pack(side="left")
+        ttk.Combobox(
+            editor,
+            textvariable=self.edit_horizon_var,
+            values=(self.NO_HORIZON_CHANGE, *PLANNING_HORIZONS),
+            state="readonly",
+            width=18,
+        ).pack(side="left", padx=(6, 14))
+
+        self.apply_button = ttk.Button(
+            editor,
+            text="Apply to Selected",
+            command=self._apply_selected,
+        )
+        self.apply_button.pack(side="left")
+
+        self.move_down_button = ttk.Button(
+            editor,
+            text="Move Next Down",
+            command=lambda: self._move_selected_next(1),
+        )
+        self.move_down_button.pack(side="right")
+        self.move_up_button = ttk.Button(
+            editor,
+            text="Move Next Up",
+            command=lambda: self._move_selected_next(-1),
+        )
+        self.move_up_button.pack(side="right", padx=(0, 8))
+
+    def _filter_combo(self, parent, label, variable, column, values=()):
+        ttk.Label(parent, text=label).grid(row=0, column=column, sticky="w")
         combo = ttk.Combobox(
             parent,
             textvariable=variable,
@@ -189,6 +243,7 @@ class PlannerPage:
                 minwidth=45,
                 anchor=anchor,
             )
+        self.tree.bind("<<TreeviewSelect>>", self._selection_changed)
 
         vertical = ttk.Scrollbar(
             table_frame,
@@ -238,6 +293,7 @@ class PlannerPage:
 
     def _refresh_table(self):
         self._filter_after_id = None
+        selected_ids = set(self.tree.selection()) if self.tree else set()
         try:
             records = self.model.visible_hacks(
                 text=self.search_var.get(),
@@ -258,18 +314,151 @@ class PlannerPage:
             return
 
         self.tree.delete(*self.tree.get_children())
+        visible_ids = []
         for record in records:
+            hack_id = str(record["id"])
+            visible_ids.append(hack_id)
             self.tree.insert(
                 "",
                 "end",
-                iid=str(record["id"]),
+                iid=hack_id,
                 values=self.model.table_values(record),
             )
 
-        total = len(self.model.projected_hacks)
-        self.status_label.configure(
-            text=f"Showing {len(records)} of {total} collection entries"
+        retained = [item for item in visible_ids if item in selected_ids]
+        if retained:
+            self.tree.selection_set(retained)
+        self._update_status(len(records))
+        self._update_edit_controls()
+
+    def _apply_selected(self):
+        selected = list(self.tree.selection())
+        if not selected:
+            messagebox.showwarning(
+                "Planner",
+                "Select at least one collection entry.",
+                parent=self.frame,
+            )
+            return
+
+        lifecycle_status = self.edit_lifecycle_var.get()
+        if lifecycle_status == self.NO_STATUS_CHANGE:
+            lifecycle_status = ""
+        planning_horizon = self.edit_horizon_var.get()
+        if planning_horizon == self.NO_HORIZON_CHANGE:
+            planning_horizon = ""
+
+        try:
+            self.model.apply_updates(
+                selected,
+                lifecycle_status=lifecycle_status,
+                planning_horizon=planning_horizon,
+            )
+        except Exception as error:
+            messagebox.showerror(
+                "Planner",
+                f"Could not apply Planner changes:\n{error}",
+                parent=self.frame,
+            )
+            return
+
+        self._last_action = f"Updated {len(selected)} selected entry(s)"
+        self.edit_lifecycle_var.set(self.NO_STATUS_CHANGE)
+        self.edit_horizon_var.set(self.NO_HORIZON_CHANGE)
+        self._refresh_filter_choices()
+        self._refresh_table()
+
+    def _move_selected_next(self, offset):
+        selected = list(self.tree.selection())
+        if len(selected) != 1:
+            messagebox.showwarning(
+                "Planner",
+                "Select exactly one Next entry to reorder.",
+                parent=self.frame,
+            )
+            return
+        try:
+            position = self.model.move_next(selected[0], offset)
+        except Exception as error:
+            messagebox.showerror(
+                "Planner",
+                f"Could not reorder the Next queue:\n{error}",
+                parent=self.frame,
+            )
+            return
+        self._last_action = f"Moved selected entry to Next position {position}"
+        self._refresh_table()
+
+    def _save_changes(self):
+        if not self.model.has_unsaved_changes:
+            return
+        if not self.model.save():
+            messagebox.showerror(
+                "Planner",
+                "Could not save Planner changes. Check the application log.",
+                parent=self.frame,
+            )
+            return
+        self._last_action = "Planner changes saved"
+        self._refresh_filter_choices()
+        self._refresh_table()
+
+    def _discard_changes(self):
+        if not self.model.has_unsaved_changes:
+            return
+        confirmed = messagebox.askyesno(
+            "Planner",
+            "Discard all unsaved Planner changes?",
+            parent=self.frame,
         )
+        if not confirmed:
+            return
+        self.model.reload_planner()
+        self._last_action = "Unsaved Planner changes discarded"
+        self._refresh_filter_choices()
+        self._refresh_table()
+
+    def _selection_changed(self, _event=None):
+        self._update_status()
+        self._update_edit_controls()
+
+    def _update_edit_controls(self):
+        if not self.tree:
+            return
+        selected = list(self.tree.selection())
+        self.apply_button.configure(state="normal" if selected else "disabled")
+        move_up_state = "disabled"
+        move_down_state = "disabled"
+        if len(selected) == 1:
+            values = self.tree.item(selected[0], "values")
+            if len(values) > 3 and values[3] == "Next" and values[0]:
+                position = int(values[0])
+                queue_length = len(self.planner_store.get_next_queue())
+                if position > 1:
+                    move_up_state = "normal"
+                if position < queue_length:
+                    move_down_state = "normal"
+        self.move_up_button.configure(state=move_up_state)
+        self.move_down_button.configure(state=move_down_state)
+        save_state = "normal" if self.model.has_unsaved_changes else "disabled"
+        self.save_button.configure(state=save_state)
+        self.discard_button.configure(state=save_state)
+
+    def _update_status(self, visible_count=None):
+        if not self.status_label or not self.tree:
+            return
+        if visible_count is None:
+            visible_count = len(self.tree.get_children())
+        total = len(self.model.projected_hacks)
+        selected = len(self.tree.selection())
+        parts = [f"Showing {visible_count} of {total} collection entries"]
+        if selected:
+            parts.append(f"{selected} selected")
+        if self.model.has_unsaved_changes:
+            parts.append("Unsaved Planner changes")
+        if self._last_action:
+            parts.append(self._last_action)
+        self.status_label.configure(text=" · ".join(parts))
 
     def _selected_list_id(self):
         selected = self.list_var.get()

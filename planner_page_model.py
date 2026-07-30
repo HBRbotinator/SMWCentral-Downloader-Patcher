@@ -1,15 +1,16 @@
-"""Read-only presentation model for the Planner page."""
+"""Presentation and editing model for the Planner page."""
 
 from __future__ import annotations
 
 import copy
 
 from planner_collection import PlannerCollectionProjection
+from planner_editor import PlannerEditor
 from planner_query import PlannerCollectionQuery
 
 
 class PlannerPageModel:
-    """Prepare collection and Planner data for a read-only table."""
+    """Prepare, edit, and persist Planner-enriched collection data."""
 
     def __init__(
         self,
@@ -17,6 +18,7 @@ class PlannerPageModel:
         planner_store,
         projection=None,
         query=None,
+        editor=None,
     ):
         self.data_manager = data_manager
         self.planner_store = planner_store
@@ -24,7 +26,13 @@ class PlannerPageModel:
             planner_store
         )
         self.query = query or PlannerCollectionQuery()
+        self.editor = editor or PlannerEditor(planner_store)
         self.projected_hacks = []
+
+    @property
+    def has_unsaved_changes(self):
+        """Return whether Planner edits are waiting to be saved."""
+        return bool(self.planner_store.unsaved_changes)
 
     def refresh(self):
         """Rebuild the projection from current in-memory source data."""
@@ -33,9 +41,78 @@ class PlannerPageModel:
         return copy.deepcopy(self.projected_hacks)
 
     def reload_planner(self):
-        """Reload Planner persistence, then rebuild the projection."""
+        """Discard unsaved Planner edits and reload persistence."""
         self.planner_store.reload()
         return self.refresh()
+
+    def save(self):
+        """Persist pending Planner edits and refresh the projection."""
+        saved = self.editor.save()
+        if saved:
+            self.refresh()
+        return saved
+
+    def apply_updates(
+        self,
+        hack_ids,
+        *,
+        lifecycle_status="",
+        planning_horizon="",
+    ):
+        """Stage one status and/or horizon edit for selected collection rows."""
+        if not lifecycle_status and not planning_horizon:
+            raise ValueError("Choose a lifecycle status or planning horizon")
+
+        normalized_ids = self._selected_ids(hack_ids)
+        projected_by_id = {
+            str(record["id"]): record for record in self.projected_hacks
+        }
+        missing = [
+            hack_id
+            for hack_id in normalized_ids
+            if hack_id not in projected_by_id
+        ]
+        if missing:
+            raise ValueError(
+                "Selected collection entries are no longer available: "
+                + ", ".join(missing)
+            )
+
+        previous_state = copy.deepcopy(self.planner_store.state)
+        previous_unsaved = self.planner_store.unsaved_changes
+        try:
+            for hack_id in normalized_ids:
+                projected = projected_by_id[hack_id]
+                self._seed_explicit_entry(hack_id, projected)
+                changes = {}
+                if lifecycle_status:
+                    changes["lifecycle_status"] = lifecycle_status
+                if planning_horizon:
+                    changes["planning_horizon"] = planning_horizon
+                self.editor.update_entry(hack_id, **changes)
+        except Exception:
+            self.planner_store.state = previous_state
+            self.planner_store.unsaved_changes = previous_unsaved
+            raise
+
+        self.refresh()
+        return [self.planner_store.get_entry(item) for item in normalized_ids]
+
+    def move_next(self, hack_id, offset):
+        """Move one Next entry by a relative queue offset."""
+        hack_id = self._selected_ids([hack_id])[0]
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset == 0:
+            raise ValueError("Next queue movement must be a non-zero integer")
+
+        queue = self.planner_store.get_next_queue()
+        if hack_id not in queue:
+            raise ValueError("Select one entry in the Next planning horizon")
+        current_position = queue.index(hack_id) + 1
+        target_position = max(1, min(len(queue), current_position + offset))
+        if target_position != current_position:
+            self.editor.move_next(hack_id, target_position)
+        self.refresh()
+        return target_position
 
     def available_filters(self):
         """Return filter choices represented by the current projection."""
@@ -98,6 +175,31 @@ class PlannerPageModel:
             str(record.get("difficulty", "")),
             type_text,
         )
+
+    def _seed_explicit_entry(self, hack_id, projected):
+        if self.planner_store.has_entry(hack_id):
+            return
+        self.planner_store.update_entry(
+            hack_id,
+            lifecycle_status=projected["planner_lifecycle_status"],
+            planning_horizon=projected["planner_horizon"],
+            list_ids=projected.get("planner_list_ids", []),
+        )
+
+    @staticmethod
+    def _selected_ids(hack_ids):
+        if isinstance(hack_ids, (str, int)):
+            hack_ids = [hack_ids]
+        if not isinstance(hack_ids, (list, tuple)):
+            raise ValueError("Selected hack IDs must be a list or tuple")
+        result = []
+        for hack_id in hack_ids:
+            value = str(hack_id).strip()
+            if value and value not in result:
+                result.append(value)
+        if not result:
+            raise ValueError("Select at least one collection entry")
+        return result
 
     @staticmethod
     def _optional_value(value):

@@ -1,4 +1,4 @@
-"""Tests for the first read-only Planner page presentation layer."""
+"""Tests for the editable Planner page presentation layer."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class _CollectionManager:
 
 
 class PlannerPageModelTest(unittest.TestCase):
-    """Protect the read-only data contract used by the Planner table."""
+    """Protect the read and edit contract used by the Planner table."""
 
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -150,7 +150,88 @@ class PlannerPageModelTest(unittest.TestCase):
         self.assertEqual(self.planner_path.read_bytes(), original_bytes)
         self.assertEqual(self.collection.hacks, original_collection)
         self.assertEqual(self.store.state, original_state)
-        self.assertFalse(self.store.unsaved_changes)
+        self.assertFalse(self.model.has_unsaved_changes)
+
+    def test_horizon_edit_preserves_inferred_completed_status(self):
+        original_bytes = self.planner_path.read_bytes()
+        self.model.refresh()
+
+        self.model.apply_updates(["alpha"], planning_horizon="Next")
+        entry = self.store.get_entry("alpha")
+        projected = {
+            item["id"]: item for item in self.model.projected_hacks
+        }
+
+        self.assertEqual(entry["lifecycle_status"], "Completed")
+        self.assertEqual(entry["planning_horizon"], "Next")
+        self.assertEqual(entry["completed_at"], "")
+        self.assertTrue(entry["planned_at"])
+        self.assertEqual(projected["alpha"]["planner_next_position"], 2)
+        self.assertEqual(self.planner_path.read_bytes(), original_bytes)
+        self.assertTrue(self.model.has_unsaved_changes)
+
+    def test_status_and_horizon_edits_are_staged_until_saved(self):
+        original_bytes = self.planner_path.read_bytes()
+        self.model.refresh()
+
+        self.model.apply_updates(
+            ["beta"],
+            lifecycle_status="Paused",
+            planning_horizon="Soon",
+        )
+
+        self.assertEqual(self.planner_path.read_bytes(), original_bytes)
+        self.assertEqual(self.store.get_entry("beta")["lifecycle_status"], "Paused")
+        self.assertEqual(self.store.get_entry("beta")["planning_horizon"], "Soon")
+        self.assertTrue(self.model.has_unsaved_changes)
+
+        self.assertTrue(self.model.save())
+        saved = json.loads(self.planner_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["entries"]["beta"]["lifecycle_status"], "Paused")
+        self.assertEqual(saved["entries"]["beta"]["planning_horizon"], "Soon")
+        self.assertFalse(self.model.has_unsaved_changes)
+
+    def test_reload_discards_all_staged_page_edits(self):
+        self.model.refresh()
+        self.model.apply_updates(
+            ["beta"],
+            lifecycle_status="Dropped",
+            planning_horizon="Someday",
+        )
+        self.assertTrue(self.model.has_unsaved_changes)
+
+        self.model.reload_planner()
+
+        entry = self.store.get_entry("beta")
+        self.assertEqual(entry["lifecycle_status"], "Playing")
+        self.assertEqual(entry["planning_horizon"], "Next")
+        self.assertFalse(self.model.has_unsaved_changes)
+
+    def test_next_entries_can_be_moved_from_the_page_model(self):
+        self.model.refresh()
+        self.model.apply_updates(["alpha"], planning_horizon="Next")
+        self.assertEqual(self.store.get_next_queue(), ["beta", "alpha"])
+
+        position = self.model.move_next("alpha", -1)
+
+        self.assertEqual(position, 1)
+        self.assertEqual(self.store.get_next_queue(), ["alpha", "beta"])
+        by_id = {item["id"]: item for item in self.model.projected_hacks}
+        self.assertEqual(by_id["alpha"]["planner_next_position"], 1)
+        self.assertEqual(by_id["beta"]["planner_next_position"], 2)
+
+    def test_failed_page_edit_restores_the_complete_planner_state(self):
+        self.model.refresh()
+        original_state = copy.deepcopy(self.store.state)
+
+        with self.assertRaisesRegex(ValueError, "Unknown lifecycle status"):
+            self.model.apply_updates(
+                ["alpha", "beta"],
+                lifecycle_status="Almost Done",
+            )
+
+        self.assertEqual(self.store.state, original_state)
+        self.assertFalse(self.model.has_unsaved_changes)
 
     def test_invalid_download_control_fails_clearly(self):
         self.model.refresh()
@@ -160,7 +241,7 @@ class PlannerPageModelTest(unittest.TestCase):
 
 
 class PlannerPageWiringTest(unittest.TestCase):
-    """Keep the new page exported, registered, and navigable."""
+    """Keep Planner navigation and explicit editing controls wired."""
 
     def test_planner_page_is_wired_into_navigation_and_layout(self):
         repository_root = Path(__file__).resolve().parent
@@ -179,6 +260,26 @@ class PlannerPageWiringTest(unittest.TestCase):
         self.assertIn("PlannerPage", layout)
         self.assertIn('add_page("Planner"', layout)
         self.assertIn("PlannerPage", pages)
+
+    def test_planner_page_exposes_staged_edit_and_save_controls(self):
+        repository_root = Path(__file__).resolve().parent
+        page_source = (
+            repository_root / "ui" / "pages" / "planner_page.py"
+        ).read_text(encoding="utf-8")
+
+        for required in (
+            "Apply to Selected",
+            "Save Changes",
+            "Discard Changes",
+            "Move Next Up",
+            "Move Next Down",
+            "model.apply_updates(",
+            "model.move_next(",
+            "model.save()",
+            "model.reload_planner()",
+        ):
+            self.assertIn(required, page_source)
+        self.assertNotIn("processed.json", page_source)
 
 
 if __name__ == "__main__":
