@@ -1,9 +1,9 @@
-"""Planner page for filtering and staging lifecycle planning edits."""
+"""Planner page for filtering and staging lifecycle and list edits."""
 
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 from planner_page_model import PlannerPageModel
 from planner_store import LIFECYCLE_STATUSES, PLANNING_HORIZONS, PlannerStore
@@ -49,15 +49,22 @@ class PlannerPage:
         self.sort_var = tk.StringVar(value="Planning order")
         self.edit_lifecycle_var = tk.StringVar(value=self.NO_STATUS_CHANGE)
         self.edit_horizon_var = tk.StringVar(value=self.NO_HORIZON_CHANGE)
+        self.membership_list_var = tk.StringVar()
         self.lifecycle_combo = None
         self.horizon_combo = None
         self.list_combo = None
+        self.membership_list_combo = None
         self.apply_button = None
+        self.add_list_button = None
+        self.remove_list_button = None
+        self.rename_list_button = None
+        self.delete_list_button = None
         self.move_up_button = None
         self.move_down_button = None
         self.save_button = None
         self.discard_button = None
         self._list_name_to_id = {}
+        self._membership_name_to_id = {}
         self._filter_after_id = None
         self._last_action = ""
 
@@ -67,6 +74,7 @@ class PlannerPage:
         self._create_header()
         self._create_filters()
         self._create_editor()
+        self._create_list_editor()
         self._create_table()
         self.refresh()
         return self.frame
@@ -212,6 +220,69 @@ class PlannerPage:
         )
         self.move_up_button.pack(side="right", padx=(0, 8))
 
+    def _create_list_editor(self):
+        _, section_padding_y = get_section_padding()
+        lists = ttk.LabelFrame(
+            self.frame,
+            text="Custom lists",
+            padding=10,
+        )
+        lists.pack(fill="x", pady=(0, section_padding_y))
+
+        definition_row = ttk.Frame(lists)
+        definition_row.pack(fill="x")
+        ttk.Label(definition_row, text="List").pack(side="left")
+        self.membership_list_combo = ttk.Combobox(
+            definition_row,
+            textvariable=self.membership_list_var,
+            state="readonly",
+            width=28,
+        )
+        self.membership_list_combo.pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=(6, 10),
+        )
+        self.membership_list_combo.bind(
+            "<<ComboboxSelected>>",
+            self._selection_changed,
+        )
+
+        ttk.Button(
+            definition_row,
+            text="New List",
+            command=self._create_custom_list,
+        ).pack(side="left")
+        self.rename_list_button = ttk.Button(
+            definition_row,
+            text="Rename List",
+            command=self._rename_custom_list,
+        )
+        self.rename_list_button.pack(side="left", padx=(8, 0))
+        self.delete_list_button = ttk.Button(
+            definition_row,
+            text="Delete List",
+            command=self._delete_custom_list,
+        )
+        self.delete_list_button.pack(side="left", padx=(8, 0))
+
+        membership_row = ttk.Frame(lists)
+        membership_row.pack(fill="x", pady=(8, 0))
+        ttk.Label(membership_row, text="Selected entries").pack(side="left")
+        self.add_list_button = ttk.Button(
+            membership_row,
+            text="Add Selected to List",
+            command=lambda: self._change_selected_membership("add"),
+        )
+        self.add_list_button.pack(side="left", padx=(10, 0))
+        self.remove_list_button = ttk.Button(
+            membership_row,
+            text="Remove Selected from List",
+            command=lambda: self._change_selected_membership("remove"),
+        )
+        self.remove_list_button.pack(side="left", padx=(8, 0))
+
     def _filter_combo(self, parent, label, variable, column, values=()):
         ttk.Label(parent, text=label).grid(row=0, column=column, sticky="w")
         combo = ttk.Combobox(
@@ -277,14 +348,37 @@ class PlannerPage:
         self._list_name_to_id = {
             item["name"]: item["id"] for item in choices["lists"]
         }
-        list_names = ["All lists", *self._list_name_to_id]
+        filter_list_names = ["All lists", *self._list_name_to_id]
+
+        selected_membership_id = self._membership_list_id()
+        custom_lists = self.model.custom_lists()
+        self._membership_name_to_id = {
+            item["name"]: item["id"] for item in custom_lists
+        }
+        membership_names = list(self._membership_name_to_id)
 
         self.lifecycle_combo.configure(values=statuses)
         self.horizon_combo.configure(values=horizons)
-        self.list_combo.configure(values=list_names)
+        self.list_combo.configure(values=filter_list_names)
+        self.membership_list_combo.configure(values=membership_names)
         self._keep_valid(self.lifecycle_var, statuses)
         self._keep_valid(self.horizon_var, horizons)
-        self._keep_valid(self.list_var, list_names)
+        self._keep_valid(self.list_var, filter_list_names)
+
+        selected_name = next(
+            (
+                item["name"]
+                for item in custom_lists
+                if item["id"] == selected_membership_id
+            ),
+            "",
+        )
+        if selected_name:
+            self.membership_list_var.set(selected_name)
+        elif self.membership_list_var.get() not in membership_names:
+            self.membership_list_var.set(
+                membership_names[0] if membership_names else ""
+            )
 
     def _schedule_filter_refresh(self, _event=None):
         if self._filter_after_id is not None:
@@ -368,6 +462,128 @@ class PlannerPage:
         self._refresh_filter_choices()
         self._refresh_table()
 
+    def _create_custom_list(self):
+        name = simpledialog.askstring(
+            "New Planner List",
+            "List name:",
+            parent=self.frame,
+        )
+        if name is None:
+            return
+        try:
+            created = self.model.create_list(name)
+        except Exception as error:
+            messagebox.showerror(
+                "Planner",
+                f"Could not create the custom list:\n{error}",
+                parent=self.frame,
+            )
+            return
+        self._last_action = f"Created list {created['name']}"
+        self._refresh_filter_choices()
+        self.membership_list_var.set(created["name"])
+        self._refresh_table()
+
+    def _rename_custom_list(self):
+        list_id = self._membership_list_id()
+        if not list_id:
+            return
+        current_name = self.membership_list_var.get()
+        name = simpledialog.askstring(
+            "Rename Planner List",
+            "List name:",
+            initialvalue=current_name,
+            parent=self.frame,
+        )
+        if name is None:
+            return
+        try:
+            renamed = self.model.rename_list(list_id, name)
+        except Exception as error:
+            messagebox.showerror(
+                "Planner",
+                f"Could not rename the custom list:\n{error}",
+                parent=self.frame,
+            )
+            return
+        self._last_action = f"Renamed list to {renamed['name']}"
+        self._refresh_filter_choices()
+        self.membership_list_var.set(renamed["name"])
+        self._refresh_table()
+
+    def _delete_custom_list(self):
+        list_id = self._membership_list_id()
+        if not list_id:
+            return
+        name = self.membership_list_var.get()
+        confirmed = messagebox.askyesno(
+            "Delete Planner List",
+            (
+                f"Delete the list '{name}'?\n\n"
+                "Its memberships will be removed from all Planner entries. "
+                "The change remains staged until Save Changes is pressed."
+            ),
+            parent=self.frame,
+        )
+        if not confirmed:
+            return
+        try:
+            self.model.delete_list(list_id)
+        except Exception as error:
+            messagebox.showerror(
+                "Planner",
+                f"Could not delete the custom list:\n{error}",
+                parent=self.frame,
+            )
+            return
+        self._last_action = f"Deleted list {name}"
+        self.membership_list_var.set("")
+        self._refresh_filter_choices()
+        self._refresh_table()
+
+    def _change_selected_membership(self, mode):
+        selected = list(self.tree.selection())
+        if not selected:
+            messagebox.showwarning(
+                "Planner",
+                "Select at least one collection entry.",
+                parent=self.frame,
+            )
+            return
+        list_id = self._membership_list_id()
+        if not list_id:
+            messagebox.showwarning(
+                "Planner",
+                "Create or select a custom list first.",
+                parent=self.frame,
+            )
+            return
+        try:
+            changed = self.model.apply_list_membership(
+                selected,
+                list_id,
+                mode,
+            )
+        except Exception as error:
+            messagebox.showerror(
+                "Planner",
+                f"Could not update list memberships:\n{error}",
+                parent=self.frame,
+            )
+            return
+
+        action = "Added" if mode == "add" else "Removed"
+        if changed:
+            self._last_action = (
+                f"{action} {len(changed)} selected entry(s) "
+                f"{'to' if mode == 'add' else 'from'} "
+                f"{self.membership_list_var.get()}"
+            )
+        else:
+            self._last_action = "Selected list memberships were unchanged"
+        self._refresh_filter_choices()
+        self._refresh_table()
+
     def _move_selected_next(self, offset):
         selected = list(self.tree.selection())
         if len(selected) != 1:
@@ -426,7 +642,17 @@ class PlannerPage:
         if not self.tree:
             return
         selected = list(self.tree.selection())
-        self.apply_button.configure(state="normal" if selected else "disabled")
+        selected_state = "normal" if selected else "disabled"
+        self.apply_button.configure(state=selected_state)
+        has_list = bool(self._membership_list_id())
+        membership_state = (
+            "normal" if selected and has_list else "disabled"
+        )
+        self.add_list_button.configure(state=membership_state)
+        self.remove_list_button.configure(state=membership_state)
+        definition_state = "normal" if has_list else "disabled"
+        self.rename_list_button.configure(state=definition_state)
+        self.delete_list_button.configure(state=definition_state)
         move_up_state = "disabled"
         move_down_state = "disabled"
         if len(selected) == 1:
@@ -465,6 +691,12 @@ class PlannerPage:
         if selected == "All lists":
             return ""
         return self._list_name_to_id.get(selected, "")
+
+    def _membership_list_id(self):
+        return self._membership_name_to_id.get(
+            self.membership_list_var.get(),
+            "",
+        )
 
     def _downloaded_filter(self):
         selected = self.downloaded_var.get()

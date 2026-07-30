@@ -52,6 +52,109 @@ class PlannerPageModel:
             self.refresh()
         return saved
 
+    def custom_lists(self):
+        """Return current custom-list definitions in their stored order."""
+        return self.planner_store.get_lists()
+
+    def create_list(self, name, list_id=None):
+        """Stage creation of one custom list."""
+        previous_state = copy.deepcopy(self.planner_store.state)
+        previous_unsaved = self.planner_store.unsaved_changes
+        try:
+            created = self.planner_store.create_list(name, list_id=list_id)
+        except Exception:
+            self.planner_store.state = previous_state
+            self.planner_store.unsaved_changes = previous_unsaved
+            raise
+        self.refresh()
+        return created
+
+    def rename_list(self, list_id, name):
+        """Stage a custom-list rename while retaining its stable ID."""
+        previous_state = copy.deepcopy(self.planner_store.state)
+        previous_unsaved = self.planner_store.unsaved_changes
+        try:
+            renamed = self.planner_store.rename_list(list_id, name)
+        except Exception:
+            self.planner_store.state = previous_state
+            self.planner_store.unsaved_changes = previous_unsaved
+            raise
+        self.refresh()
+        return renamed
+
+    def delete_list(self, list_id):
+        """Stage deletion of one list and all of its memberships."""
+        previous_state = copy.deepcopy(self.planner_store.state)
+        previous_unsaved = self.planner_store.unsaved_changes
+        try:
+            deleted = self.planner_store.delete_list(list_id)
+            if not deleted:
+                raise ValueError(f"Custom list not found: {list_id}")
+        except Exception:
+            self.planner_store.state = previous_state
+            self.planner_store.unsaved_changes = previous_unsaved
+            raise
+        self.refresh()
+        return True
+
+    def apply_list_membership(self, hack_ids, list_id, mode):
+        """Add or remove one custom-list membership for selected rows."""
+        list_id = str(list_id).strip()
+        known_ids = {item["id"] for item in self.planner_store.get_lists()}
+        if not list_id or list_id not in known_ids:
+            raise ValueError(f"Unknown custom list ID: {list_id}")
+
+        mode = str(mode).strip().casefold()
+        if mode not in ("add", "remove"):
+            raise ValueError("List membership mode must be 'add' or 'remove'")
+
+        normalized_ids = self._selected_ids(hack_ids)
+        projected_by_id = {
+            str(record["id"]): record for record in self.projected_hacks
+        }
+        missing = [
+            hack_id
+            for hack_id in normalized_ids
+            if hack_id not in projected_by_id
+        ]
+        if missing:
+            raise ValueError(
+                "Selected collection entries are no longer available: "
+                + ", ".join(missing)
+            )
+
+        previous_state = copy.deepcopy(self.planner_store.state)
+        previous_unsaved = self.planner_store.unsaved_changes
+        changed_ids = []
+        try:
+            for hack_id in normalized_ids:
+                projected = projected_by_id[hack_id]
+                memberships = self._list_ids(
+                    projected.get("planner_list_ids", [])
+                )
+                if mode == "add":
+                    if list_id in memberships:
+                        continue
+                    memberships.append(list_id)
+                else:
+                    if list_id not in memberships:
+                        continue
+                    memberships = [
+                        item for item in memberships if item != list_id
+                    ]
+
+                self._seed_explicit_entry(hack_id, projected)
+                self.editor.update_entry(hack_id, list_ids=memberships)
+                changed_ids.append(hack_id)
+        except Exception:
+            self.planner_store.state = previous_state
+            self.planner_store.unsaved_changes = previous_unsaved
+            raise
+
+        if changed_ids:
+            self.refresh()
+        return changed_ids
+
     def apply_updates(
         self,
         hack_ids,
@@ -185,6 +288,17 @@ class PlannerPageModel:
             planning_horizon=projected["planner_horizon"],
             list_ids=projected.get("planner_list_ids", []),
         )
+
+    @staticmethod
+    def _list_ids(values):
+        if not isinstance(values, (list, tuple)):
+            return []
+        result = []
+        for value in values:
+            value = str(value).strip()
+            if value and value not in result:
+                result.append(value)
+        return result
 
     @staticmethod
     def _selected_ids(hack_ids):
