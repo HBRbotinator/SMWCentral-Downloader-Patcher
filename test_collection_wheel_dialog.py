@@ -30,6 +30,56 @@ class CollectionWheelDialogContractTest(unittest.TestCase):
             "Next",
         )
 
+    def test_required_window_size_reserves_complete_control_layout(self):
+        self.assertEqual(
+            CollectionWheelDialog._required_window_size(400, 300),
+            (
+                CollectionWheelDialog.MIN_WIDTH,
+                CollectionWheelDialog.MIN_HEIGHT,
+            ),
+        )
+        self.assertEqual(
+            CollectionWheelDialog._required_window_size(640, 520),
+            (640, 520),
+        )
+
+    def test_dynamic_content_is_applied_before_window_is_shown(self):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+
+        populate_index = source.index("self._populate_filter_choices()")
+        refresh_index = source.index("self._refresh_pool_state()")
+        finalize_index = source.index("self._finalize_window()")
+
+        self.assertLess(populate_index, finalize_index)
+        self.assertLess(refresh_index, finalize_index)
+        self.assertIn("self.window.withdraw()", source)
+        self.assertIn("self.window.deiconify()", source)
+        self.assertIn('buttons.pack(side="bottom"', source)
+
+    def test_no_planner_state_keeps_collection_lifecycle_filter_available(self):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "Lifecycle remains available from Collection completion",
+            source,
+        )
+        self.assertIn(
+            'self.horizon_combo.configure(state="disabled")',
+            source,
+        )
+        self.assertIn(
+            'self.list_combo.configure(state="disabled")',
+            source,
+        )
+        self.assertNotIn(
+            'self.lifecycle_combo.configure(state="disabled")',
+            source,
+        )
+
     def test_dialog_is_collection_owned_with_optional_planner_refinements(self):
         source = Path("ui/collection_wheel_dialog.py").read_text(
             encoding="utf-8"
@@ -37,7 +87,7 @@ class CollectionWheelDialogContractTest(unittest.TestCase):
         for required in (
             "The current Collection view owns the candidate pool.",
             "Planner choices below are optional refinements.",
-            "No Planner refinements are configured.",
+            "No Planner horizons or custom lists are configured.",
             "self.model.build_pool(",
             "self.model.spin(",
             "excluded_ids=excluded_ids",

@@ -13,6 +13,8 @@ class CollectionWheelDialog:
     """Spin from the current Collection view with optional Planner refinements."""
 
     ALL_VALUE = "All"
+    MIN_WIDTH = 560
+    MIN_HEIGHT = 460
 
     def __init__(
         self,
@@ -47,6 +49,7 @@ class CollectionWheelDialog:
         self._populate_filter_choices()
         self._bind_filters()
         self._refresh_pool_state()
+        self._finalize_window()
 
     @property
     def is_open(self):
@@ -75,9 +78,10 @@ class CollectionWheelDialog:
 
     def _create_window(self):
         self.window = tk.Toplevel(self.parent)
+        self.window.withdraw()
         self.window.title("Collection Wheel")
         self.window.transient(self.parent)
-        self.window.minsize(560, 420)
+        self.window.minsize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
         content = ttk.Frame(self.window, padding=16)
@@ -103,8 +107,8 @@ class CollectionWheelDialog:
         )
         filters.pack(fill="x")
         ttk.Label(filters, text="Search:").grid(row=0, column=0, sticky="w")
-        search_entry = ttk.Entry(filters, textvariable=self.search_var)
-        search_entry.grid(
+        self.search_entry = ttk.Entry(filters, textvariable=self.search_var)
+        self.search_entry.grid(
             row=1,
             column=0,
             columnspan=3,
@@ -155,28 +159,8 @@ class CollectionWheelDialog:
             pady=(10, 0),
         )
 
-        result_frame = ttk.LabelFrame(content, text="Result", padding=14)
-        result_frame.pack(fill="both", expand=True, pady=(14, 0))
-        ttk.Label(
-            result_frame,
-            textvariable=self.pool_count_var,
-            font=("Segoe UI", 9, "bold"),
-        ).pack(anchor="w")
-        ttk.Label(
-            result_frame,
-            textvariable=self.result_var,
-            font=("Segoe UI", 14, "bold"),
-            wraplength=500,
-        ).pack(anchor="center", pady=(28, 8))
-        ttk.Label(
-            result_frame,
-            textvariable=self.detail_var,
-            wraplength=500,
-            justify="center",
-        ).pack(anchor="center")
-
         buttons = ttk.Frame(content)
-        buttons.pack(fill="x", pady=(14, 0))
+        buttons.pack(side="bottom", fill="x", pady=(14, 0))
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
         self.clear_button = ttk.Button(
             buttons,
@@ -198,16 +182,47 @@ class CollectionWheelDialog:
         )
         self.spin_button.pack(side="right", padx=(0, 8))
 
+        result_frame = ttk.LabelFrame(content, text="Result", padding=14)
+        result_frame.pack(fill="both", expand=True, pady=(14, 0))
+        ttk.Label(
+            result_frame,
+            textvariable=self.pool_count_var,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            result_frame,
+            textvariable=self.result_var,
+            font=("Segoe UI", 14, "bold"),
+            wraplength=500,
+        ).pack(anchor="center", pady=(28, 8))
+        ttk.Label(
+            result_frame,
+            textvariable=self.detail_var,
+            wraplength=500,
+            justify="center",
+        ).pack(anchor="center")
+
+    def _finalize_window(self):
         self.window.update_idletasks()
         self._center_window()
+        self.window.deiconify()
         self.window.grab_set()
-        search_entry.focus_set()
+        self.search_entry.focus_set()
+
+    @classmethod
+    def _required_window_size(cls, requested_width, requested_height):
+        return (
+            max(int(requested_width), cls.MIN_WIDTH),
+            max(int(requested_height), cls.MIN_HEIGHT),
+        )
 
     def _center_window(self):
         self.parent.update_idletasks()
         self.window.update_idletasks()
-        width = max(self.window.winfo_reqwidth(), 560)
-        height = max(self.window.winfo_reqheight(), 420)
+        width, height = self._required_window_size(
+            self.window.winfo_reqwidth(),
+            self.window.winfo_reqheight(),
+        )
         x = self.parent.winfo_rootx() + max(
             0,
             (self.parent.winfo_width() - width) // 2,
@@ -242,13 +257,13 @@ class CollectionWheelDialog:
                 )
             )
         else:
-            self.lifecycle_combo.configure(state="disabled")
             self.horizon_combo.configure(state="disabled")
             self.list_combo.configure(state="disabled")
             self.planner_note.configure(
                 text=(
-                    "No Planner refinements are configured. The Wheel still "
-                    "uses every hack in the current Collection view."
+                    "No Planner horizons or custom lists are configured. "
+                    "Lifecycle remains available from Collection completion "
+                    "state."
                 )
             )
 
@@ -362,13 +377,13 @@ class CollectionWheelDialog:
         details = []
         if candidate.get("completed", False):
             details.append("Completed")
+        status = str(
+            candidate.get("planner_lifecycle_status", "")
+        ).strip()
+        if status and status not in details:
+            details.append(status)
         if self.model.planner_refinements_available:
-            status = str(
-                candidate.get("planner_lifecycle_status", "")
-            ).strip()
             horizon = str(candidate.get("planner_horizon", "")).strip()
-            if status:
-                details.append(status)
             if horizon:
                 details.append(horizon)
         self.result_var.set(title)
