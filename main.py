@@ -172,7 +172,7 @@ def toggle_theme_callback(root):
                     root.dashboard_page._refresh_dashboard()
                 except Exception as e:
                     print(f"Error refreshing dashboard during theme toggle: {e}")
-        
+
         # Update download page theme colors if it exists
         # Access the actual DownloadPage object through the navigation's layout system
         if hasattr(root, 'navigation') and hasattr(root.navigation, 'page_manager'):
@@ -181,7 +181,7 @@ def toggle_theme_callback(root):
             main_layout = getattr(root, 'main_layout', None)
             if main_layout and hasattr(main_layout, 'download_page'):
                 download_page = main_layout.download_page
-                
+
                 if hasattr(download_page, 'results') and download_page.results:
                     if hasattr(download_page.results, 'update_theme_colors'):
                         try:
@@ -205,10 +205,10 @@ def clear_log_shortcut(root):
 def run_pipeline_wrapper(*args, **kwargs):
     """Wrapper function to handle both bulk downloads and single downloads"""
     from download_state_manager import set_download_active
-    
+
     # Mark download as active to lock collection editing
     set_download_active(True)
-    
+
     try:
         # Check if this is a single download call with selected_hacks
         if 'selected_hacks' in kwargs:
@@ -229,7 +229,7 @@ def run_pipeline_wrapper(*args, **kwargs):
 
 def run_single_download_pipeline(selected_hacks, log=None, progress_callback=None, multi_patch_callback=None):
     """Custom pipeline for single download page that works like bulk download"""
-    from api_pipeline import fetch_file_metadata, load_processed, save_processed, reset_cancel_flag, is_cancelled, extract_patches_from_zip, _select_best_patch, make_output_path, clean_hack_title, DIFFICULTY_LOOKUP, get_sorted_folder_name, title_case, safe_filename
+    from api_pipeline import fetch_file_metadata, load_processed, save_processed, reset_cancel_flag, is_cancelled, extract_patches_from_zip, _select_best_patch, make_output_path, clean_hack_title, DIFFICULTY_LOOKUP, get_sorted_folder_name, title_case, safe_filename, extract_smwc_rating
     from patch_handler import PatchHandler
     from config_manager import ConfigManager
 
@@ -285,10 +285,11 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
 
         # Get difficulty info
         raw_fields = hack.get("raw_fields", {})
-        
+
         # Get time from hack object (should be available from API)
         metadata_time = hack.get("time", 0)
-        
+        smwc_rating = extract_smwc_rating(hack)
+
         raw_diff = raw_fields.get("difficulty", "")
         if not raw_diff or raw_diff in [None, "N/A"]:
             raw_diff = ""
@@ -330,17 +331,17 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                 if log:
 
                     log(f"📝 Updated difficulty from {old_diff} -> {display_diff}", "Information")
-            
+
             # Move file to correct difficulty folder if needed (either difficulty changed OR file is in wrong location)
             old_file_path = existing_hack.get("file_path")
             if old_file_path and os.path.exists(old_file_path):
                 # Get hack type from existing data
                 hack_type = existing_hack.get("hack_type", "standard").lower()
-                
+
                 # Calculate expected path based on current difficulty
                 filename = os.path.basename(old_file_path)
                 expected_file_path = os.path.join(make_output_path(output_dir, hack_type, folder_name), filename)
-                
+
                 # Move if file is not in the expected location
                 if old_file_path != expected_file_path:
                     try:
@@ -353,7 +354,7 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                         metadata_updated = True
                         if log:
                             log(f"📁 Moved file from {os.path.dirname(old_file_path)} to {os.path.dirname(expected_file_path)}", "Information")
-                        
+
                         # Also move additional_paths if they exist (for multi-type hacks)
                         additional_paths = existing_hack.get("additional_paths", [])
                         if additional_paths:
@@ -434,6 +435,20 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                 if log:
 
                     log(f"📝 Updated exits from {old_exits} -> {current_exits}", "Information")
+
+            if (
+                smwc_rating is not None
+                and extract_smwc_rating(existing_hack) != smwc_rating
+            ):
+                old_rating = existing_hack.get("rating", "N/A")
+                existing_hack["rating"] = smwc_rating
+                metadata_updated = True
+                if log:
+                    log(
+                        f"📝 Updated SMWC rating from {old_rating} "
+                        f"-> {smwc_rating}",
+                        "Information",
+                    )
 
             if (multi_type_enabled
                     and download_mode == "copy_all"
@@ -528,7 +543,10 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                     log(f"🔍 Fetching download URL for {hack_name}...", "Information")
                 file_metadata = fetch_file_metadata(hack_id, log)
                 if file_metadata and file_metadata.get("data"):
-                    download_url = file_metadata["data"].get("download_url")
+                    detailed_hack = file_metadata["data"]
+                    download_url = detailed_hack.get("download_url")
+                    if smwc_rating is None:
+                        smwc_rating = extract_smwc_rating(detailed_hack)
 
                 if not download_url:
                     if log:
@@ -544,13 +562,13 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                 # Download the hack
                 if log:
                     log(f"⬇️ Downloading {hack_name}...", "Information")
-                
+
                 # Check for cancellation before download
                 if is_cancelled():
                     if log:
                         log("❌ Download cancelled by user", "Warning")
                     break
-                
+
                 r = requests.get(download_url)
                 r.raise_for_status()  # Raise exception for bad status codes
                 with open(zip_path, "wb") as f:
@@ -696,6 +714,11 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                     "demo": bool(raw_fields.get("demo", False)),
                     "authors": hack.get("authors", []),
                     "exits": raw_fields.get("length", hack.get("length", 0)) or 0,
+                    "rating": (
+                        smwc_rating
+                        if smwc_rating is not None
+                        else processed.get(hack_id, {}).get("rating", 0)
+                    ),
                     "time": metadata_time,  # Use fetched metadata time
                     "date": "",  # Will be populated below
                     "obsolete": is_obsolete_version  # Use the duplicate detection result
@@ -703,7 +726,7 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
 
                 if patched_files_data:
                     processed[hack_id]["files"] = patched_files_data
-                
+
                 # Populate date from time if available
                 if processed[hack_id]["time"]:
                     try:
@@ -810,11 +833,11 @@ def main():
         from config_manager import ConfigManager
         from difficulty_lookup_manager import get_difficulty_lookup
         from utils import update_difficulty_lookup as set_difficulty_lookup
-        
+
         config_manager = ConfigManager()
         difficulty_lookup = get_difficulty_lookup(config_manager)
         set_difficulty_lookup(difficulty_lookup)
-        
+
         root = tk.Tk()
         root.title(PRODUCT_DISPLAY_NAME)
 
@@ -927,7 +950,7 @@ def main():
         try:
             from api_pipeline import load_processed, save_processed
             from download_state_manager import set_download_active
-            
+
             processed = load_processed()
             needs_multi_type_update = False
             needs_obsolete_update = False
