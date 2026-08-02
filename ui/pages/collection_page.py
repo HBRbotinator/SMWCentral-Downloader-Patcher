@@ -431,7 +431,7 @@ class CollectionPage:
         self._refresh_table()
 
     def _open_collection_wheel(self):
-        "Open one Wheel dialog for the current filtered Collection view."
+        """Open one Wheel dialog for the full Collection."""
         if (
             self.collection_wheel_dialog
             and self.collection_wheel_dialog.is_open
@@ -439,40 +439,52 @@ class CollectionPage:
             self.collection_wheel_dialog.lift()
             return
 
+        self.collection_wheel_model.reload_planner_state()
         self.collection_wheel_dialog = CollectionWheelDialog(
             self.frame.winfo_toplevel(),
             self.collection_wheel_model,
-            collection_records=list(self.filtered_data),
+            collection_records=self.data_manager.get_all_hacks(include_obsolete=True),
             result_callback=self._focus_wheel_result,
             on_close=self._on_collection_wheel_closed,
         )
-
     def _on_collection_wheel_closed(self):
         self.collection_wheel_dialog = None
 
     def _focus_wheel_result(self, hack_id):
-        "Select a Wheel result in the paginated Collection table."
+        """Reveal and select a Wheel result in Collection."""
         hack_id_text = str(hack_id)
-        for index, hack in enumerate(self.filtered_data):
-            if str(hack.get("id")) != hack_id_text:
-                continue
-            target_page = (index // self.page_size) + 1
-            if target_page != self.current_page:
-                self.current_page = target_page
-                self.page_var.set(str(self.current_page))
-                self._refresh_table()
-            self._select_hack_in_tree(hack_id)
+
+        def find_result_index():
+            for index, hack in enumerate(self.filtered_data):
+                if str(hack.get("id")) == hack_id_text:
+                    return index
+            return None
+
+        result_index = find_result_index()
+        if result_index is None:
+            self.filters.clear_filters()
+            result_index = find_result_index()
+
+        if result_index is None:
             self._log(
-                "🎡 Collection Wheel selected "
-                f"'{hack.get('title', 'Unknown')}' (ID: {hack_id})",
-                "Information",
+                f"⚠️ Collection Wheel result {hack_id} could not be shown",
+                "Warning",
             )
             return
-        self._log(
-            f"⚠️ Collection Wheel result {hack_id} is no longer visible",
-            "Warning",
-        )
 
+        hack = self.filtered_data[result_index]
+        target_page = (result_index // self.page_size) + 1
+        if target_page != self.current_page:
+            self.current_page = target_page
+            self.page_var.set(str(self.current_page))
+            self._refresh_table()
+
+        self._select_hack_in_tree(hack_id)
+        self._log(
+            "🎡 Collection Wheel selected "
+            f"'{hack.get('title', 'Unknown')}' (ID: {hack_id})",
+            "Information",
+        )
     def _select_hack_in_tree(self, hack_id):
         """Find a hack in the current tree view, select it, and ensure it's visible"""
         hack_id_str = str(hack_id)

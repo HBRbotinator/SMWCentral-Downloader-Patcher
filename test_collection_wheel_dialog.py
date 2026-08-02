@@ -22,15 +22,41 @@ CollectionWheelDialog = _load_dialog_class()
 
 
 class CollectionWheelDialogContractTest(unittest.TestCase):
-    def test_optional_choice_normalizes_all_and_real_values(self):
+    def test_filter_choice_helpers_normalize_values(self):
         self.assertEqual(CollectionWheelDialog._optional_choice("All"), "")
         self.assertEqual(CollectionWheelDialog._optional_choice(""), "")
         self.assertEqual(
             CollectionWheelDialog._optional_choice("  Next  "),
             "Next",
         )
+        self.assertEqual(
+            CollectionWheelDialog._completion_choice("Completed"),
+            True,
+        )
+        self.assertEqual(
+            CollectionWheelDialog._completion_choice("Not completed"),
+            False,
+        )
+        self.assertIsNone(
+            CollectionWheelDialog._completion_choice("All")
+        )
+        self.assertEqual(
+            CollectionWheelDialog._download_choice("Downloaded"),
+            True,
+        )
+        self.assertEqual(
+            CollectionWheelDialog._download_choice("Not downloaded"),
+            False,
+        )
+        self.assertIsNone(
+            CollectionWheelDialog._optional_year_choice("Any")
+        )
+        self.assertEqual(
+            CollectionWheelDialog._optional_year_choice("2024"),
+            2024,
+        )
 
-    def test_required_window_size_reserves_complete_control_layout(self):
+    def test_required_window_size_reserves_complete_filter_layout(self):
         self.assertEqual(
             CollectionWheelDialog._required_window_size(400, 300),
             (
@@ -39,55 +65,73 @@ class CollectionWheelDialogContractTest(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            CollectionWheelDialog._required_window_size(640, 520),
-            (640, 520),
+            CollectionWheelDialog._required_window_size(900, 720),
+            (900, 720),
         )
 
     def test_dynamic_content_is_applied_before_window_is_shown(self):
         source = Path("ui/collection_wheel_dialog.py").read_text(
             encoding="utf-8"
         )
-
+        reload_index = source.index("self.model.reload_planner_state()")
         populate_index = source.index("self._populate_filter_choices()")
         refresh_index = source.index("self._refresh_pool_state()")
         finalize_index = source.index("self._finalize_window()")
 
+        self.assertLess(reload_index, populate_index)
         self.assertLess(populate_index, finalize_index)
         self.assertLess(refresh_index, finalize_index)
         self.assertIn("self.window.withdraw()", source)
         self.assertIn("self.window.deiconify()", source)
         self.assertIn('buttons.pack(side="bottom"', source)
 
-    def test_no_planner_state_keeps_collection_lifecycle_filter_available(self):
-        source = Path("ui/collection_wheel_dialog.py").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn(
-            "Lifecycle remains available from Collection completion",
-            source,
-        )
-        self.assertIn(
-            'self.horizon_combo.configure(state="disabled")',
-            source,
-        )
-        self.assertIn(
-            'self.list_combo.configure(state="disabled")',
-            source,
-        )
-        self.assertNotIn(
-            'self.lifecycle_combo.configure(state="disabled")',
-            source,
-        )
-
-    def test_dialog_is_collection_owned_with_optional_planner_refinements(self):
+    def test_collection_filters_are_always_available(self):
         source = Path("ui/collection_wheel_dialog.py").read_text(
             encoding="utf-8"
         )
         for required in (
-            "The current Collection view owns the candidate pool.",
-            "Planner choices below are optional refinements.",
-            "No Planner horizons or custom lists are configured.",
+            "Collection filters",
+            "Completion:",
+            "Type:",
+            "Difficulty:",
+            "SMWC rating:",
+            "Released from:",
+            "Released through:",
+            "Download status:",
+            "Reset Filters",
+            '"include_obsolete": False',
+        ):
+            self.assertIn(required, source)
+
+    def test_planner_refinements_are_hidden_as_one_optional_section(self):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "Planner refinements",
+            "self.planner_frame",
+            "self.model.planner_refinements_available",
+            "self.planner_frame.pack_forget()",
+            "Lifecycle:",
+            "Planning horizon:",
+            "Custom list:",
+        ):
+            self.assertIn(required, source)
+
+        self.assertNotIn(
+            "Lifecycle remains available from Collection completion",
+            source,
+        )
+        self.assertNotIn(
+            "No Planner horizons or custom lists are configured",
+            source,
+        )
+
+    def test_dialog_uses_model_without_wheel_persistence(self):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+        for required in (
             "self.model.build_pool(",
             "self.model.spin(",
             "excluded_ids=excluded_ids",
@@ -106,23 +150,41 @@ class CollectionWheelDialogContractTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, source)
 
-    def test_collection_page_opens_dialog_from_current_filtered_view(self):
+    def test_collection_page_opens_wheel_from_full_collection(self):
         page_source = Path("ui/pages/collection_page.py").read_text(
             encoding="utf-8"
         )
         filter_source = Path(
             "ui/components/table_filters.py"
         ).read_text(encoding="utf-8")
+
+        open_method = page_source.split(
+            "def _open_collection_wheel(self):",
+            1,
+        )[1].split(
+            "def _on_collection_wheel_closed(self):",
+            1,
+        )[0]
         for required in (
             "CollectionWheelModel",
             "CollectionWheelDialog",
-            "self._open_collection_wheel",
-            "collection_records=list(self.filtered_data)",
+            "self.collection_wheel_model.reload_planner_state()",
+            "self.data_manager.get_all_hacks(include_obsolete=True)",
             "result_callback=self._focus_wheel_result",
-            "def _focus_wheel_result(",
-            "self._select_hack_in_tree(hack_id)",
         ):
             self.assertIn(required, page_source)
+        self.assertNotIn("self.filtered_data", open_method)
+
+        focus_method = page_source.split(
+            "def _focus_wheel_result(self, hack_id):",
+            1,
+        )[1].split(
+            "def _select_hack_in_tree(self, hack_id):",
+            1,
+        )[0]
+        self.assertIn("self.filters.clear_filters()", focus_method)
+        self.assertIn("self._select_hack_in_tree(hack_id)", focus_method)
+
         self.assertIn('text="Open Wheel"', filter_source)
         self.assertIn("self.wheel_callback", filter_source)
         self.assertNotIn("Random Hack", filter_source)

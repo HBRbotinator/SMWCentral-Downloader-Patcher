@@ -1,8 +1,7 @@
 """Acceptance contract for Collection-owned Wheel filtering.
 
-The new contracts are expected failures until Commit 49 adds the production
-filtering and dialog changes. Existing behavior remains covered by the normal
-Collection Wheel regression suite.
+These contracts verify the production filtering and dialog behavior added by
+Commit 49 alongside the existing Collection Wheel regression suite.
 """
 
 from __future__ import annotations
@@ -129,7 +128,6 @@ class CollectionWheelFilterContractTest(unittest.TestCase):
         self.assertTrue(self.model.planner_refinements_available)
         self.assertFalse((self.root / "planner_state.json").exists())
 
-    @unittest.expectedFailure
     def test_completion_filter_is_independent_of_planner_lifecycle(self):
         incomplete = self.model.build_pool(
             self.collection,
@@ -150,7 +148,6 @@ class CollectionWheelFilterContractTest(unittest.TestCase):
         )
         self.assertFalse(self.model.planner_refinements_available)
 
-    @unittest.expectedFailure
     def test_smwc_rating_thresholds_are_inclusive_and_ignore_personal_rating(self):
         four_plus = self.model.build_pool(
             self.collection,
@@ -178,7 +175,6 @@ class CollectionWheelFilterContractTest(unittest.TestCase):
             ["delta"],
         )
 
-    @unittest.expectedFailure
     def test_unrated_smwc_filter_accepts_missing_non_numeric_and_zero_values(self):
         unrated = self.model.build_pool(
             self.collection,
@@ -190,7 +186,6 @@ class CollectionWheelFilterContractTest(unittest.TestCase):
             ["gamma", "epsilon"],
         )
 
-    @unittest.expectedFailure
     def test_release_year_range_is_inclusive_and_excludes_unknown_when_active(self):
         ranged = self.model.build_pool(
             self.collection,
@@ -219,7 +214,6 @@ class CollectionWheelFilterContractTest(unittest.TestCase):
             ["alpha", "delta"],
         )
 
-    @unittest.expectedFailure
     def test_collection_filter_choices_include_rating_and_release_metadata(self):
         choices = self.model.available_filters(self.collection)
 
@@ -241,7 +235,6 @@ class CollectionWheelFilterContractTest(unittest.TestCase):
             [False, True],
         )
 
-    @unittest.expectedFailure
     def test_filtering_is_detached_and_has_no_persistence_side_effects(self):
         original_collection = copy.deepcopy(self.collection)
         original_state = copy.deepcopy(self.store.state)
@@ -263,7 +256,6 @@ class CollectionWheelFilterContractTest(unittest.TestCase):
 
 
 class CollectionWheelFilterWiringContractTest(unittest.TestCase):
-    @unittest.expectedFailure
     def test_collection_page_supplies_the_full_collection_to_the_wheel(self):
         source = Path("ui/pages/collection_page.py").read_text(
             encoding="utf-8"
@@ -281,9 +273,17 @@ class CollectionWheelFilterWiringContractTest(unittest.TestCase):
             "self.data_manager.get_all_hacks(include_obsolete=True)",
             open_method,
         )
+        self.assertIn("self.collection_wheel_model.reload_planner_state()", open_method)
         self.assertNotIn("self.filtered_data", open_method)
 
-    @unittest.expectedFailure
+        manager_source = Path("hack_data_manager.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            '"rating": hack_data.get("rating", 0)',
+            manager_source,
+        )
+
     def test_dialog_owns_collection_filters_and_hides_unused_planner_section(self):
         source = Path("ui/collection_wheel_dialog.py").read_text(
             encoding="utf-8"
@@ -312,6 +312,18 @@ class CollectionWheelFilterWiringContractTest(unittest.TestCase):
             "current Collection view owns the candidate pool",
             source,
         )
+
+        page_source = Path("ui/pages/collection_page.py").read_text(
+            encoding="utf-8"
+        )
+        focus_method = page_source.split(
+            "def _focus_wheel_result(self, hack_id):",
+            1,
+        )[1].split(
+            "def _select_hack_in_tree(self, hack_id):",
+            1,
+        )[0]
+        self.assertIn("self.filters.clear_filters()", focus_method)
 
 
 if __name__ == "__main__":

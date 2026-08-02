@@ -13,7 +13,7 @@ class HackDataManager:
         if json_path is None:
             from utils import PROCESSED_JSON_PATH
             json_path = PROCESSED_JSON_PATH
-        
+
         self.json_path = json_path
         self.logger = logger
         self.data = self._load_data()
@@ -117,6 +117,7 @@ class HackDataManager:
                     "completed": hack_data.get("completed", False),
                     "completed_date": hack_data.get("completed_date", ""),
                     "personal_rating": hack_data.get("personal_rating", 0),
+                    "rating": hack_data.get("rating", 0),
                     "notes": hack_data.get("notes", ""),
                     "time_to_beat": hack_data.get("time_to_beat", 0),  # v3.1 NEW: Add time_to_beat field
                     "exits": hack_data.get("exits", 0),  # v3.1 NEW: Add exits field for analytics
