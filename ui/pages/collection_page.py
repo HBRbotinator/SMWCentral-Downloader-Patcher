@@ -24,6 +24,11 @@ from config_manager import ConfigManager
 HOVER_CURSOR = "pointinghand" if platform.system() == "Darwin" else "hand2"
 from utils import get_sorted_folder_name, move_hack_to_new_difficulty, get_primary_type, format_types_display
 from colors import get_colors
+from collection_rating import (
+    format_smwc_rating,
+    migrate_smwc_rating_column,
+    smwc_rating_sort_value,
+)
 
 from product_identity import VERSION
 
@@ -56,7 +61,8 @@ class CollectionPage:
             {"id": "title", "header": "Title", "width": 220, "min_width": 170, "anchor": "w"},
             {"id": "type", "header": "Type(s)", "width": 90, "min_width": 70, "anchor": "center"},
             {"id": "difficulty", "header": "Difficulty", "width": 100, "min_width": 80, "anchor": "center"},
-            {"id": "rating", "header": "Rating", "width": 90, "min_width": 70, "anchor": "center"},
+            {"id": "rating", "header": "Personal Rating", "width": 115, "min_width": 95, "anchor": "center"},
+            {"id": "smwc_rating", "header": "SMWC Rating", "width": 100, "min_width": 85, "anchor": "center"},
             {"id": "completed_date", "header": "Completed Date", "width": 110, "min_width": 90, "anchor": "center"},
             {"id": "time_to_beat", "header": "Time to Beat", "width": 120, "min_width": 100, "anchor": "center"},
             {"id": "release_date", "header": "Released", "width": 100, "min_width": 80, "anchor": "center"}, # NEW
@@ -73,6 +79,23 @@ class CollectionPage:
         # Load visible columns and column order from config
         self.visible_columns = self.config_manager.get("visible_columns", [c["id"] for c in self.COLUMNS])
         column_order = self.config_manager.get("column_order", None)
+
+        # Show the new SMWC rating column once for existing column
+        # configurations, while preserving later user visibility choices.
+        (
+            self.visible_columns,
+            column_order,
+            rating_column_migrated,
+        ) = migrate_smwc_rating_column(
+            self.visible_columns,
+            column_order,
+        )
+        if rating_column_migrated:
+            self.config_manager.config["visible_columns"] = (
+                self.visible_columns
+            )
+            self.config_manager.config["column_order"] = column_order
+            self.config_manager.save()
 
         # If we have a saved column order, use it; otherwise use default order
         if column_order:
@@ -359,6 +382,7 @@ class CollectionPage:
         """Insert a single hack row into the table"""
         completed_display = "✓" if hack.get("completed", False) else ""
         rating_display = self._get_rating_display(hack.get("personal_rating", 0))
+        smwc_rating_display = format_smwc_rating(hack.get("rating", 0))
 
         notes_display = hack.get("notes", "")
         if len(notes_display) > 30:
@@ -398,6 +422,7 @@ class CollectionPage:
             "type": type_display,
             "difficulty": hack.get("difficulty", "Unknown"),
             "rating": rating_display,
+            "smwc_rating": smwc_rating_display,
             "completed_date": hack.get("completed_date", ""),
             "time_to_beat": time_to_beat_display,
             "release_date": release_date,  # Updated
@@ -1369,7 +1394,14 @@ class CollectionPage:
         type_display = format_types_display(hack_types)
         details += f"Type: {type_display}\n"
         details += f"Difficulty: {hack_data.get('difficulty', 'Unknown')}\n"
-        details += f"Rating: {self._get_rating_display(hack_data.get('personal_rating', 0))}\n"
+        details += (
+            "Personal Rating: "
+            f"{self._get_rating_display(hack_data.get('personal_rating', 0))}\n"
+        )
+        details += (
+            "SMWC Rating: "
+            f"{format_smwc_rating(hack_data.get('rating', 0))}\n"
+        )
 
         # Status
         details += f"Completed: {'Yes' if hack_data.get('completed', False) else 'No'}\n"
@@ -1717,13 +1749,15 @@ class CollectionPage:
             if self.sort_column == "completed":
                 # Sort completed status: completed items first, then uncompleted
                 return (not hack.get("completed", False), hack.get("title", "").lower())
-            elif self.sort_column in ["rating"]:
-                # Numeric sorting for rating - use actual numeric value from data, not display value
+            elif self.sort_column == "rating":
+                # Sort the user-assigned Personal Rating numerically.
                 rating = hack.get("personal_rating", 0)
                 try:
                     return float(rating) if rating else 0
                 except (ValueError, TypeError):
                     return 0
+            elif self.sort_column == "smwc_rating":
+                return smwc_rating_sort_value(hack.get("rating", 0))
             elif self.sort_column == "completed_date":
                 # Date sorting - handle empty dates
                 if not value:

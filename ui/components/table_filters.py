@@ -144,10 +144,10 @@ class TableFilters:
         completed_combo.pack(pady=(2, 0))
         completed_combo.bind("<<ComboboxSelected>>", lambda e: self.apply_callback())
 
-        # Rating filter
+        # Personal Rating filter
         rating_frame = ttk.Frame(parent)
         rating_frame.pack(side="left")
-        ttk.Label(rating_frame, text="Rating:", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        ttk.Label(rating_frame, text="Personal Rating:", font=("Segoe UI", 9, "bold")).pack(anchor="w")
         rating_combo = ttk.Combobox(rating_frame, textvariable=self.rating_filter,
                                    values=["All", "★★★★★", "★★★★☆", "★★★☆☆", "★★☆☆☆", "★☆☆☆☆", "☆☆☆☆☆"],
                                    state="readonly", width=14)
@@ -344,7 +344,7 @@ class TableFilters:
         elif completed_filter_value == "No" and hack.get("completed", False):
             return False
 
-        # Rating filter
+        # Personal Rating filter
         rating_filter_value = self.rating_filter.get()
         if rating_filter_value != "All":
             stars_count = rating_filter_value.count("★")
@@ -585,7 +585,7 @@ class AddHackDialog:
         self._stats_frame = stats_frame
         stats_frame.pack(fill="x", pady=(0, 15))
 
-        # First stats row: Completed, Completed Date, Rating, Time to Beat
+        # First stats row: Completed, Completed Date, Personal Rating, Time to Beat
         stats_row1 = ttk.Frame(stats_frame)
         stats_row1.pack(fill="x", pady=(0, 15))
 
@@ -610,10 +610,10 @@ class AddHackDialog:
         date_entry.pack(pady=(5, 0))
         date_entry.bind("<FocusOut>", self._on_date_focus_out)
 
-        # Rating with interactive stars
+        # Personal Rating with interactive stars
         rating_frame = ttk.Frame(stats_row1)
         rating_frame.pack(side="left", padx=(0, 20))
-        ttk.Label(rating_frame, text="Rating:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        ttk.Label(rating_frame, text="Personal Rating:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self.rating_var = tk.IntVar(value=0)
 
         # Create star rating frame
