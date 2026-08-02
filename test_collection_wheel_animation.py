@@ -45,7 +45,7 @@ class CollectionWheelAnimationFoundationTest(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("self.model.spin(", source)
+        self.assertIn("self.model.select_from_pool(", source)
         self.assertNotIn("import random", source)
         self.assertNotIn("processed.json", source)
         self.assertNotIn("wheel_eligible", source)
@@ -66,7 +66,6 @@ class CollectionWheelAnimationContractTest(unittest.TestCase):
             for index in range(count)
         ]
 
-    @unittest.expectedFailure
     def test_layout_represents_entire_pool_and_selected_segment(self):
         animation = self._animation_module()
         candidates = self._candidates(12)
@@ -95,7 +94,6 @@ class CollectionWheelAnimationContractTest(unittest.TestCase):
             360.0,
         )
 
-    @unittest.expectedFailure
     def test_large_pool_limits_labels_but_keeps_selected_label(self):
         animation = self._animation_module()
         candidates = self._candidates(137)
@@ -119,7 +117,6 @@ class CollectionWheelAnimationContractTest(unittest.TestCase):
             {record["id"] for record in candidates},
         )
 
-    @unittest.expectedFailure
     def test_spin_frames_decelerate_and_land_on_selected_segment(self):
         animation = self._animation_module()
         layout = animation.build_wheel_layout(
@@ -154,7 +151,6 @@ class CollectionWheelAnimationContractTest(unittest.TestCase):
         self.assertAlmostEqual(landing_angle, 90.0, places=7)
         self.assertGreaterEqual(frames[-1], 5 * 360.0)
 
-    @unittest.expectedFailure
     def test_dialog_renders_circular_wheel_with_pointer(self):
         source = Path("ui/collection_wheel_dialog.py").read_text(
             encoding="utf-8"
@@ -171,7 +167,6 @@ class CollectionWheelAnimationContractTest(unittest.TestCase):
         ):
             self.assertIn(required, source)
 
-    @unittest.expectedFailure
     def test_dialog_uses_one_filtered_pool_for_selection_and_animation(self):
         source = Path("ui/collection_wheel_dialog.py").read_text(
             encoding="utf-8"
@@ -193,7 +188,6 @@ class CollectionWheelAnimationContractTest(unittest.TestCase):
         self.assertIn("build_wheel_layout(", spin_method)
         self.assertNotIn("self.model.spin(", spin_method)
 
-    @unittest.expectedFailure
     def test_animation_is_non_blocking_and_cancelled_on_close(self):
         source = Path("ui/collection_wheel_dialog.py").read_text(
             encoding="utf-8"
@@ -217,7 +211,6 @@ class CollectionWheelAnimationContractTest(unittest.TestCase):
         )[0]
         self.assertIn("self._cancel_spin_animation()", close_method)
 
-    @unittest.expectedFailure
     def test_spin_locks_interactions_until_animation_finishes(self):
         source = Path("ui/collection_wheel_dialog.py").read_text(
             encoding="utf-8"
@@ -234,7 +227,6 @@ class CollectionWheelAnimationContractTest(unittest.TestCase):
         ):
             self.assertIn(required, source)
 
-    @unittest.expectedFailure
     def test_result_callback_waits_for_animation_completion(self):
         source = Path("ui/collection_wheel_dialog.py").read_text(
             encoding="utf-8"
@@ -259,6 +251,7 @@ class CollectionWheelAnimationContractTest(unittest.TestCase):
         self.assertIn("self.result_callback(", finish_method)
         self.assertIn("self._show_result(", finish_method)
         self.assertIn("self._set_spinning_state(False)", finish_method)
+        self.assertNotIn("self._refresh_pool_state()", finish_method)
 
 
 if __name__ == "__main__":

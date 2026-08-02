@@ -65,8 +65,8 @@ class CollectionWheelDialogContractTest(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            CollectionWheelDialog._required_window_size(900, 720),
-            (900, 720),
+            CollectionWheelDialog._required_window_size(1100, 820),
+            (1100, 820),
         )
 
     def test_dynamic_content_is_applied_before_window_is_shown(self):
@@ -133,8 +133,10 @@ class CollectionWheelDialogContractTest(unittest.TestCase):
         )
         for required in (
             "self.model.build_pool(",
-            "self.model.spin(",
+            "self.model.select_from_pool(",
             "excluded_ids=excluded_ids",
+            "build_wheel_layout(",
+            "build_spin_frames(",
             "Spin Wheel",
             "Spin Again",
             "Clear Result",
@@ -149,6 +151,23 @@ class CollectionWheelDialogContractTest(unittest.TestCase):
             "processed.json",
         ):
             self.assertNotIn(forbidden, source)
+
+    def test_dialog_draws_and_safely_animates_the_wheel(self):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "self.wheel_canvas = tk.Canvas(",
+            "self.wheel_canvas.create_arc(",
+            "self.wheel_canvas.create_polygon(",
+            "self.window.after(",
+            "self.window.after_cancel(",
+            "self._set_spinning_state(True)",
+            "self._set_spinning_state(False)",
+        ):
+            self.assertIn(required, source)
+        self.assertNotIn("time.sleep(", source)
+        self.assertNotIn("self.model.spin(", source)
 
     def test_collection_page_opens_wheel_from_full_collection(self):
         page_source = Path("ui/pages/collection_page.py").read_text(

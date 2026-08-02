@@ -14,6 +14,7 @@ from planner_store import PlannerStore
 
 SMWC_RATING_THRESHOLDS = (1.0, 2.0, 3.0, 4.0, 4.5, 5.0)
 
+
 class CollectionWheelModel:
     """Build and select from Collection-owned Wheel pools."""
 
@@ -147,6 +148,15 @@ class CollectionWheelModel:
             self.build_pool(collection_records, **filters)
         )
 
+    def select_from_pool(self, collection_pool, *, excluded_ids=None):
+        """Select from one already-built detached Collection pool."""
+
+        snapshot = self.selection_service.snapshot(collection_pool)
+        return self.selection_service.select(
+            snapshot,
+            excluded_ids=excluded_ids,
+        )
+
     def spin(
         self,
         collection_records,
@@ -156,8 +166,8 @@ class CollectionWheelModel:
     ):
         """Select one result from the current Collection-owned Wheel pool."""
 
-        pool = self.snapshot(collection_records, **filters)
-        return self.selection_service.select(
+        pool = self.build_pool(collection_records, **filters)
+        return self.select_from_pool(
             pool,
             excluded_ids=excluded_ids,
         )

@@ -1,23 +1,30 @@
-"""Collection-owned Wheel dialog."""
+"""Collection-owned graphical Wheel dialog."""
 
 from __future__ import annotations
 
 import copy
+import math
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 from collection_wheel import EmptyWheelPoolError, ExhaustedWheelPoolError
+from collection_wheel_animation import build_spin_frames, build_wheel_layout
 
 
 class CollectionWheelDialog:
-    """Spin from the full Collection with optional Planner refinements."""
+    """Filter the full Collection and animate an honest random selection."""
 
     ALL_VALUE = "All"
     ANY_VALUE = "Any"
     ANY_RATING = "Any rating"
     UNRATED = "Unrated"
-    MIN_WIDTH = 780
-    MIN_HEIGHT = 650
+    MIN_WIDTH = 980
+    MIN_HEIGHT = 780
+    MAX_WHEEL_LABELS = 18
+    SPIN_TURNS = 5
+    SPIN_FRAME_COUNT = 61
+    SPIN_FRAME_DELAY_MS = 28
+    POINTER_ANGLE = 90.0
 
     COMPLETION_OPTIONS = (
         ALL_VALUE,
@@ -38,6 +45,20 @@ class CollectionWheelDialog:
         "4.0+",
         "4.5+",
         "5.0",
+    )
+    WHEEL_COLORS = (
+        "#5B8FF9",
+        "#61DDAA",
+        "#65789B",
+        "#F6BD16",
+        "#7262FD",
+        "#78D3F8",
+        "#9661BC",
+        "#F6903D",
+        "#008685",
+        "#F08BB4",
+        "#2E8B57",
+        "#D96C6C",
     )
 
     def __init__(
@@ -79,9 +100,19 @@ class CollectionWheelDialog:
         self.spin_button = None
         self.reroll_button = None
         self.clear_button = None
+        self.reset_filters_button = None
+        self.wheel_canvas = None
         self._current_result_id = ""
         self._list_name_to_id = {}
         self._planner_refinements_visible = False
+
+        self._spinning = False
+        self._animation_after_id = None
+        self._spin_frames = ()
+        self._spin_frame_index = 0
+        self._wheel_layout = build_wheel_layout([])
+        self._wheel_rotation = 0.0
+        self._pending_result = None
 
         self._create_window()
         self._populate_filter_choices()
@@ -102,6 +133,7 @@ class CollectionWheelDialog:
     def close(self):
         if not self.window:
             return
+        self._cancel_spin_animation()
         window = self.window
         self.window = None
         try:
@@ -136,7 +168,7 @@ class CollectionWheelDialog:
                 "filters. Planner refinements appear only when Planner data "
                 "is configured."
             ),
-            wraplength=740,
+            wraplength=940,
         ).pack(anchor="w", pady=(4, 14))
 
         collection_frame = ttk.LabelFrame(
@@ -216,11 +248,12 @@ class CollectionWheelDialog:
             )
             self.collection_combos.append(combo)
 
-        ttk.Button(
+        self.reset_filters_button = ttk.Button(
             collection_frame,
             text="Reset Filters",
             command=self._reset_collection_filters,
-        ).grid(
+        )
+        self.reset_filters_button.grid(
             row=5,
             column=3,
             sticky="e",
@@ -287,25 +320,50 @@ class CollectionWheelDialog:
         )
         self.spin_button.pack(side="right", padx=(0, 8))
 
-        result_frame = ttk.LabelFrame(content, text="Result", padding=14)
+        result_frame = ttk.LabelFrame(content, text="Wheel", padding=12)
         result_frame.pack(fill="both", expand=True, pady=(12, 0))
-        ttk.Label(
+        result_frame.grid_columnconfigure(0, weight=3)
+        result_frame.grid_columnconfigure(1, weight=2)
+        result_frame.grid_rowconfigure(0, weight=1)
+
+        canvas_background = self.window.cget("background")
+        self.wheel_canvas = tk.Canvas(
             result_frame,
+            width=440,
+            height=440,
+            background=canvas_background,
+            highlightthickness=0,
+        )
+        self.wheel_canvas.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=(0, 16),
+        )
+        self.wheel_canvas.bind("<Configure>", self._on_canvas_resize)
+
+        result_details = ttk.Frame(result_frame, padding=(8, 8))
+        result_details.grid(row=0, column=1, sticky="nsew")
+        ttk.Label(
+            result_details,
             textvariable=self.pool_count_var,
             font=("Segoe UI", 9, "bold"),
+            wraplength=300,
         ).pack(anchor="w")
+        ttk.Separator(result_details).pack(fill="x", pady=(12, 18))
         ttk.Label(
-            result_frame,
+            result_details,
             textvariable=self.result_var,
-            font=("Segoe UI", 14, "bold"),
-            wraplength=700,
-        ).pack(anchor="center", pady=(24, 8))
-        ttk.Label(
-            result_frame,
-            textvariable=self.detail_var,
-            wraplength=700,
+            font=("Segoe UI", 16, "bold"),
+            wraplength=300,
             justify="center",
-        ).pack(anchor="center")
+        ).pack(fill="x", expand=True, anchor="center")
+        ttk.Label(
+            result_details,
+            textvariable=self.detail_var,
+            wraplength=300,
+            justify="center",
+        ).pack(fill="x", pady=(12, 0))
 
     def _finalize_window(self):
         self.window.update_idletasks()
@@ -441,6 +499,8 @@ class CollectionWheelDialog:
         }
 
     def _reset_collection_filters(self):
+        if self._spinning:
+            return
         self.search_var.set("")
         self.completion_var.set(self.ALL_VALUE)
         self.type_var.set(self.ALL_VALUE)
@@ -452,6 +512,8 @@ class CollectionWheelDialog:
         self._refresh_pool_state()
 
     def _refresh_pool_state(self):
+        if self._spinning:
+            return
         try:
             pool = self.model.build_pool(
                 self.collection_records,
@@ -462,6 +524,9 @@ class CollectionWheelDialog:
             self.spin_button.configure(state="disabled")
             self.reroll_button.configure(state="disabled")
             self.detail_var.set(str(error))
+            self._wheel_layout = build_wheel_layout([])
+            self._wheel_rotation = 0.0
+            self._render_wheel()
             return
 
         count = len(pool)
@@ -476,6 +541,15 @@ class CollectionWheelDialog:
         elif current is not None:
             self._show_result(current)
 
+        selected_id = self._current_result_id if current is not None else None
+        self._wheel_layout = build_wheel_layout(
+            pool,
+            selected_id=selected_id,
+            max_labels=self.MAX_WHEEL_LABELS,
+        )
+        self._wheel_rotation = 0.0
+        self._render_wheel(reveal_selected=bool(selected_id))
+
         self.spin_button.configure(state="normal" if count else "disabled")
         self.reroll_button.configure(
             state=(
@@ -489,14 +563,36 @@ class CollectionWheelDialog:
         )
 
     def _spin(self, exclude_current=False):
+        if self._spinning:
+            return
         excluded_ids = None
         if exclude_current and self._current_result_id:
             excluded_ids = [self._current_result_id]
         try:
-            result = self.model.spin(
+            pool = self.model.build_pool(
                 self.collection_records,
-                excluded_ids=excluded_ids,
                 **self._current_filters(),
+            )
+            result = self.model.select_from_pool(
+                pool,
+                excluded_ids=excluded_ids,
+            )
+            excluded = set(result.excluded_ids)
+            animation_pool = [
+                record
+                for record in pool
+                if str(record.get("id", "")).strip() not in excluded
+            ]
+            layout = build_wheel_layout(
+                animation_pool,
+                selected_id=result.candidate_id,
+                max_labels=self.MAX_WHEEL_LABELS,
+            )
+            frames = build_spin_frames(
+                layout,
+                turns=self.SPIN_TURNS,
+                frame_count=self.SPIN_FRAME_COUNT,
+                pointer_angle=self.POINTER_ANGLE,
             )
         except EmptyWheelPoolError:
             messagebox.showinfo(
@@ -515,17 +611,211 @@ class CollectionWheelDialog:
         except Exception as error:
             messagebox.showerror(
                 "Collection Wheel",
-                f"Could not select a Wheel result:\\n{error}",
+                f"Could not select a Wheel result:\n{error}",
                 parent=self.window,
             )
             return
 
-        candidate = result.candidate
+        self._begin_spin_animation(layout, frames, result)
+
+    def _begin_spin_animation(self, layout, frames, result):
+        self._cancel_spin_animation()
+        self._wheel_layout = layout
+        self._spin_frames = tuple(frames)
+        self._spin_frame_index = 0
+        self._wheel_rotation = self._spin_frames[0]
+        self._pending_result = result
+        self.result_var.set("Spinning...")
+        self.detail_var.set(
+            f"Selecting from {result.eligible_size} eligible candidates."
+        )
+        self._set_spinning_state(True)
+        self._render_wheel(reveal_selected=False)
+        self._animation_after_id = self.window.after(
+            self.SPIN_FRAME_DELAY_MS,
+            self._advance_spin_animation,
+        )
+
+    def _advance_spin_animation(self):
+        self._animation_after_id = None
+        if not self._spinning or not self.window:
+            return
+        self._spin_frame_index += 1
+        self._wheel_rotation = self._spin_frames[self._spin_frame_index]
+        self._render_wheel(reveal_selected=False)
+        if self._spin_frame_index >= len(self._spin_frames) - 1:
+            self._finish_spin_animation()
+            return
+        self._animation_after_id = self.window.after(
+            self.SPIN_FRAME_DELAY_MS,
+            self._advance_spin_animation,
+        )
+
+    def _finish_spin_animation(self):
+        result = self._pending_result
+        self._pending_result = None
+        self._animation_after_id = None
+        if result is None:
+            self._set_spinning_state(False)
+            return
+
         self._current_result_id = result.candidate_id
-        self._show_result(candidate)
+        self._show_result(result.candidate)
+        self._render_wheel(reveal_selected=True)
+        self._set_spinning_state(False)
+        self.spin_button.configure(state="normal")
+        self.reroll_button.configure(
+            state="normal" if result.pool_size > 1 else "disabled"
+        )
+        self.clear_button.configure(state="normal")
         if self.result_callback:
             self.result_callback(result.candidate_id)
-        self._refresh_pool_state()
+
+    def _cancel_spin_animation(self):
+        after_id = self._animation_after_id
+        self._animation_after_id = None
+        if after_id is not None and self.window:
+            try:
+                if self.window.winfo_exists():
+                    self.window.after_cancel(after_id)
+            except tk.TclError:
+                pass
+        self._pending_result = None
+        self._spinning = False
+
+    def _set_spinning_state(self, spinning):
+        self._spinning = bool(spinning)
+        entry_state = "disabled" if spinning else "normal"
+        combo_state = "disabled" if spinning else "readonly"
+        button_state = "disabled" if spinning else "normal"
+
+        self.search_entry.configure(state=entry_state)
+        self.reset_filters_button.configure(state=button_state)
+        for combo in (*self.collection_combos, *self.planner_combos):
+            combo.configure(state=combo_state)
+
+        if spinning:
+            self.spin_button.configure(state="disabled")
+            self.reroll_button.configure(state="disabled")
+            self.clear_button.configure(state="disabled")
+
+    def _on_canvas_resize(self, _event=None):
+        self._render_wheel(reveal_selected=not self._spinning)
+
+    def _render_wheel(self, *, reveal_selected=False):
+        if not self.wheel_canvas:
+            return
+        canvas = self.wheel_canvas
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), int(canvas.cget("width")))
+        height = max(canvas.winfo_height(), int(canvas.cget("height")))
+        size = min(width, height)
+        radius = max(40.0, size / 2 - 28.0)
+        center_x = width / 2
+        center_y = height / 2 + 6
+        bounds = (
+            center_x - radius,
+            center_y - radius,
+            center_x + radius,
+            center_y + radius,
+        )
+
+        if not self._wheel_layout.segments:
+            canvas.create_oval(
+                *bounds,
+                outline="#8A8A8A",
+                width=2,
+            )
+            self.wheel_canvas.create_text(
+                center_x,
+                center_y,
+                text="No candidates",
+                fill="#666666",
+                font=("Segoe UI", 12, "bold"),
+            )
+            self._draw_pointer(center_x, center_y, radius)
+            return
+
+        selected_index = self._wheel_layout.selected_index
+        for index, segment in enumerate(self._wheel_layout.segments):
+            start = (segment.start_angle + self._wheel_rotation) % 360.0
+            is_selected = reveal_selected and index == selected_index
+            outline = "#202020" if not is_selected else "#FFFFFF"
+            width_value = 1 if not is_selected else 4
+            extent = min(segment.extent, 359.999)
+            self.wheel_canvas.create_arc(
+                *bounds,
+                start=start,
+                extent=extent,
+                style="pieslice",
+                fill=self.WHEEL_COLORS[index % len(self.WHEEL_COLORS)],
+                outline=outline,
+                width=width_value,
+            )
+
+        for segment in self._wheel_layout.segments:
+            if not segment.show_label:
+                continue
+            angle = (
+                segment.center_angle + self._wheel_rotation
+            ) % 360.0
+            radians = math.radians(angle)
+            label_radius = radius * 0.67
+            x = center_x + label_radius * math.cos(radians)
+            y = center_y - label_radius * math.sin(radians)
+            label = self._short_label(segment.title)
+            self.wheel_canvas.create_text(
+                x + 1,
+                y + 1,
+                text=label,
+                fill="#202020",
+                font=("Segoe UI", 8, "bold"),
+                width=max(60, int(radius * 0.42)),
+                justify="center",
+            )
+            self.wheel_canvas.create_text(
+                x,
+                y,
+                text=label,
+                fill="#FFFFFF",
+                font=("Segoe UI", 8, "bold"),
+                width=max(60, int(radius * 0.42)),
+                justify="center",
+            )
+
+        hub_radius = max(12.0, radius * 0.08)
+        canvas.create_oval(
+            center_x - hub_radius,
+            center_y - hub_radius,
+            center_x + hub_radius,
+            center_y + hub_radius,
+            fill="#F4F4F4",
+            outline="#303030",
+            width=2,
+        )
+        self._draw_pointer(center_x, center_y, radius)
+
+    def _draw_pointer(self, center_x, center_y, radius):
+        tip_y = center_y - radius + 14
+        base_y = center_y - radius - 16
+        self.wheel_canvas.create_polygon(
+            center_x,
+            tip_y,
+            center_x - 15,
+            base_y,
+            center_x + 15,
+            base_y,
+            fill="#E5484D",
+            outline="#6E1F22",
+            width=2,
+        )
+
+    @staticmethod
+    def _short_label(title, limit=22):
+        title = " ".join(str(title).split())
+        if len(title) <= limit:
+            return title
+        return title[: max(1, limit - 1)].rstrip() + "…"
 
     def _show_result(self, candidate):
         title = str(candidate.get("title", "")).strip()
@@ -574,6 +864,8 @@ class CollectionWheelDialog:
         )
 
     def _clear_result(self, refresh=True):
+        if self._spinning:
+            return
         self._current_result_id = ""
         self.result_var.set("No result yet")
         self.detail_var.set(
