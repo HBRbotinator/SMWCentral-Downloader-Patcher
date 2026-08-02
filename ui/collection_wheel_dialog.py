@@ -25,6 +25,8 @@ class CollectionWheelDialog:
     SPIN_FRAME_COUNT = 61
     SPIN_FRAME_DELAY_MS = 28
     POINTER_ANGLE = 90.0
+    RESULT_DETAILS_WIDTH = 320
+    RESULT_DETAILS_WRAP = 300
 
     COMPLETION_OPTIONS = (
         ALL_VALUE,
@@ -322,8 +324,12 @@ class CollectionWheelDialog:
 
         result_frame = ttk.LabelFrame(content, text="Wheel", padding=12)
         result_frame.pack(fill="both", expand=True, pady=(12, 0))
-        result_frame.grid_columnconfigure(0, weight=3)
-        result_frame.grid_columnconfigure(1, weight=2)
+        result_frame.grid_columnconfigure(0, weight=1)
+        result_frame.grid_columnconfigure(
+            1,
+            weight=0,
+            minsize=self.RESULT_DETAILS_WIDTH,
+        )
         result_frame.grid_rowconfigure(0, weight=1)
 
         canvas_background = self.window.cget("background")
@@ -342,26 +348,31 @@ class CollectionWheelDialog:
         )
         self.wheel_canvas.bind("<Configure>", self._on_canvas_resize)
 
-        result_details = ttk.Frame(result_frame, padding=(8, 8))
+        result_details = ttk.Frame(
+            result_frame,
+            width=self.RESULT_DETAILS_WIDTH,
+            padding=(8, 8),
+        )
         result_details.grid(row=0, column=1, sticky="nsew")
+        result_details.grid_propagate(False)
         ttk.Label(
             result_details,
             textvariable=self.pool_count_var,
             font=("Segoe UI", 9, "bold"),
-            wraplength=300,
+            wraplength=self.RESULT_DETAILS_WRAP,
         ).pack(anchor="w")
         ttk.Separator(result_details).pack(fill="x", pady=(12, 18))
         ttk.Label(
             result_details,
             textvariable=self.result_var,
             font=("Segoe UI", 16, "bold"),
-            wraplength=300,
+            wraplength=self.RESULT_DETAILS_WRAP,
             justify="center",
         ).pack(fill="x", expand=True, anchor="center")
         ttk.Label(
             result_details,
             textvariable=self.detail_var,
-            wraplength=300,
+            wraplength=self.RESULT_DETAILS_WRAP,
             justify="center",
         ).pack(fill="x", pady=(12, 0))
 
@@ -709,15 +720,9 @@ class CollectionWheelDialog:
         canvas.delete("all")
         width = max(canvas.winfo_width(), int(canvas.cget("width")))
         height = max(canvas.winfo_height(), int(canvas.cget("height")))
-        size = min(width, height)
-        radius = max(40.0, size / 2 - 28.0)
-        center_x = width / 2
-        center_y = height / 2 + 6
-        bounds = (
-            center_x - radius,
-            center_y - radius,
-            center_x + radius,
-            center_y + radius,
+        center_x, center_y, radius, bounds = self._wheel_geometry(
+            width,
+            height,
         )
 
         if not self._wheel_layout.segments:
@@ -794,6 +799,22 @@ class CollectionWheelDialog:
             width=2,
         )
         self._draw_pointer(center_x, center_y, radius)
+
+    @staticmethod
+    def _wheel_geometry(width, height):
+        width = max(1.0, float(width))
+        height = max(1.0, float(height))
+        size = min(width, height)
+        radius = max(40.0, size / 2 - 28.0)
+        center_x = width / 2
+        center_y = height / 2 + 6
+        bounds = (
+            center_x - radius,
+            center_y - radius,
+            center_x + radius,
+            center_y + radius,
+        )
+        return center_x, center_y, radius, bounds
 
     def _draw_pointer(self, center_x, center_y, radius):
         tip_y = center_y - radius + 14
