@@ -4,6 +4,21 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+<!-- collection-wheel:start -->
+### Collection Wheel
+
+- Added independent Collection filters for completion, type, difficulty,
+  download status, SMWC Rating, and release year.
+- Added optional Planner refinements for lifecycle, planning horizon, and
+  custom lists.
+- Added a non-blocking animated circular Wheel, Spin Again, stable pointer
+  landing, and Collection result focus.
+- Synchronized and displayed SMWC Rating separately from Personal Rating.
+- Kept Wheel filtering and selection read-only.
+- Documented that the browser overlay and API runtime remain future work.
+
+<!-- collection-wheel:end -->
+
 <!-- planner-foundation:start -->
 ### Planner foundation
 

@@ -98,6 +98,8 @@ The current build contract publishes a native tarball rather than an AppImage. E
 
 ![Collection Page](images/application-5.0-collection.png)
 
+- [Collection Wheel guide](docs/COLLECTION_WHEEL.md) — filters, Planner refinements, ratings, spins, and safety boundaries
+
 #### Input Format Guide
 
 When editing **Completed Date** and **Time to Beat** fields, the app supports flexible input formats:
