@@ -8,6 +8,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlsplit
 
+from wheel_runtime_browser import (
+    WHEEL_RUNTIME_BROWSER_PATH,
+    WHEEL_RUNTIME_BROWSER_REDIRECT_PATH,
+    get_wheel_runtime_browser_asset,
+)
 from wheel_runtime_snapshot_provider import (
     WheelRuntimeSnapshotUnavailableError,
 )
@@ -62,6 +67,10 @@ class WheelRuntimeHttpService:
             else host
         )
         return f"http://{display_host}:{port}"
+
+    @property
+    def browser_url(self) -> str:
+        return self.base_url + WHEEL_RUNTIME_BROWSER_PATH
 
     def start(self) -> tuple[str, int]:
         """Start once and return the actual bound loopback address."""
@@ -144,6 +153,22 @@ def _handler_for(provider: Any) -> type[BaseHTTPRequestHandler]:
 
         def _dispatch(self, *, include_body: bool) -> None:
             path = urlsplit(self.path).path
+
+            if path == WHEEL_RUNTIME_BROWSER_REDIRECT_PATH:
+                self._send_redirect(WHEEL_RUNTIME_BROWSER_PATH)
+                return
+
+            browser_asset = get_wheel_runtime_browser_asset(path)
+            if browser_asset is not None:
+                self._send_bytes(
+                    200,
+                    browser_asset.payload,
+                    content_type=browser_asset.content_type,
+                    include_body=include_body,
+                    browser_asset=True,
+                )
+                return
+
             if path == WHEEL_RUNTIME_HEALTH_PATH:
                 self._send_json(
                     200,
@@ -179,6 +204,7 @@ def _handler_for(provider: Any) -> type[BaseHTTPRequestHandler]:
                 self._send_bytes(
                     200,
                     body.encode("utf-8"),
+                    content_type="application/json; charset=utf-8",
                     include_body=include_body,
                 )
                 return
@@ -192,6 +218,16 @@ def _handler_for(provider: Any) -> type[BaseHTTPRequestHandler]:
                 include_body=include_body,
             )
 
+        def _send_redirect(self, location: str) -> None:
+            self.send_response(308)
+            self.send_header("Location", location)
+            self._common_headers(
+                0,
+                content_type="text/plain; charset=utf-8",
+                browser_asset=True,
+            )
+            self.end_headers()
+
         def _method_not_allowed(self) -> None:
             payload = _json_bytes(
                 _error_document(
@@ -201,7 +237,10 @@ def _handler_for(provider: Any) -> type[BaseHTTPRequestHandler]:
             )
             self.send_response(405)
             self.send_header("Allow", "GET, HEAD")
-            self._common_headers(len(payload))
+            self._common_headers(
+                len(payload),
+                content_type="application/json; charset=utf-8",
+            )
             self.end_headers()
             self.wfile.write(payload)
 
@@ -215,6 +254,7 @@ def _handler_for(provider: Any) -> type[BaseHTTPRequestHandler]:
             self._send_bytes(
                 status,
                 _json_bytes(document),
+                content_type="application/json; charset=utf-8",
                 include_body=include_body,
             )
 
@@ -223,24 +263,50 @@ def _handler_for(provider: Any) -> type[BaseHTTPRequestHandler]:
             status: int,
             payload: bytes,
             *,
+            content_type: str,
             include_body: bool,
+            browser_asset: bool = False,
         ) -> None:
             self.send_response(status)
-            self._common_headers(len(payload))
+            self._common_headers(
+                len(payload),
+                content_type=content_type,
+                browser_asset=browser_asset,
+            )
             self.end_headers()
             if include_body:
                 self.wfile.write(payload)
 
-        def _common_headers(self, content_length: int) -> None:
-            self.send_header(
-                "Content-Type",
-                "application/json; charset=utf-8",
-            )
+        def _common_headers(
+            self,
+            content_length: int,
+            *,
+            content_type: str,
+            browser_asset: bool = False,
+        ) -> None:
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(content_length))
             self.send_header("Cache-Control", "no-store")
             self.send_header("Pragma", "no-cache")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
+            if browser_asset:
+                self.send_header(
+                    "Content-Security-Policy",
+                    "default-src 'none'; "
+                    "script-src 'self'; "
+                    "style-src 'self'; "
+                    "connect-src 'self'; "
+                    "img-src 'self' data:; "
+                    "base-uri 'none'; "
+                    "form-action 'none'; "
+                    "frame-ancestors *",
+                )
+            else:
+                self.send_header(
+                    "Content-Security-Policy",
+                    "default-src 'none'; frame-ancestors 'none'",
+                )
 
     return WheelRuntimeRequestHandler
 

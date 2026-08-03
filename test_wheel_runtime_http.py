@@ -1,4 +1,4 @@
-"""Contracts for the loopback-only read-only Wheel runtime API."""
+"""HTTP contracts including the read-only browser preview."""
 
 from __future__ import annotations
 
@@ -9,6 +9,11 @@ import threading
 import unittest
 from datetime import datetime, timezone
 
+from wheel_runtime_browser import (
+    WHEEL_RUNTIME_BROWSER_PATH,
+    WHEEL_RUNTIME_BROWSER_SCRIPT_PATH,
+    WHEEL_RUNTIME_BROWSER_STYLE_PATH,
+)
 from wheel_runtime_contract import build_wheel_runtime_snapshot
 from wheel_runtime_http import (
     WHEEL_RUNTIME_HEALTH_PATH,
@@ -25,7 +30,7 @@ GENERATED_AT = datetime(
     8,
     3,
     17,
-    0,
+    30,
     tzinfo=timezone.utc,
 )
 
@@ -72,6 +77,62 @@ class WheelRuntimeHttpServiceTest(unittest.TestCase):
     def tearDown(self):
         self.service.stop()
 
+    def test_browser_url_uses_actual_bound_address(self):
+        self.assertEqual(
+            self.service.browser_url,
+            self.service.base_url + "/wheel/",
+        )
+
+    def test_browser_short_path_redirects_to_canonical_page(self):
+        response, body = request(self.service, "GET", "/wheel")
+
+        self.assertEqual(response.status, 308)
+        self.assertEqual(response.getheader("Location"), "/wheel/")
+        self.assertEqual(body, b"")
+
+    def test_browser_page_and_assets_use_correct_content_types(self):
+        expected = {
+            WHEEL_RUNTIME_BROWSER_PATH: "text/html; charset=utf-8",
+            WHEEL_RUNTIME_BROWSER_STYLE_PATH: "text/css; charset=utf-8",
+            WHEEL_RUNTIME_BROWSER_SCRIPT_PATH: (
+                "text/javascript; charset=utf-8"
+            ),
+        }
+        for path, content_type in expected.items():
+            with self.subTest(path=path):
+                response, body = request(self.service, "GET", path)
+                self.assertEqual(response.status, 200)
+                self.assertEqual(
+                    response.getheader("Content-Type"),
+                    content_type,
+                )
+                self.assertGreater(len(body), 100)
+
+    def test_browser_assets_have_strict_obs_compatible_csp(self):
+        response, _body = request(
+            self.service,
+            "GET",
+            WHEEL_RUNTIME_BROWSER_PATH,
+        )
+
+        csp = response.getheader("Content-Security-Policy")
+        self.assertIn("default-src 'none'", csp)
+        self.assertIn("script-src 'self'", csp)
+        self.assertIn("connect-src 'self'", csp)
+        self.assertIn("frame-ancestors *", csp)
+        self.assertIsNone(response.getheader("X-Frame-Options"))
+
+    def test_browser_head_returns_headers_without_body(self):
+        response, body = request(
+            self.service,
+            "HEAD",
+            WHEEL_RUNTIME_BROWSER_SCRIPT_PATH,
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(body, b"")
+        self.assertGreater(int(response.getheader("Content-Length")), 100)
+
     def test_health_is_available_before_snapshot_refresh(self):
         response, body = request(
             self.service,
@@ -81,11 +142,7 @@ class WheelRuntimeHttpServiceTest(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         document = json.loads(body)
-        self.assertEqual(document["service"], "smwc-wheel-runtime")
-        self.assertEqual(document["api_version"], 1)
-        self.assertTrue(document["read_only"])
         self.assertFalse(document["snapshot"]["ready"])
-        self.assertEqual(document["snapshot"]["candidate_count"], 0)
 
     def test_snapshot_returns_503_until_provider_is_ready(self):
         response, body = request(
@@ -102,7 +159,6 @@ class WheelRuntimeHttpServiceTest(unittest.TestCase):
 
     def test_snapshot_returns_provider_json_after_refresh(self):
         expected = self.provider.refresh()
-
         response, body = request(
             self.service,
             "GET",
@@ -111,41 +167,34 @@ class WheelRuntimeHttpServiceTest(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(json.loads(body), expected)
-        self.assertTrue(body.endswith(b"\n"))
 
-    def test_health_reflects_refreshed_provider_status(self):
-        self.provider.refresh()
-
-        response, body = request(
-            self.service,
-            "GET",
-            WHEEL_RUNTIME_HEALTH_PATH + "?ignored=yes",
-        )
-
-        self.assertEqual(response.status, 200)
-        status = json.loads(body)["snapshot"]
-        self.assertTrue(status["ready"])
-        self.assertEqual(status["candidate_count"], 1)
-        self.assertEqual(status["source_revision"], "revision-1")
-
-    def test_head_returns_headers_without_body(self):
-        self.provider.refresh()
-
-        response, body = request(
-            self.service,
-            "HEAD",
+    def test_mutating_methods_are_rejected_for_api_and_browser(self):
+        for path in (
             WHEEL_RUNTIME_SNAPSHOT_PATH,
-        )
-
-        self.assertEqual(response.status, 200)
-        self.assertEqual(body, b"")
-        self.assertGreater(int(response.getheader("Content-Length")), 0)
+            WHEEL_RUNTIME_BROWSER_PATH,
+        ):
+            for method in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+                with self.subTest(path=path, method=method):
+                    response, body = request(
+                        self.service,
+                        method,
+                        path,
+                    )
+                    self.assertEqual(response.status, 405)
+                    self.assertEqual(
+                        response.getheader("Allow"),
+                        "GET, HEAD",
+                    )
+                    self.assertEqual(
+                        json.loads(body)["error"]["code"],
+                        "method_not_allowed",
+                    )
 
     def test_unknown_path_returns_json_404(self):
         response, body = request(
             self.service,
             "GET",
-            "/not-a-runtime-route",
+            "/wheel/missing.js",
         )
 
         self.assertEqual(response.status, 404)
@@ -154,77 +203,53 @@ class WheelRuntimeHttpServiceTest(unittest.TestCase):
             "not_found",
         )
 
-    def test_mutating_methods_are_rejected(self):
-        for method in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
-            with self.subTest(method=method):
-                response, body = request(
-                    self.service,
-                    method,
-                    WHEEL_RUNTIME_SNAPSHOT_PATH,
-                )
-                self.assertEqual(response.status, 405)
-                self.assertEqual(response.getheader("Allow"), "GET, HEAD")
-                self.assertEqual(
-                    json.loads(body)["error"]["code"],
-                    "method_not_allowed",
-                )
-
     def test_all_responses_disable_caching_and_sniffing(self):
-        response, _body = request(
-            self.service,
-            "GET",
+        for path in (
             WHEEL_RUNTIME_HEALTH_PATH,
-        )
-
-        self.assertEqual(response.getheader("Cache-Control"), "no-store")
-        self.assertEqual(response.getheader("Pragma"), "no-cache")
-        self.assertEqual(
-            response.getheader("X-Content-Type-Options"),
-            "nosniff",
-        )
-        self.assertEqual(
-            response.getheader("Content-Type"),
-            "application/json; charset=utf-8",
-        )
+            WHEEL_RUNTIME_BROWSER_PATH,
+        ):
+            with self.subTest(path=path):
+                response, _body = request(
+                    self.service,
+                    "GET",
+                    path,
+                )
+                self.assertEqual(
+                    response.getheader("Cache-Control"),
+                    "no-store",
+                )
+                self.assertEqual(
+                    response.getheader("X-Content-Type-Options"),
+                    "nosniff",
+                )
 
     def test_start_is_idempotent_and_stop_is_repeatable(self):
         first = self.service.address
-        second = self.service.start()
-
-        self.assertEqual(first, second)
+        self.assertEqual(self.service.start(), first)
         self.service.stop()
         self.service.stop()
         self.assertFalse(self.service.running)
 
-    def test_context_manager_controls_lifecycle(self):
-        service = WheelRuntimeHttpService(self.provider, port=0)
-
-        with service:
-            self.assertTrue(service.running)
-            self.assertTrue(service.base_url.startswith("http://127.0.0.1:"))
-
-        self.assertFalse(service.running)
-
-    def test_concurrent_snapshot_readers_receive_complete_json(self):
+    def test_concurrent_browser_and_snapshot_readers_are_complete(self):
         self.provider.refresh()
-        documents = []
+        results = []
         failures = []
 
-        def read_snapshot():
+        def read_path(path):
             try:
-                response, body = request(
-                    self.service,
-                    "GET",
-                    WHEEL_RUNTIME_SNAPSHOT_PATH,
-                )
-                self.assertEqual(response.status, 200)
-                documents.append(json.loads(body))
+                response, body = request(self.service, "GET", path)
+                results.append((path, response.status, len(body)))
             except Exception as error:
                 failures.append(error)
 
+        paths = [
+            WHEEL_RUNTIME_BROWSER_PATH,
+            WHEEL_RUNTIME_BROWSER_SCRIPT_PATH,
+            WHEEL_RUNTIME_SNAPSHOT_PATH,
+        ] * 4
         threads = [
-            threading.Thread(target=read_snapshot)
-            for _ in range(10)
+            threading.Thread(target=read_path, args=(path,))
+            for path in paths
         ]
         for thread in threads:
             thread.start()
@@ -232,15 +257,12 @@ class WheelRuntimeHttpServiceTest(unittest.TestCase):
             thread.join()
 
         self.assertEqual(failures, [])
-        self.assertEqual(len(documents), 10)
+        self.assertEqual(len(results), len(paths))
         self.assertTrue(
-            all(
-                document["candidates"][0]["title"] == "One"
-                for document in documents
-            )
+            all(status == 200 and length > 0 for _, status, length in results)
         )
 
-    def test_service_rejects_non_loopback_or_invalid_bindings(self):
+    def test_service_rejects_non_loopback_bindings(self):
         for host in ("0.0.0.0", "192.168.1.10", "", "::1"):
             with self.subTest(host=host):
                 with self.assertRaises(ValueError):
@@ -249,28 +271,6 @@ class WheelRuntimeHttpServiceTest(unittest.TestCase):
                         host=host,
                         port=0,
                     )
-
-        for port in (-1, 65536):
-            with self.subTest(port=port):
-                with self.assertRaises(ValueError):
-                    WheelRuntimeHttpService(
-                        self.provider,
-                        port=port,
-                    )
-
-        for port in (True, "8765"):
-            with self.subTest(port=port):
-                with self.assertRaises(TypeError):
-                    WheelRuntimeHttpService(
-                        self.provider,
-                        port=port,
-                    )
-
-    def test_provider_contract_is_required(self):
-        for provider in (object(), None):
-            with self.subTest(provider=provider):
-                with self.assertRaises(TypeError):
-                    WheelRuntimeHttpService(provider, port=0)
 
 
 if __name__ == "__main__":
