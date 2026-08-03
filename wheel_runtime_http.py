@@ -16,11 +16,15 @@ from wheel_runtime_browser import (
 from wheel_runtime_snapshot_provider import (
     WheelRuntimeSnapshotUnavailableError,
 )
+from wheel_runtime_spin import (
+    WheelRuntimeSpinUnavailableError,
+)
 
 
 WHEEL_RUNTIME_HTTP_API_VERSION = 1
 WHEEL_RUNTIME_HEALTH_PATH = "/api/v1/health"
 WHEEL_RUNTIME_SNAPSHOT_PATH = "/api/v1/snapshot"
+WHEEL_RUNTIME_SPIN_PATH = "/api/v1/spin"
 WHEEL_RUNTIME_DEFAULT_HOST = "127.0.0.1"
 WHEEL_RUNTIME_DEFAULT_PORT = 8765
 
@@ -34,13 +38,16 @@ class WheelRuntimeHttpService:
         self,
         provider: Any,
         *,
+        spin_coordinator: Any | None = None,
         host: str = WHEEL_RUNTIME_DEFAULT_HOST,
         port: int = WHEEL_RUNTIME_DEFAULT_PORT,
     ) -> None:
         _validate_provider(provider)
+        _validate_spin_coordinator(spin_coordinator)
         self._host = _validate_host(host)
         self._port = _validate_port(port)
         self._provider = provider
+        self._spin_coordinator = spin_coordinator
         self._lock = threading.RLock()
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -79,7 +86,10 @@ class WheelRuntimeHttpService:
             if self._server is not None:
                 return self.address
 
-            handler_class = _handler_for(self._provider)
+            handler_class = _handler_for(
+                self._provider,
+                self._spin_coordinator,
+            )
             server = ThreadingHTTPServer(
                 (self._host, self._port),
                 handler_class,
@@ -122,7 +132,10 @@ class WheelRuntimeHttpService:
         self.stop()
 
 
-def _handler_for(provider: Any) -> type[BaseHTTPRequestHandler]:
+def _handler_for(
+    provider: Any,
+    spin_coordinator: Any | None,
+) -> type[BaseHTTPRequestHandler]:
     class WheelRuntimeRequestHandler(BaseHTTPRequestHandler):
         server_version = "SMWCWheelRuntime/1"
         sys_version = ""
@@ -172,7 +185,10 @@ def _handler_for(provider: Any) -> type[BaseHTTPRequestHandler]:
             if path == WHEEL_RUNTIME_HEALTH_PATH:
                 self._send_json(
                     200,
-                    _health_document(provider),
+                    _health_document(
+                        provider,
+                        spin_coordinator,
+                    ),
                     include_body=include_body,
                 )
                 return
@@ -196,6 +212,49 @@ def _handler_for(provider: Any) -> type[BaseHTTPRequestHandler]:
                         _error_document(
                             "snapshot_error",
                             "The Wheel runtime snapshot could not be read",
+                        ),
+                        include_body=include_body,
+                    )
+                    return
+
+                self._send_bytes(
+                    200,
+                    body.encode("utf-8"),
+                    content_type="application/json; charset=utf-8",
+                    include_body=include_body,
+                )
+                return
+
+            if path == WHEEL_RUNTIME_SPIN_PATH:
+                if spin_coordinator is None:
+                    self._send_json(
+                        503,
+                        _error_document(
+                            "spin_runtime_unavailable",
+                            "The Wheel spin runtime is not configured",
+                        ),
+                        include_body=include_body,
+                    )
+                    return
+
+                try:
+                    body = spin_coordinator.current_json()
+                except WheelRuntimeSpinUnavailableError as error:
+                    self._send_json(
+                        503,
+                        _error_document(
+                            "spin_unavailable",
+                            str(error),
+                        ),
+                        include_body=include_body,
+                    )
+                    return
+                except Exception:
+                    self._send_json(
+                        500,
+                        _error_document(
+                            "spin_error",
+                            "The Wheel runtime spin could not be read",
                         ),
                         include_body=include_body,
                     )
@@ -311,11 +370,14 @@ def _handler_for(provider: Any) -> type[BaseHTTPRequestHandler]:
     return WheelRuntimeRequestHandler
 
 
-def _health_document(provider: Any) -> dict[str, Any]:
+def _health_document(
+    provider: Any,
+    spin_coordinator: Any | None,
+) -> dict[str, Any]:
     try:
-        status = provider.status()
+        snapshot_status = provider.status()
     except Exception:
-        status = {
+        snapshot_status = {
             "ready": False,
             "successful_refreshes": 0,
             "generated_at": None,
@@ -325,11 +387,53 @@ def _health_document(provider: Any) -> dict[str, Any]:
             "last_error": "Snapshot provider status is unavailable",
         }
 
+    spin_status = _spin_status(spin_coordinator)
     return {
         "service": "smwc-wheel-runtime",
         "api_version": WHEEL_RUNTIME_HTTP_API_VERSION,
         "read_only": True,
-        "snapshot": status,
+        "snapshot": snapshot_status,
+        "spin": spin_status,
+    }
+
+
+def _spin_status(
+    spin_coordinator: Any | None,
+) -> dict[str, Any]:
+    if spin_coordinator is None:
+        return {
+            "configured": False,
+            "ready": False,
+            "successful_publications": 0,
+            "sequence": None,
+            "spin_id": None,
+            "issued_at": None,
+            "winner_id": None,
+            "winner_title": None,
+            "snapshot_generated_at": None,
+            "source_revision": None,
+            "last_error": None,
+        }
+
+    try:
+        status = dict(spin_coordinator.status())
+    except Exception:
+        status = {
+            "ready": False,
+            "successful_publications": 0,
+            "sequence": None,
+            "spin_id": None,
+            "issued_at": None,
+            "winner_id": None,
+            "winner_title": None,
+            "snapshot_generated_at": None,
+            "source_revision": None,
+            "last_error": "Spin coordinator status is unavailable",
+        }
+
+    return {
+        "configured": True,
+        **status,
     }
 
 
@@ -362,6 +466,19 @@ def _validate_provider(provider: Any) -> None:
             )
 
 
+def _validate_spin_coordinator(
+    spin_coordinator: Any | None,
+) -> None:
+    if spin_coordinator is None:
+        return
+
+    for name in ("status", "current_json"):
+        if not callable(getattr(spin_coordinator, name, None)):
+            raise TypeError(
+                f"spin_coordinator must provide callable {name}()"
+            )
+
+
 def _validate_host(host: str) -> str:
     if not isinstance(host, str):
         raise TypeError("host must be a string")
@@ -386,6 +503,7 @@ __all__ = [
     "WHEEL_RUNTIME_HTTP_API_VERSION",
     "WHEEL_RUNTIME_HEALTH_PATH",
     "WHEEL_RUNTIME_SNAPSHOT_PATH",
+    "WHEEL_RUNTIME_SPIN_PATH",
     "WHEEL_RUNTIME_DEFAULT_HOST",
     "WHEEL_RUNTIME_DEFAULT_PORT",
     "WheelRuntimeHttpService",
