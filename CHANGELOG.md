@@ -15,9 +15,24 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
   landing, and Collection result focus.
 - Synchronized and displayed SMWC Rating separately from Personal Rating.
 - Kept Wheel filtering and selection read-only.
-- Documented that the browser overlay and API runtime remain future work.
+- Added a separate managed Browser / OBS runtime while keeping native selection authoritative.
 
 <!-- collection-wheel:end -->
+
+<!-- wheel-browser-runtime:start -->
+### Browser / OBS Wheel
+
+- Added a managed loopback-only Browser / OBS Wheel owned by the Collection
+  Wheel dialog.
+- Kept the browser synchronized with the exact filtered and reroll pools.
+- Animated the Python-authored predetermined winner without browser-side
+  selection.
+- Added a read-only health, snapshot, and spin-state API.
+- Added a self-contained browser renderer with no external assets.
+- Kept standalone operation, Streamer.bot commands, and remote access outside
+  the current scope.
+
+<!-- wheel-browser-runtime:end -->
 
 <!-- planner-foundation:start -->
 ### Planner foundation

@@ -1,0 +1,189 @@
+# Browser / OBS Wheel Runtime
+
+The Browser / OBS Wheel is a managed, local companion to the native Collection
+Wheel. It renders the same eligible pool in HTML, CSS, and JavaScript so it can
+be used as an OBS Browser Source.
+
+Python remains authoritative for filtering and winner selection. The browser
+does not choose, reroll, or influence a result.
+
+## Start the managed runtime
+
+1. Open **Collection → Open Wheel**.
+2. Apply the desired Collection and optional Planner filters.
+3. Select **Start Browser Wheel**.
+4. Use the displayed URL for an OBS Browser Source.
+
+The application attempts to copy the URL when the runtime starts. **Copy OBS
+URL** repeats the clipboard operation without restarting the runtime.
+
+The displayed URL is authoritative. The default runtime normally uses
+`127.0.0.1` on port `8765`, but integrations should use the URL shown by the
+dialog rather than constructing one.
+
+The runtime starts from the exact active pool. It does not expose the complete
+Collection when filters have removed candidates.
+
+## Configure OBS
+
+In OBS:
+
+1. Add a **Browser** source.
+2. Paste the URL shown by the Collection Wheel dialog.
+3. Choose a source width and height large enough for the wheel, heading, status,
+   and result panel.
+4. Keep the application and Collection Wheel dialog open while the source is in
+   use.
+
+The page has a transparent outer background and a responsive layout. It loads no
+external framework, CDN, font, script, image, or stylesheet.
+
+Reloading the OBS source displays the current snapshot. A previously published
+spin is treated as current state, but each newly observed sequence is animated
+at most once per loaded page.
+
+## Filters, spins, and rerolls
+
+When the managed runtime is running, filter changes refresh its snapshot with
+the exact current eligible pool.
+
+For a normal spin:
+
+1. The native Collection Wheel model selects the winner.
+2. The dialog refreshes the browser snapshot from the exact selection pool.
+3. Python publishes a versioned spin instruction containing the predetermined
+   winner.
+4. The native and browser renderers animate independently toward the same
+   result.
+
+For **Spin Again**, the browser snapshot uses the exact reroll pool after the
+current result has been excluded. The previous result is not shown as eligible
+for that reroll.
+
+Browser publication occurs after selection. A browser-runtime error therefore
+does not reroll, replace, or invalidate the native result.
+
+## Predetermined spin validation
+
+Every browser spin instruction is tied to:
+
+- a monotonic sequence;
+- an opaque spin ID;
+- the snapshot generation time;
+- the source revision;
+- the candidate count;
+- the winner ID;
+- the winner title;
+- the winner index;
+- animation duration;
+- full turns;
+- the landing offset within the winning segment.
+
+Before animating, the browser verifies that the instruction matches the exact
+snapshot and candidate at the published index. A mismatched instruction waits
+for synchronization instead of animating against the wrong pool.
+
+The browser contains no random source or winner-selection function.
+
+## Runtime lifecycle
+
+**Start Browser Wheel** is idempotent while the runtime is already active.
+**Stop** shuts down the local service. Closing the Collection Wheel dialog also
+stops it.
+
+After the runtime is stopped, its URL is no longer available until it is started
+again. OBS may continue showing its last rendered frame, but it cannot receive
+new snapshots or spins.
+
+The current managed mode is intentionally dialog-owned. It does not continue
+running after the main application or Collection Wheel dialog closes.
+
+## Read-only routes
+
+The loopback service exposes these current routes:
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET / HEAD | `/api/v1/health` | Snapshot and spin readiness |
+| GET / HEAD | `/api/v1/snapshot` | Latest validated eligible-pool snapshot |
+| GET / HEAD | `/api/v1/spin` | Latest Python-authored spin instruction |
+| GET / HEAD | `/wheel/` | Browser / OBS renderer |
+| GET / HEAD | `/wheel/style.css` | Embedded renderer styling |
+| GET / HEAD | `/wheel/app.js` | Embedded read-only renderer client |
+
+Mutating methods are rejected. There is no browser or HTTP command that starts a
+spin or chooses a candidate.
+
+## Security and privacy boundaries
+
+The managed service:
+
+- binds only to `127.0.0.1` or `localhost`;
+- is not exposed to the LAN;
+- accepts only read-oriented GET and HEAD requests;
+- sends no-cache and content-sniffing protection headers;
+- applies a same-origin Content Security Policy to browser assets;
+- uses embedded local assets rather than third-party resources;
+- returns versioned, validated JSON;
+- excludes local ROM paths, save paths, download URLs, notes, raw SMWC payloads,
+  Personal Rating, and arbitrary application internals;
+- keeps Collection and Planner records detached from browser-visible snapshots.
+
+Loopback-only and read-only behavior is part of the current contract. It should
+not be weakened merely to support an external trigger.
+
+## Troubleshooting
+
+### The runtime does not start
+
+The dialog shows the startup error. A common local cause is another process
+already using the configured port. Stop the conflicting process or restart the
+application after the port becomes available.
+
+### OBS shows a connection error
+
+Confirm that:
+
+- **Start Browser Wheel** still shows the runtime as running;
+- the Collection Wheel dialog remains open;
+- OBS uses the exact currently displayed URL;
+- the URL still opens from the same computer.
+
+Restarting the runtime may produce a new usable session. Copy the displayed URL
+again rather than relying on an old value.
+
+### The page says it is waiting for a snapshot
+
+Start the runtime from the Collection Wheel dialog. Initial startup publishes a
+snapshot before the HTTP service begins serving the page.
+
+If a later filter refresh fails, the runtime keeps its previous valid pool and
+the dialog reports that the previous pool was retained.
+
+### A spin does not animate in OBS
+
+Confirm that the native spin completed selection and that the dialog did not
+report a browser publication error.
+
+The browser deliberately refuses to animate a spin whose snapshot timestamp,
+revision, candidate count, winner index, or winner ID does not match its current
+snapshot. It waits for synchronization rather than showing a misleading result.
+
+Reloading an OBS Browser Source resets page-local observation state. It does not
+cause Python to choose another winner.
+
+## Current limitations and future boundary
+
+The current runtime is the managed in-application mode. It does not yet provide:
+
+- a standalone or tray-hosted process;
+- operation while the main application is closed;
+- Streamer.bot control;
+- an authenticated command API;
+- a mutating HTTP or WebSocket endpoint;
+- LAN or remote access;
+- persistent spin history.
+
+Future advanced-control work should reuse the same snapshot, spin, filtering,
+and Python-authoritative selection contracts rather than moving winner selection
+into JavaScript.

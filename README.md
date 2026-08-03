@@ -99,6 +99,7 @@ The current build contract publishes a native tarball rather than an AppImage. E
 ![Collection Page](images/application-5.0-collection.png)
 
 - [Collection Wheel guide](docs/COLLECTION_WHEEL.md) — filters, Planner refinements, ratings, spins, and safety boundaries
+- [Browser / OBS Wheel guide](docs/WHEEL_BROWSER_RUNTIME.md) — OBS setup, runtime lifecycle, API routes, security, and troubleshooting
 
 #### Input Format Guide
 

@@ -1,7 +1,7 @@
 # Collection Wheel
 
-The native Collection Wheel is available from **Collection → Open Wheel**. It
-selects one hack from a detached, read-only candidate pool.
+The Collection Wheel is available from **Collection → Open Wheel**. It selects
+one hack from a detached, read-only candidate pool.
 
 ## Collection ownership
 
@@ -52,7 +52,7 @@ Wheel remains usable with Collection filters alone.
 
 Custom lists are Planner-owned and are stored with Planner state.
 
-## Spinning
+## Native spinning
 
 **Spin Wheel** selects from the complete filtered candidate pool.
 
@@ -69,6 +69,29 @@ the animation finishes.
 **Spin Again** performs a one-call reroll that excludes only the current result.
 It does not permanently remove that hack from later spins. When only one
 candidate is eligible, Spin Again is unavailable.
+
+## Browser / OBS Wheel
+
+The dialog also provides a managed **Browser / OBS Wheel** section.
+
+**Start Browser Wheel** starts a loopback-only runtime using the exact current
+filtered pool. The displayed OBS Browser Source URL is copied to the clipboard
+when possible. **Copy OBS URL** copies it again, and **Stop** shuts down the
+dialog-owned runtime.
+
+While the runtime is active:
+
+- filter changes publish the exact new eligible pool;
+- Spin Wheel publishes the same pool used by native selection;
+- Spin Again publishes the exact reroll pool after excluding the current result;
+- Python selects the winner once;
+- the browser receives and animates that predetermined winner;
+- browser publication failure does not replace or invalidate the native result.
+
+Closing the Collection Wheel dialog stops its managed browser runtime.
+
+See the [Browser / OBS Wheel guide](WHEEL_BROWSER_RUNTIME.md) for setup,
+architecture, API routes, security boundaries, and troubleshooting.
 
 ## Collection result focus
 
@@ -91,7 +114,7 @@ unless they have canonical SMWC metadata.
 
 ## Safety and persistence
 
-Wheel operations are read-only:
+Wheel operations remain read-only with respect to Collection and Planner data:
 
 - No per-hack Wheel eligibility flag is stored.
 - Filters are not written into Collection records.
@@ -99,23 +122,30 @@ Wheel operations are read-only:
 - Planner entries and lists are not modified.
 - Personal Rating and SMWC Rating are never mixed.
 - Candidate snapshots are detached from mutable Collection records.
+- Local ROM paths, save paths, download URLs, notes, and raw metadata are not
+  exposed through the browser runtime.
+- Browser clients cannot select a winner or send a spin command.
 
 ## Current implementation boundary
 
-The shipped Collection Wheel is the native desktop implementation rendered with
-Tk Canvas.
+Two renderers are available while the Collection Wheel dialog is open:
 
-The following are planned as a separate browser-runtime stage and are not part
-of the native Wheel feature:
+1. The native Tk Canvas Wheel.
+2. The managed HTML/CSS/JavaScript Browser / OBS Wheel.
 
-- OBS browser-source overlay
-- HTML5/CSS3/JavaScript renderer
-- Local HTTP or WebSocket API
-- Streamer.bot triggers
+The managed browser runtime is loopback-only and serves read-only health,
+snapshot, spin-state, and browser resources. The application must remain open,
+and the Collection Wheel dialog owns the runtime lifecycle.
+
+The following remain outside the current feature:
+
+- Browser Wheel operation while the main application is closed
 - Standalone or tray-hosted Wheel service
-- Browser Wheel operation while the main Downloader is closed
+- Streamer.bot command triggers
+- Mutating HTTP or WebSocket commands
+- LAN or remote-network exposure
+- Browser-side winner selection
 
-The planned browser runtime should reuse the same Collection, Planner, filter,
-and winner-selection rules. Python remains the source of truth for the selected
-candidate; the browser renderer should animate the predetermined result rather
-than choose independently.
+Python remains the source of truth for the selected candidate. The browser
+validates that every spin instruction matches the exact snapshot, candidate
+count, winner index, and winner ID before animating it.
