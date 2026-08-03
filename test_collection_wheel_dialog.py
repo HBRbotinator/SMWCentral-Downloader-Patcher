@@ -64,9 +64,14 @@ class CollectionWheelDialogContractTest(unittest.TestCase):
                 CollectionWheelDialog.MIN_HEIGHT,
             ),
         )
+        larger_width = CollectionWheelDialog.MIN_WIDTH + 120
+        larger_height = CollectionWheelDialog.MIN_HEIGHT + 70
         self.assertEqual(
-            CollectionWheelDialog._required_window_size(1100, 820),
-            (1100, 820),
+            CollectionWheelDialog._required_window_size(
+                larger_width,
+                larger_height,
+            ),
+            (larger_width, larger_height),
         )
 
     def test_dynamic_content_is_applied_before_window_is_shown(self):

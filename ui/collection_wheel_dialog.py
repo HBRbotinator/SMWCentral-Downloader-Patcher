@@ -9,6 +9,7 @@ from tkinter import messagebox, ttk
 
 from collection_wheel import EmptyWheelPoolError, ExhaustedWheelPoolError
 from collection_wheel_animation import build_spin_frames, build_wheel_layout
+from wheel_runtime_bridge import CollectionWheelRuntimeBridge
 
 
 class CollectionWheelDialog:
@@ -19,7 +20,7 @@ class CollectionWheelDialog:
     ANY_RATING = "Any rating"
     UNRATED = "Unrated"
     MIN_WIDTH = 980
-    MIN_HEIGHT = 780
+    MIN_HEIGHT = 850
     MAX_WHEEL_LABELS = 18
     SPIN_TURNS = 5
     SPIN_FRAME_COUNT = 61
@@ -27,6 +28,7 @@ class CollectionWheelDialog:
     POINTER_ANGLE = 90.0
     RESULT_DETAILS_WIDTH = 320
     RESULT_DETAILS_WRAP = 300
+    BROWSER_LANDING_OFFSET = 0.5
 
     COMPLETION_OPTIONS = (
         ALL_VALUE,
@@ -71,6 +73,8 @@ class CollectionWheelDialog:
         *,
         result_callback=None,
         on_close=None,
+        runtime_bridge=None,
+        runtime_bridge_factory=CollectionWheelRuntimeBridge,
     ):
         self.parent = parent
         self.model = model
@@ -78,6 +82,11 @@ class CollectionWheelDialog:
         self.collection_records = copy.deepcopy(list(collection_records))
         self.result_callback = result_callback
         self.on_close = on_close
+        self.runtime_bridge = (
+            runtime_bridge
+            if runtime_bridge is not None
+            else runtime_bridge_factory(self.model)
+        )
         self.window = None
 
         self.search_var = tk.StringVar()
@@ -98,13 +107,22 @@ class CollectionWheelDialog:
         self.detail_var = tk.StringVar(
             value="Spin from your Collection using the filters above."
         )
+        self.runtime_status_var = tk.StringVar(
+            value="Browser Wheel stopped"
+        )
+        self.runtime_url_var = tk.StringVar()
 
         self.spin_button = None
         self.reroll_button = None
         self.clear_button = None
         self.reset_filters_button = None
+        self.runtime_start_button = None
+        self.runtime_copy_button = None
+        self.runtime_stop_button = None
         self.wheel_canvas = None
         self._current_result_id = ""
+        self._active_pool = []
+        self._pool_available = False
         self._list_name_to_id = {}
         self._planner_refinements_visible = False
 
@@ -136,6 +154,7 @@ class CollectionWheelDialog:
         if not self.window:
             return
         self._cancel_spin_animation()
+        self._stop_browser_runtime(show_error=False)
         window = self.window
         self.window = None
         try:
@@ -297,6 +316,82 @@ class CollectionWheelDialog:
             self.planner_combos.append(combo)
             self.planner_frame.grid_columnconfigure(column, weight=1)
 
+        runtime_frame = ttk.LabelFrame(
+            content,
+            text="Browser / OBS Wheel",
+            padding=10,
+        )
+        runtime_frame.pack(fill="x", pady=(12, 0))
+        runtime_frame.grid_columnconfigure(1, weight=1)
+        ttk.Label(
+            runtime_frame,
+            text=(
+                "Start the local browser Wheel, then paste its URL into an "
+                "OBS Browser Source. The browser follows this dialog's "
+                "current filters and predetermined results."
+            ),
+            wraplength=930,
+        ).grid(
+            row=0,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(0, 8),
+        )
+        self.runtime_start_button = ttk.Button(
+            runtime_frame,
+            text="Start Browser Wheel",
+            command=self._start_browser_runtime,
+        )
+        self.runtime_start_button.grid(
+            row=1,
+            column=0,
+            sticky="w",
+            padx=(0, 8),
+        )
+        runtime_url_entry = ttk.Entry(
+            runtime_frame,
+            textvariable=self.runtime_url_var,
+            state="readonly",
+        )
+        runtime_url_entry.grid(
+            row=1,
+            column=1,
+            sticky="ew",
+            padx=(0, 8),
+        )
+        self.runtime_copy_button = ttk.Button(
+            runtime_frame,
+            text="Copy OBS URL",
+            command=self._copy_browser_url,
+        )
+        self.runtime_copy_button.grid(
+            row=1,
+            column=2,
+            sticky="e",
+            padx=(0, 8),
+        )
+        self.runtime_stop_button = ttk.Button(
+            runtime_frame,
+            text="Stop",
+            command=self._stop_browser_runtime,
+        )
+        self.runtime_stop_button.grid(
+            row=1,
+            column=3,
+            sticky="e",
+        )
+        ttk.Label(
+            runtime_frame,
+            textvariable=self.runtime_status_var,
+        ).grid(
+            row=2,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(7, 0),
+        )
+
         buttons = ttk.Frame(content)
         buttons.pack(side="bottom", fill="x", pady=(14, 0))
         ttk.Button(buttons, text="Close", command=self.close).pack(
@@ -375,6 +470,141 @@ class CollectionWheelDialog:
             wraplength=self.RESULT_DETAILS_WRAP,
             justify="center",
         ).pack(fill="x", pady=(12, 0))
+
+    @classmethod
+    def _browser_spin_duration_ms(cls):
+        return max(
+            1000,
+            cls.SPIN_FRAME_DELAY_MS * (cls.SPIN_FRAME_COUNT - 1),
+        )
+
+    def _start_browser_runtime(self):
+        if self._spinning or not self._pool_available:
+            return
+        try:
+            browser_url = self.runtime_bridge.start(self._active_pool)
+            self.runtime_url_var.set(browser_url)
+            copied = self._copy_browser_url(show_error=False)
+            count = len(self._active_pool)
+            suffix = "candidate" if count == 1 else "candidates"
+            status = f"Running with {count} {suffix}"
+            if copied:
+                status += " · OBS URL copied"
+            self.runtime_status_var.set(status)
+        except Exception as error:
+            self.runtime_status_var.set(
+                f"Browser Wheel could not start: {error}"
+            )
+            messagebox.showerror(
+                "Browser Wheel",
+                f"Could not start the browser Wheel:\n{error}",
+                parent=self.window,
+            )
+        finally:
+            self._update_runtime_controls()
+
+    def _copy_browser_url(self, show_error=True):
+        browser_url = self.runtime_url_var.get().strip()
+        if not browser_url:
+            return False
+        try:
+            self.window.clipboard_clear()
+            self.window.clipboard_append(browser_url)
+            self.window.update_idletasks()
+            return True
+        except tk.TclError as error:
+            if show_error:
+                messagebox.showerror(
+                    "Browser Wheel",
+                    f"Could not copy the OBS URL:\n{error}",
+                    parent=self.window,
+                )
+            return False
+
+    def _stop_browser_runtime(self, show_error=True):
+        try:
+            self.runtime_bridge.stop()
+        except Exception as error:
+            if show_error and self.window:
+                messagebox.showerror(
+                    "Browser Wheel",
+                    f"Could not stop the browser Wheel:\n{error}",
+                    parent=self.window,
+                )
+            return False
+
+        self.runtime_url_var.set("")
+        self.runtime_status_var.set("Browser Wheel stopped")
+        self._update_runtime_controls()
+        return True
+
+    def _sync_browser_pool(self, pool):
+        if not self.runtime_bridge.running:
+            return True
+        try:
+            self.runtime_bridge.refresh_pool(pool)
+        except Exception as error:
+            self.runtime_status_var.set(
+                f"Browser Wheel kept its previous pool: {error}"
+            )
+            return False
+
+        count = len(pool)
+        suffix = "candidate" if count == 1 else "candidates"
+        self.runtime_status_var.set(
+            f"Running with {count} {suffix}"
+        )
+        return True
+
+    def _publish_browser_selection(self, pool, result):
+        if not self.runtime_bridge.running:
+            return True
+        try:
+            self.runtime_bridge.publish_selection(
+                pool,
+                result.candidate_id,
+                duration_ms=self._browser_spin_duration_ms(),
+                turns=self.SPIN_TURNS,
+                landing_offset=self.BROWSER_LANDING_OFFSET,
+            )
+        except Exception as error:
+            self.runtime_status_var.set(
+                f"Browser Wheel did not receive the spin: {error}"
+            )
+            messagebox.showwarning(
+                "Browser Wheel",
+                (
+                    "The native Wheel will continue, but the browser Wheel "
+                    f"could not receive this spin:\n{error}"
+                ),
+                parent=self.window,
+            )
+            return False
+
+        self.runtime_status_var.set(
+            f"Spinning to {result.candidate.get('title', result.candidate_id)}"
+        )
+        return True
+
+    def _update_runtime_controls(self):
+        if not self.runtime_start_button:
+            return
+
+        running = bool(self.runtime_bridge.running)
+        locked = self._spinning
+        self.runtime_start_button.configure(
+            state=(
+                "normal"
+                if self._pool_available and not running and not locked
+                else "disabled"
+            )
+        )
+        self.runtime_copy_button.configure(
+            state="normal" if running else "disabled"
+        )
+        self.runtime_stop_button.configure(
+            state="normal" if running and not locked else "disabled"
+        )
 
     def _finalize_window(self):
         self.window.update_idletasks()
@@ -531,6 +761,8 @@ class CollectionWheelDialog:
                 **self._current_filters(),
             )
         except Exception as error:
+            self._pool_available = False
+            self._active_pool = []
             self.pool_count_var.set("Pool unavailable")
             self.spin_button.configure(state="disabled")
             self.reroll_button.configure(state="disabled")
@@ -538,8 +770,12 @@ class CollectionWheelDialog:
             self._wheel_layout = build_wheel_layout([])
             self._wheel_rotation = 0.0
             self._render_wheel()
+            self._update_runtime_controls()
             return
 
+        self._pool_available = True
+        self._active_pool = copy.deepcopy(pool)
+        self._sync_browser_pool(self._active_pool)
         count = len(pool)
         suffix = "candidate" if count == 1 else "candidates"
         self.pool_count_var.set(
@@ -572,6 +808,7 @@ class CollectionWheelDialog:
         self.clear_button.configure(
             state="normal" if self._current_result_id else "disabled"
         )
+        self._update_runtime_controls()
 
     def _spin(self, exclude_current=False):
         if self._spinning:
@@ -627,6 +864,7 @@ class CollectionWheelDialog:
             )
             return
 
+        self._publish_browser_selection(animation_pool, result)
         self._begin_spin_animation(layout, frames, result)
 
     def _begin_spin_animation(self, layout, frames, result):
@@ -709,6 +947,7 @@ class CollectionWheelDialog:
             self.spin_button.configure(state="disabled")
             self.reroll_button.configure(state="disabled")
             self.clear_button.configure(state="disabled")
+        self._update_runtime_controls()
 
     def _on_canvas_resize(self, _event=None):
         self._render_wheel(reveal_selected=not self._spinning)
