@@ -50,7 +50,10 @@ _HTML = """<!doctype html>
         <desc id="wheel-description">
           A read-only preview generated from the current Collection snapshot.
         </desc>
-        <g id="wheel-segments"></g>
+        <g
+          id="wheel-segments"
+          class="wheel__segments"
+        ></g>
         <circle class="wheel__hub" cx="400" cy="400" r="92"></circle>
         <text
           id="wheel-count"
@@ -67,6 +70,16 @@ _HTML = """<!doctype html>
         >candidates</text>
       </svg>
       <div class="pointer" aria-hidden="true"></div>
+      <div
+        id="spin-result"
+        class="spin-result"
+        role="status"
+        aria-live="polite"
+        hidden
+      >
+        <span>Selected</span>
+        <strong id="spin-winner"></strong>
+      </div>
     </section>
 
     <footer class="runtime__footer">
@@ -181,6 +194,12 @@ body {
   filter: drop-shadow(0 20px 30px rgba(0, 0, 0, 0.28));
 }
 
+.wheel__segments {
+  transform-box: view-box;
+  transform-origin: 400px 400px;
+  will-change: transform;
+}
+
 .wheel__segment {
   stroke: rgba(255, 255, 255, 0.22);
   stroke-width: 2;
@@ -233,6 +252,42 @@ body {
   filter: drop-shadow(0 5px 5px rgba(0, 0, 0, 0.35));
 }
 
+.spin-result {
+  position: absolute;
+  left: 50%;
+  bottom: 5%;
+  display: grid;
+  min-width: min(78%, 520px);
+  gap: 4px;
+  padding: 13px 20px 15px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 18px;
+  background: rgba(12, 13, 20, 0.9);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.38);
+  text-align: center;
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+}
+
+.spin-result[hidden] {
+  display: none;
+}
+
+.spin-result span {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.spin-result strong {
+  overflow: hidden;
+  font-size: clamp(1rem, 3vw, 1.65rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .runtime__footer {
   color: rgba(255, 255, 255, 0.58);
   font-size: 0.78rem;
@@ -268,15 +323,25 @@ _JAVASCRIPT = """"use strict";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const HEALTH_PATH = "/api/v1/health";
 const SNAPSHOT_PATH = "/api/v1/snapshot";
-const POLL_INTERVAL_MS = 2000;
+const SPIN_PATH = "/api/v1/spin";
+const POLL_INTERVAL_MS = 750;
 const MAX_VISIBLE_LABELS = 36;
+const SPIN_EASING = "cubic-bezier(0.12, 0.7, 0.1, 1)";
 
 const statusElement = document.getElementById("runtime-status");
 const detailElement = document.getElementById("snapshot-detail");
 const segmentsElement = document.getElementById("wheel-segments");
 const countElement = document.getElementById("wheel-count");
+const resultElement = document.getElementById("spin-result");
+const winnerElement = document.getElementById("spin-winner");
 
+let currentSnapshot = null;
 let lastSnapshotIdentity = "";
+let lastObservedSpinSequence = 0;
+let lastObservedSpinId = "";
+let currentRotation = 0;
+let animationGeneration = 0;
+let refreshInProgress = false;
 
 function setStatus(text, state) {
   statusElement.textContent = text;
@@ -312,7 +377,8 @@ function sectorPath(startDegrees, endDegrees) {
 }
 
 function segmentColor(index, total) {
-  const hue = Math.round((index * 360 / Math.max(total, 1) + 252) % 360);
+  const denominator = Math.max(total, 1);
+  const hue = Math.round((index * 360 / denominator + 252) % 360);
   return `hsl(${hue} 68% 48%)`;
 }
 
@@ -324,6 +390,24 @@ function createSvgElement(name, attributes = {}) {
   return element;
 }
 
+function hideResult() {
+  resultElement.hidden = true;
+  winnerElement.textContent = "";
+}
+
+function showResult(title) {
+  winnerElement.textContent = String(title || "");
+  resultElement.hidden = false;
+}
+
+function resetWheelRotation() {
+  animationGeneration += 1;
+  currentRotation = 0;
+  segmentsElement.style.transition = "none";
+  segmentsElement.style.transform = "rotate(0deg)";
+  hideResult();
+}
+
 function renderEmptyWheel() {
   const circle = createSvgElement("circle", {
     class: "wheel__empty",
@@ -333,6 +417,7 @@ function renderEmptyWheel() {
   });
   segmentsElement.replaceChildren(circle);
   countElement.textContent = "0";
+  resetWheelRotation();
 }
 
 function renderWheel(candidates) {
@@ -374,7 +459,10 @@ function renderWheel(candidates) {
 
     if (count <= MAX_VISIBLE_LABELS) {
       const midpoint = start + angle / 2;
-      const position = pointOnCircle(count < 5 ? 225 : 255, midpoint);
+      const position = pointOnCircle(
+        count < 5 ? 225 : 255,
+        midpoint,
+      );
       const label = createSvgElement("text", {
         class: "wheel__label",
         x: position.x.toFixed(3),
@@ -383,12 +471,16 @@ function renderWheel(candidates) {
         "dominant-baseline": "middle",
       });
       label.dataset.candidateId = candidateId;
-      label.textContent = truncate(candidate.title, count < 8 ? 24 : 15);
+      label.textContent = truncate(
+        candidate.title,
+        count < 8 ? 24 : 15,
+      );
       fragment.appendChild(label);
     }
   });
 
   segmentsElement.replaceChildren(fragment);
+  resetWheelRotation();
 }
 
 function snapshotIdentity(snapshot) {
@@ -397,6 +489,114 @@ function snapshotIdentity(snapshot) {
     snapshot.source?.revision || "",
     snapshot.candidates?.length || 0,
   ].join("|");
+}
+
+function spinMatchesSnapshot(spin, snapshot) {
+  const candidates = Array.isArray(snapshot?.candidates)
+    ? snapshot.candidates
+    : [];
+  const winnerIndex = Number(spin?.winner?.index);
+  const winner = candidates[winnerIndex];
+
+  return Boolean(
+    spin
+    && snapshot
+    && spin.snapshot?.generated_at === snapshot.generated_at
+    && spin.snapshot?.source_revision
+      === (snapshot.source?.revision ?? null)
+    && spin.snapshot?.candidate_count === candidates.length
+    && Number.isInteger(winnerIndex)
+    && winnerIndex >= 0
+    && winnerIndex < candidates.length
+    && String(winner?.id || "") === String(spin.winner?.id || "")
+  );
+}
+
+function targetRotationForSpin(spin, candidateCount) {
+  const angle = 360 / candidateCount;
+  const winnerAngle = (
+    Number(spin.winner.index)
+    + Number(spin.animation.landing_offset)
+  ) * angle;
+  const targetModulo = (360 - winnerAngle) % 360;
+  const currentModulo = ((currentRotation % 360) + 360) % 360;
+  const alignment = (
+    targetModulo
+    - currentModulo
+    + 360
+  ) % 360;
+
+  return (
+    currentRotation
+    + Number(spin.animation.turns) * 360
+    + alignment
+  );
+}
+
+function animateSpin(spin, snapshot) {
+  const generation = ++animationGeneration;
+  const duration = Number(spin.animation.duration_ms);
+  const target = targetRotationForSpin(
+    spin,
+    snapshot.candidates.length,
+  );
+
+  hideResult();
+  setStatus("Spinning…", "ready");
+  detailElement.textContent = "Winner selected by the desktop application.";
+  segmentsElement.style.transition = (
+    `transform ${duration}ms ${SPIN_EASING}`
+  );
+
+  window.requestAnimationFrame(() => {
+    if (generation !== animationGeneration) {
+      return;
+    }
+    currentRotation = target;
+    segmentsElement.style.transform = `rotate(${target}deg)`;
+  });
+
+  window.setTimeout(() => {
+    if (generation !== animationGeneration) {
+      return;
+    }
+    segmentsElement.style.transition = "none";
+    setStatus("Result ready", "ready");
+    detailElement.textContent = (
+      `Spin ${spin.sequence} · ${spin.issued_at}`
+    );
+    showResult(spin.winner.title);
+  }, duration + 80);
+}
+
+function spinWasAlreadyObserved(spin) {
+  const sequence = Number(spin?.sequence);
+  const spinId = String(spin?.spin_id || "");
+
+  return (
+    !Number.isInteger(sequence)
+    || sequence <= lastObservedSpinSequence
+    || !spinId
+    || spinId === lastObservedSpinId
+  );
+}
+
+function observeSpin(spin, snapshot) {
+  if (spinWasAlreadyObserved(spin)) {
+    return;
+  }
+
+  if (!spinMatchesSnapshot(spin, snapshot)) {
+    setStatus("Synchronizing…", "waiting");
+    detailElement.textContent = (
+      "Waiting for the snapshot used by the latest spin."
+    );
+    return;
+  }
+
+  lastObservedSpinSequence = Number(spin.sequence);
+  lastObservedSpinId = String(spin.spin_id);
+  animateSpin(spin, snapshot);
 }
 
 async function getJson(path) {
@@ -408,50 +608,86 @@ async function getJson(path) {
   const document = await response.json();
   if (!response.ok) {
     const message = document?.error?.message || `HTTP ${response.status}`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
   return document;
 }
 
-async function refreshPreview() {
+async function refreshSnapshot() {
+  const snapshot = await getJson(SNAPSHOT_PATH);
+  const identity = snapshotIdentity(snapshot);
+
+  if (identity !== lastSnapshotIdentity) {
+    renderWheel(snapshot.candidates);
+    lastSnapshotIdentity = identity;
+  }
+  currentSnapshot = snapshot;
+  return snapshot;
+}
+
+async function refreshRuntime() {
+  if (refreshInProgress) {
+    return;
+  }
+  refreshInProgress = true;
+
   try {
     const health = await getJson(HEALTH_PATH);
     const snapshotStatus = health.snapshot || {};
+    const spinStatus = health.spin || {};
 
     if (!snapshotStatus.ready) {
       setStatus("Waiting for snapshot", "waiting");
-      detailElement.textContent = "The desktop runtime has not published data yet.";
-      renderEmptyWheel();
+      detailElement.textContent = (
+        "The desktop runtime has not published data yet."
+      );
+      currentSnapshot = null;
       lastSnapshotIdentity = "";
+      renderEmptyWheel();
       return;
     }
 
-    const snapshot = await getJson(SNAPSHOT_PATH);
-    const identity = snapshotIdentity(snapshot);
-    if (identity !== lastSnapshotIdentity) {
-      renderWheel(snapshot.candidates);
-      lastSnapshotIdentity = identity;
-    }
-
+    const snapshot = await refreshSnapshot();
     const count = Array.isArray(snapshot.candidates)
       ? snapshot.candidates.length
       : 0;
     const revision = snapshot.source?.revision;
-    setStatus("Connected", "ready");
-    detailElement.textContent = revision
-      ? `${count} candidates · revision ${revision}`
-      : `${count} candidates · ${snapshot.generated_at}`;
+
+    if (!spinStatus.configured) {
+      setStatus("Preview connected", "ready");
+      detailElement.textContent = revision
+        ? `${count} candidates · revision ${revision}`
+        : `${count} candidates · ${snapshot.generated_at}`;
+      return;
+    }
+
+    if (!spinStatus.ready) {
+      setStatus("Ready for spin", "ready");
+      detailElement.textContent = `${count} candidates loaded`;
+      return;
+    }
+
+    const spin = await getJson(SPIN_PATH);
+    observeSpin(spin, snapshot);
   } catch (error) {
-    setStatus("Connection error", "error");
+    if (error?.status === 503) {
+      setStatus("Waiting for runtime", "waiting");
+    } else {
+      setStatus("Connection error", "error");
+    }
     detailElement.textContent = error instanceof Error
       ? error.message
       : "The Wheel runtime could not be reached.";
+  } finally {
+    refreshInProgress = false;
   }
 }
 
 renderEmptyWheel();
-refreshPreview();
-window.setInterval(refreshPreview, POLL_INTERVAL_MS);
+refreshRuntime();
+window.setInterval(refreshRuntime, POLL_INTERVAL_MS);
 """
 
 
