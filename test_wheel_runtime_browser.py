@@ -99,7 +99,7 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
     def test_overlay_holds_result_then_returns_to_hidden_idle(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 
-        self.assertIn("const OVERLAY_RESULT_HOLD_MS = 5000", script)
+        self.assertIn("const OVERLAY_RESULT_HOLD_MS = 8000", script)
         self.assertIn("function scheduleOverlayHide()", script)
         self.assertIn(
             "overlayHideTimer = window.setTimeout(",
@@ -222,55 +222,79 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
         self.assertIn("spin.animation.duration_ms", script)
         self.assertIn("currentRotation", script)
         self.assertIn("requestAnimationFrame", script)
-        self.assertIn("cubic-bezier", script)
+        self.assertIn("naturalSpinProgress", script)
 
-    def test_spin_uses_launch_cruise_and_anticipation_phases(self):
+    def test_spin_uses_one_continuous_frame_driven_curve(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 
         for required in (
-            "function buildSpinMotionPlan(spin, snapshot)",
-            "function applySpinPhase(",
-            "SPIN_LAUNCH_SHARE = 0.16",
-            "SPIN_CRUISE_SHARE = 0.47",
-            "SPIN_LAUNCH_EASING",
-            "SPIN_CRUISE_EASING",
-            "SPIN_ANTICIPATION_EASING",
-            "plan.launchTarget",
-            "plan.cruiseTarget",
-            "plan.target",
-            "plan.anticipationDuration",
+            "function smoothStep(value)",
+            "function smoothStepIntegral(value)",
+            "function naturalSpinProgress(elapsedShare)",
+            "function animateSpinFrame(",
+            "function finishSpin(generation, plan, spin)",
+            "SPIN_ACCELERATION_END = 0.12",
+            "SPIN_DECELERATION_START = 0.22",
+            "currentRotation = plan.start + plan.distance * progress",
         ):
             self.assertIn(required, script)
 
-        self.assertLess(
-            script.index("plan.launchTarget"),
-            script.index("plan.cruiseTarget"),
-        )
+        animation = script.split(
+            "function animateSpin(spin, snapshot) {",
+            1,
+        )[1].split(
+            "function spinWasAlreadyObserved",
+            1,
+        )[0]
+        self.assertNotIn("setTimeout", animation)
+        self.assertNotIn("applySpinPhase", animation)
+        self.assertIn("requestAnimationFrame", animation)
 
-    def test_final_anticipation_arc_scales_with_segment_width(self):
+    def test_velocity_curve_tapers_continuously_to_zero(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 
+        progress = script.split(
+            "function naturalSpinProgress(elapsedShare) {",
+            1,
+        )[1].split(
+            "function buildSpinMotionPlan",
+            1,
+        )[0]
         for required in (
-            "const segmentAngle = 360 / snapshot.candidates.length",
-            "segmentAngle * SPIN_ANTICIPATION_SEGMENTS",
-            "SPIN_MIN_ANTICIPATION_ARC",
-            "SPIN_MAX_ANTICIPATION_ARC",
-            "totalDistance * 0.25",
-            "const cruiseTarget = target - anticipationArc",
+            "smoothStepIntegral(local)",
+            "accelerationDuration * 0.5",
+            "decelerationDuration * 0.5",
+            "local - smoothStepIntegral(local)",
+            "return traveledArea / totalVelocityArea",
         ):
-            self.assertIn(required, script)
+            self.assertIn(required, progress)
 
-    def test_browser_no_longer_uses_one_shot_transition(self):
+    def test_long_deceleration_begins_early_in_total_duration(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 
-        self.assertNotIn("const SPIN_EASING =", script)
-        self.assertNotIn(
-            "`transform ${duration}ms ${SPIN_EASING}`",
-            script,
+        self.assertIn("SPIN_DECELERATION_START = 0.22", script)
+        self.assertNotIn("SPIN_LAUNCH_EASING", script)
+        self.assertNotIn("SPIN_CRUISE_EASING", script)
+        self.assertNotIn("SPIN_ANTICIPATION_EASING", script)
+        self.assertNotIn("const cruiseTarget =", script)
+
+    def test_label_orientation_updates_on_each_animation_frame(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        frame = script.split(
+            "function animateSpinFrame(",
+            1,
+        )[1].split(
+            "function animateSpin(",
+            1,
+        )[0]
+        self.assertIn(
+            "updateWheelLabelOrientation(currentRotation)",
+            frame,
         )
-        self.assertGreaterEqual(
-            script.count("applySpinPhase("),
-            4,
+        self.assertIn(
+            "segmentsElement.style.transform",
+            frame,
         )
 
     def test_rotation_formula_lands_requested_segment_under_pointer(self):
@@ -310,25 +334,6 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
             "`rotate(${baseAngle + flip} ${x} ${y})`",
         ):
             self.assertIn(required, script)
-
-    def test_label_orientation_updates_for_every_motion_phase(self):
-        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
-
-        apply_method = script.split(
-            "function applySpinPhase(",
-            1,
-        )[1].split(
-            "function animateSpin(",
-            1,
-        )[0]
-        self.assertIn(
-            "updateWheelLabelOrientation(target)",
-            apply_method,
-        )
-        self.assertIn(
-            "updateWheelLabelOrientation(currentRotation)",
-            script,
-        )
 
     def test_snapshot_change_resets_visual_rotation_safely(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
@@ -464,6 +469,59 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
             hide_method,
         )
         self.assertIn("clearWinnerHighlight()", hide_method)
+
+    def test_winner_reveal_uses_rings_sparks_and_overlay_label(self):
+        html = asset_text(WHEEL_RUNTIME_BROWSER_PATH)
+        css = asset_text(WHEEL_RUNTIME_BROWSER_STYLE_PATH)
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        self.assertIn('id="winner-burst"', html)
+        self.assertIn('id="spin-result-label"', html)
+
+        for required in (
+            ".wheel-stage--winner::before",
+            ".wheel-stage--winner::after",
+            ".winner-burst__spark",
+            "@keyframes winner-ring-burst",
+            "@keyframes winner-spark-burst",
+        ):
+            self.assertIn(required, css)
+
+        for required in (
+            "const WINNER_SPARK_COUNT = 20",
+            "function prepareWinnerBurst()",
+            "function showWinnerCelebration()",
+            'isOverlayMode() ? "WINNER!" : "Selected"',
+            "showWinnerCelebration()",
+            "prepareWinnerBurst();",
+        ):
+            self.assertIn(required, script)
+
+    def test_sparks_are_deterministic_and_not_browser_random(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        prepare = script.split(
+            "function prepareWinnerBurst() {",
+            1,
+        )[1].split(
+            "function clearWinnerCelebration()",
+            1,
+        )[0]
+        self.assertIn(
+            "index * 360 / WINNER_SPARK_COUNT",
+            prepare,
+        )
+        self.assertIn("245 + (index % 5) * 18", prepare)
+        self.assertNotIn("Math.random", prepare)
+
+    def test_winner_hold_and_celebration_are_longer(self):
+        css = asset_text(WHEEL_RUNTIME_BROWSER_STYLE_PATH)
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        self.assertIn("const OVERLAY_RESULT_HOLD_MS = 8000", script)
+        self.assertIn("winner-card-reveal 1050ms", css)
+        self.assertIn("winner-title-reveal 1350ms", css)
+        self.assertIn("winner-segment-pulse 1100ms ease-in-out 3", css)
 
     def test_browser_avoids_mutable_local_client_storage(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)

@@ -75,13 +75,18 @@ _HTML = """<!doctype html>
       </svg>
       <div class="pointer" aria-hidden="true"></div>
       <div
+        id="winner-burst"
+        class="winner-burst"
+        aria-hidden="true"
+      ></div>
+      <div
         id="spin-result"
         class="spin-result"
         role="status"
         aria-live="polite"
         hidden
       >
-        <span>Selected</span>
+        <span id="spin-result-label">Selected</span>
         <strong id="spin-winner"></strong>
       </div>
     </section>
@@ -231,7 +236,31 @@ body[data-mode="overlay"].overlay-active .runtime {
   place-items: center;
   width: min(100%, 760px);
   margin: 22px auto;
+  isolation: isolate;
   aspect-ratio: 1;
+}
+
+.wheel-stage::before,
+.wheel-stage::after {
+  position: absolute;
+  z-index: 3;
+  inset: 8%;
+  border: 5px solid rgba(255, 255, 255, 0.78);
+  border-radius: 50%;
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+}
+
+.wheel-stage--winner::before {
+  animation:
+    winner-ring-burst 1500ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.wheel-stage--winner::after {
+  animation:
+    winner-ring-burst 1500ms cubic-bezier(0.16, 1, 0.3, 1)
+    180ms;
 }
 
 body[data-mode="overlay"] .runtime__header,
@@ -305,6 +334,7 @@ body[data-mode="overlay"] .wheel__caption {
 
 .pointer {
   position: absolute;
+  z-index: 5;
   top: -4px;
   width: 0;
   height: 0;
@@ -312,6 +342,37 @@ body[data-mode="overlay"] .wheel__caption {
   border-left: 20px solid transparent;
   border-top: 44px solid #f5f5f7;
   filter: drop-shadow(0 5px 5px rgba(0, 0, 0, 0.35));
+}
+
+.winner-burst {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.winner-burst__spark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: clamp(16px, 2.4vmin, 28px);
+  height: clamp(5px, 0.7vmin, 9px);
+  border-radius: 999px;
+  background: hsl(var(--spark-hue) 92% 68%);
+  box-shadow: 0 0 14px hsl(var(--spark-hue) 96% 72%);
+  opacity: 0;
+  transform:
+    translate(-50%, -50%)
+    rotate(var(--spark-angle))
+    translateX(0)
+    scaleX(0.35);
+}
+
+.wheel-stage--winner .winner-burst__spark {
+  animation:
+    winner-spark-burst 1650ms cubic-bezier(0.16, 1, 0.3, 1)
+    var(--spark-delay);
 }
 
 .spin-result {
@@ -337,7 +398,8 @@ body[data-mode="overlay"] .wheel__caption {
 }
 
 .spin-result--visible {
-  animation: winner-card-reveal 620ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation:
+    winner-card-reveal 1050ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .spin-result span {
@@ -358,7 +420,8 @@ body[data-mode="overlay"] .wheel__caption {
   overflow-wrap: anywhere;
   text-wrap: balance;
   white-space: normal;
-  animation: winner-title-reveal 760ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation:
+    winner-title-reveal 1350ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .spin-result[data-title-size="medium"] strong {
@@ -390,7 +453,7 @@ body[data-mode="overlay"] .spin-result {
     brightness(1.22)
     saturate(1.2)
     drop-shadow(0 0 11px rgba(255, 255, 255, 0.72));
-  animation: winner-segment-pulse 920ms ease-in-out 2;
+  animation: winner-segment-pulse 1100ms ease-in-out 3;
 }
 
 .wheel__label--winner {
@@ -402,35 +465,67 @@ body[data-mode="overlay"] .spin-result {
 @keyframes winner-card-reveal {
   0% {
     opacity: 0;
-    transform: translateX(-50%) translateY(28px) scale(0.88);
+    filter: brightness(1.8);
+    transform:
+      translateX(-50%)
+      translateY(58px)
+      scale(0.68)
+      rotate(-2deg);
   }
 
-  58% {
+  42% {
     opacity: 1;
-    transform: translateX(-50%) translateY(-6px) scale(1.035);
+    filter: brightness(1.35);
+    transform:
+      translateX(-50%)
+      translateY(-18px)
+      scale(1.12)
+      rotate(1.2deg);
+  }
+
+  68% {
+    filter: brightness(1.08);
+    transform:
+      translateX(-50%)
+      translateY(7px)
+      scale(0.975)
+      rotate(-0.5deg);
   }
 
   100% {
     opacity: 1;
-    transform: translateX(-50%) translateY(0) scale(1);
+    filter: brightness(1);
+    transform:
+      translateX(-50%)
+      translateY(0)
+      scale(1)
+      rotate(0);
   }
 }
 
 @keyframes winner-title-reveal {
   0% {
     opacity: 0;
-    transform: scale(0.82);
-    letter-spacing: 0.06em;
+    filter: blur(8px);
+    transform: scale(0.62);
+    letter-spacing: 0.12em;
   }
 
-  64% {
+  48% {
     opacity: 1;
-    transform: scale(1.045);
+    filter: blur(0);
+    transform: scale(1.15);
+    letter-spacing: 0.01em;
+  }
+
+  72% {
+    transform: scale(0.97);
     letter-spacing: 0;
   }
 
   100% {
     opacity: 1;
+    filter: blur(0);
     transform: scale(1);
     letter-spacing: 0;
   }
@@ -442,8 +537,56 @@ body[data-mode="overlay"] .spin-result {
     opacity: 1;
   }
 
-  50% {
-    opacity: 0.78;
+  45% {
+    opacity: 0.62;
+  }
+
+  58% {
+    opacity: 1;
+  }
+}
+
+@keyframes winner-ring-burst {
+  0% {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+
+  22% {
+    opacity: 0.92;
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.34);
+  }
+}
+
+@keyframes winner-spark-burst {
+  0% {
+    opacity: 0;
+    transform:
+      translate(-50%, -50%)
+      rotate(var(--spark-angle))
+      translateX(0)
+      scaleX(0.35);
+  }
+
+  18% {
+    opacity: 1;
+  }
+
+  72% {
+    opacity: 0.92;
+  }
+
+  100% {
+    opacity: 0;
+    transform:
+      translate(-50%, -50%)
+      rotate(var(--spark-angle))
+      translateX(var(--spark-distance))
+      scaleX(1);
   }
 }
 
@@ -499,18 +642,10 @@ const SNAPSHOT_PATH = "/api/v1/snapshot";
 const SPIN_PATH = "/api/v1/spin";
 const POLL_INTERVAL_MS = 750;
 const MAX_VISIBLE_LABELS = 36;
-const OVERLAY_RESULT_HOLD_MS = 5000;
-const SPIN_LAUNCH_SHARE = 0.16;
-const SPIN_CRUISE_SHARE = 0.47;
-const SPIN_LAUNCH_DISTANCE_SHARE = 0.24;
-const SPIN_MIN_ANTICIPATION_ARC = 42;
-const SPIN_MAX_ANTICIPATION_ARC = 160;
-const SPIN_ANTICIPATION_SEGMENTS = 1.3;
-const SPIN_LAUNCH_EASING = "cubic-bezier(0.45, 0, 0.75, 0.35)";
-const SPIN_CRUISE_EASING = "linear";
-const SPIN_ANTICIPATION_EASING = (
-  "cubic-bezier(0.08, 0.72, 0.12, 1)"
-);
+const OVERLAY_RESULT_HOLD_MS = 8000;
+const WINNER_SPARK_COUNT = 20;
+const SPIN_ACCELERATION_END = 0.12;
+const SPIN_DECELERATION_START = 0.22;
 const DISPLAY_MODE = (
   new URLSearchParams(window.location.search).get("mode") === "overlay"
     ? "overlay"
@@ -518,11 +653,14 @@ const DISPLAY_MODE = (
 );
 
 const runtimeElement = document.getElementById("runtime-root");
+const wheelStageElement = document.querySelector(".wheel-stage");
+const burstElement = document.getElementById("winner-burst");
 const statusElement = document.getElementById("runtime-status");
 const detailElement = document.getElementById("snapshot-detail");
 const segmentsElement = document.getElementById("wheel-segments");
 const countElement = document.getElementById("wheel-count");
 const resultElement = document.getElementById("spin-result");
+const resultLabelElement = document.getElementById("spin-result-label");
 const winnerElement = document.getElementById("spin-winner");
 
 let currentSnapshot = null;
@@ -650,6 +788,34 @@ function updateWheelLabelOrientation(wheelRotation) {
   });
 }
 
+function prepareWinnerBurst() {
+  const fragment = document.createDocumentFragment();
+  for (let index = 0; index < WINNER_SPARK_COUNT; index += 1) {
+    const spark = document.createElement("span");
+    const angle = index * 360 / WINNER_SPARK_COUNT;
+    const distance = 245 + (index % 5) * 18;
+    const delay = (index % 4) * 24;
+    const hue = (index * 47 + 34) % 360;
+    spark.className = "winner-burst__spark";
+    spark.style.setProperty("--spark-angle", `${angle}deg`);
+    spark.style.setProperty("--spark-distance", `${distance}px`);
+    spark.style.setProperty("--spark-delay", `${delay}ms`);
+    spark.style.setProperty("--spark-hue", String(hue));
+    fragment.appendChild(spark);
+  }
+  burstElement.replaceChildren(fragment);
+}
+
+function clearWinnerCelebration() {
+  wheelStageElement.classList.remove("wheel-stage--winner");
+}
+
+function showWinnerCelebration() {
+  clearWinnerCelebration();
+  void wheelStageElement.offsetWidth;
+  wheelStageElement.classList.add("wheel-stage--winner");
+}
+
 function resultTitleSize(title) {
   const length = Array.from(String(title || "").trim()).length;
   if (length > 96) {
@@ -700,12 +866,17 @@ function hideResult() {
   resultElement.hidden = true;
   resultElement.classList.remove("spin-result--visible");
   resultElement.removeAttribute("data-title-size");
+  resultLabelElement.textContent = "Selected";
   winnerElement.textContent = "";
   clearWinnerHighlight();
+  clearWinnerCelebration();
 }
 
 function showResult(title, candidateId) {
   const fullTitle = String(title || "").trim();
+  resultLabelElement.textContent = (
+    isOverlayMode() ? "WINNER!" : "Selected"
+  );
   winnerElement.textContent = fullTitle;
   resultElement.dataset.titleSize = resultTitleSize(fullTitle);
   resultElement.hidden = false;
@@ -713,6 +884,7 @@ function showResult(title, candidateId) {
   void resultElement.offsetWidth;
   resultElement.classList.add("spin-result--visible");
   highlightWinner(candidateId);
+  showWinnerCelebration();
 }
 
 function resetWheelRotation() {
@@ -853,80 +1025,133 @@ function targetRotationForSpin(spin, candidateCount) {
   );
 }
 
+function clampUnit(value) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function smoothStep(value) {
+  const unit = clampUnit(value);
+  return unit * unit * (3 - 2 * unit);
+}
+
+function smoothStepIntegral(value) {
+  const unit = clampUnit(value);
+  return unit ** 3 - 0.5 * unit ** 4;
+}
+
+function naturalSpinProgress(elapsedShare) {
+  const elapsed = clampUnit(elapsedShare);
+  if (elapsed >= 1) {
+    return 1;
+  }
+
+  const accelerationDuration = SPIN_ACCELERATION_END;
+  const cruiseDuration = (
+    SPIN_DECELERATION_START - SPIN_ACCELERATION_END
+  );
+  const decelerationDuration = 1 - SPIN_DECELERATION_START;
+  const totalVelocityArea = (
+    accelerationDuration * 0.5
+    + cruiseDuration
+    + decelerationDuration * 0.5
+  );
+
+  let traveledArea;
+  if (elapsed <= SPIN_ACCELERATION_END) {
+    const local = elapsed / accelerationDuration;
+    traveledArea = (
+      accelerationDuration * smoothStepIntegral(local)
+    );
+  } else if (elapsed <= SPIN_DECELERATION_START) {
+    traveledArea = (
+      accelerationDuration * 0.5
+      + elapsed
+      - SPIN_ACCELERATION_END
+    );
+  } else {
+    const local = (
+      (elapsed - SPIN_DECELERATION_START)
+      / decelerationDuration
+    );
+    traveledArea = (
+      accelerationDuration * 0.5
+      + cruiseDuration
+      + decelerationDuration
+        * (local - smoothStepIntegral(local))
+    );
+  }
+
+  return traveledArea / totalVelocityArea;
+}
+
 function buildSpinMotionPlan(spin, snapshot) {
-  const duration = Number(spin.animation.duration_ms);
   const start = currentRotation;
   const target = targetRotationForSpin(
     spin,
     snapshot.candidates.length,
   );
-  const totalDistance = target - start;
-  const segmentAngle = 360 / snapshot.candidates.length;
-  const requestedAnticipationArc = (
-    segmentAngle * SPIN_ANTICIPATION_SEGMENTS
-  );
-  const anticipationArc = Math.min(
-    SPIN_MAX_ANTICIPATION_ARC,
-    Math.max(
-      SPIN_MIN_ANTICIPATION_ARC,
-      requestedAnticipationArc,
-    ),
-    totalDistance * 0.25,
-  );
-  const preAnticipationDistance = totalDistance - anticipationArc;
-  const launchTarget = (
-    start
-    + preAnticipationDistance * SPIN_LAUNCH_DISTANCE_SHARE
-  );
-  const cruiseTarget = target - anticipationArc;
-  const launchDuration = Math.round(
-    duration * SPIN_LAUNCH_SHARE
-  );
-  const cruiseDuration = Math.round(
-    duration * SPIN_CRUISE_SHARE
-  );
-  const anticipationDuration = Math.max(
-    1,
-    duration - launchDuration - cruiseDuration,
-  );
-
   return {
+    duration: Number(spin.animation.duration_ms),
     start,
     target,
-    launchTarget,
-    cruiseTarget,
-    launchDuration,
-    cruiseDuration,
-    anticipationDuration,
+    distance: target - start,
   };
 }
 
-function applySpinPhase(
+function finishSpin(generation, plan, spin) {
+  if (generation !== animationGeneration) {
+    return;
+  }
+
+  currentRotation = plan.target;
+  updateWheelLabelOrientation(currentRotation);
+  segmentsElement.style.transform = `rotate(${currentRotation}deg)`;
+  setStatus("Result ready", "ready");
+  detailElement.textContent = (
+    `Spin ${spin.sequence} · ${spin.issued_at}`
+  );
+  showResult(spin.winner.title, spin.winner.id);
+  scheduleOverlayHide();
+}
+
+function animateSpinFrame(
   generation,
-  target,
-  duration,
-  easing,
+  plan,
+  spin,
+  startedAt,
+  now,
 ) {
   if (generation !== animationGeneration) {
     return;
   }
-  updateWheelLabelOrientation(target);
-  segmentsElement.style.transition = (
-    `transform ${duration}ms ${easing}`
+
+  const elapsedShare = clampUnit(
+    (now - startedAt) / plan.duration,
   );
-  segmentsElement.style.transform = `rotate(${target}deg)`;
+  const progress = naturalSpinProgress(elapsedShare);
+  currentRotation = plan.start + plan.distance * progress;
+  updateWheelLabelOrientation(currentRotation);
+  segmentsElement.style.transform = `rotate(${currentRotation}deg)`;
+
+  if (elapsedShare >= 1) {
+    finishSpin(generation, plan, spin);
+    return;
+  }
+
+  window.requestAnimationFrame((timestamp) => {
+    animateSpinFrame(
+      generation,
+      plan,
+      spin,
+      startedAt,
+      timestamp,
+    );
+  });
 }
 
 function animateSpin(spin, snapshot) {
   const generation = ++animationGeneration;
   const plan = buildSpinMotionPlan(spin, snapshot);
-  const cruiseStart = plan.launchDuration;
-  const anticipationStart = (
-    plan.launchDuration + plan.cruiseDuration
-  );
-  const totalDuration = (
-    anticipationStart + plan.anticipationDuration
-  );
 
   showOverlay();
   hideResult();
@@ -935,46 +1160,15 @@ function animateSpin(spin, snapshot) {
   segmentsElement.style.transition = "none";
   segmentsElement.style.transform = `rotate(${plan.start}deg)`;
 
-  window.requestAnimationFrame(() => {
-    applySpinPhase(
+  window.requestAnimationFrame((startedAt) => {
+    animateSpinFrame(
       generation,
-      plan.launchTarget,
-      plan.launchDuration,
-      SPIN_LAUNCH_EASING,
+      plan,
+      spin,
+      startedAt,
+      startedAt,
     );
   });
-
-  window.setTimeout(() => {
-    applySpinPhase(
-      generation,
-      plan.cruiseTarget,
-      plan.cruiseDuration,
-      SPIN_CRUISE_EASING,
-    );
-  }, cruiseStart);
-
-  window.setTimeout(() => {
-    applySpinPhase(
-      generation,
-      plan.target,
-      plan.anticipationDuration,
-      SPIN_ANTICIPATION_EASING,
-    );
-  }, anticipationStart);
-
-  window.setTimeout(() => {
-    if (generation !== animationGeneration) {
-      return;
-    }
-    currentRotation = plan.target;
-    segmentsElement.style.transition = "none";
-    setStatus("Result ready", "ready");
-    detailElement.textContent = (
-      `Spin ${spin.sequence} · ${spin.issued_at}`
-    );
-    showResult(spin.winner.title, spin.winner.id);
-    scheduleOverlayHide();
-  }, totalDuration + 80);
 }
 
 function spinWasAlreadyObserved(spin) {
@@ -1097,6 +1291,7 @@ async function refreshRuntime() {
   }
 }
 
+prepareWinnerBurst();
 renderEmptyWheel();
 hideOverlay();
 refreshRuntime();

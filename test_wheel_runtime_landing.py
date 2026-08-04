@@ -1,4 +1,4 @@
-"""Contracts for safe varied browser Wheel landing positions."""
+"""Contracts for dramatic but unambiguous browser Wheel landings."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import unittest
 from wheel_runtime_landing import (
     BROWSER_LANDING_CENTER_BAND,
     BROWSER_LANDING_EARLY_BAND,
+    BROWSER_LANDING_EXTREME_EARLY_BAND,
+    BROWSER_LANDING_EXTREME_LATE_BAND,
     BROWSER_LANDING_LATE_BAND,
     build_browser_landing_offset,
 )
@@ -24,16 +26,40 @@ class SequenceSupplier:
 
 
 class WheelRuntimeLandingTest(unittest.TestCase):
-    def test_early_zone_uses_safe_leading_edge_band(self):
+    def test_extreme_early_zone_creeps_just_inside_winner(self):
         offset = build_browser_landing_offset(
             SequenceSupplier(0.10, 0.50)
+        )
+
+        self.assertEqual(offset, 0.09)
+        self.assertGreaterEqual(
+            offset,
+            BROWSER_LANDING_EXTREME_EARLY_BAND[0],
+        )
+        self.assertLessEqual(
+            offset,
+            BROWSER_LANDING_EXTREME_EARLY_BAND[1],
+        )
+
+    def test_early_zone_still_provides_less_extreme_finishes(self):
+        offset = build_browser_landing_offset(
+            SequenceSupplier(0.30, 0.50)
         )
 
         self.assertEqual(offset, 0.26)
         self.assertGreaterEqual(offset, BROWSER_LANDING_EARLY_BAND[0])
         self.assertLessEqual(offset, BROWSER_LANDING_EARLY_BAND[1])
 
-    def test_late_zone_uses_safe_trailing_edge_band(self):
+    def test_center_zone_remains_available_for_variety(self):
+        offset = build_browser_landing_offset(
+            SequenceSupplier(0.50, 0.75)
+        )
+
+        self.assertEqual(offset, 0.55)
+        self.assertGreaterEqual(offset, BROWSER_LANDING_CENTER_BAND[0])
+        self.assertLessEqual(offset, BROWSER_LANDING_CENTER_BAND[1])
+
+    def test_late_zone_stops_near_next_boundary(self):
         offset = build_browser_landing_offset(
             SequenceSupplier(0.60, 0.25)
         )
@@ -42,22 +68,32 @@ class WheelRuntimeLandingTest(unittest.TestCase):
         self.assertGreaterEqual(offset, BROWSER_LANDING_LATE_BAND[0])
         self.assertLessEqual(offset, BROWSER_LANDING_LATE_BAND[1])
 
-    def test_center_zone_remains_available_for_variety(self):
+    def test_extreme_late_zone_creeps_just_before_next_entry(self):
         offset = build_browser_landing_offset(
-            SequenceSupplier(0.95, 0.75)
+            SequenceSupplier(0.90, 0.50)
         )
 
-        self.assertEqual(offset, 0.54)
-        self.assertGreaterEqual(offset, BROWSER_LANDING_CENTER_BAND[0])
-        self.assertLessEqual(offset, BROWSER_LANDING_CENTER_BAND[1])
+        self.assertEqual(offset, 0.91)
+        self.assertGreaterEqual(
+            offset,
+            BROWSER_LANDING_EXTREME_LATE_BAND[0],
+        )
+        self.assertLessEqual(
+            offset,
+            BROWSER_LANDING_EXTREME_LATE_BAND[1],
+        )
 
-    def test_all_bands_keep_a_clear_boundary_margin(self):
+    def test_all_zones_keep_a_visible_boundary_margin(self):
         draws = (
             (0.00, 0.00),
-            (0.41, 0.999999),
-            (0.42, 0.00),
-            (0.83, 0.999999),
-            (0.84, 0.00),
+            (0.25, 0.999999),
+            (0.26, 0.00),
+            (0.44, 0.999999),
+            (0.45, 0.00),
+            (0.54, 0.999999),
+            (0.55, 0.00),
+            (0.73, 0.999999),
+            (0.74, 0.00),
             (0.99, 0.999999),
         )
 
@@ -66,16 +102,42 @@ class WheelRuntimeLandingTest(unittest.TestCase):
                 offset = build_browser_landing_offset(
                     SequenceSupplier(zone, position)
                 )
-                self.assertGreaterEqual(offset, 0.18)
-                self.assertLessEqual(offset, 0.82)
-                self.assertNotEqual(offset, 0.5)
+                self.assertGreaterEqual(offset, 0.06)
+                self.assertLessEqual(offset, 0.94)
+
+    def test_extreme_edge_zones_are_more_common_than_center(self):
+        extreme_draws = (0.00, 0.25, 0.74, 0.99)
+        center_draws = (0.45, 0.54)
+
+        extreme_offsets = [
+            build_browser_landing_offset(
+                SequenceSupplier(draw, 0.50)
+            )
+            for draw in extreme_draws
+        ]
+        center_offsets = [
+            build_browser_landing_offset(
+                SequenceSupplier(draw, 0.50)
+            )
+            for draw in center_draws
+        ]
+
+        self.assertTrue(
+            all(
+                offset <= 0.12 or offset >= 0.88
+                for offset in extreme_offsets
+            )
+        )
+        self.assertTrue(
+            all(0.40 <= offset <= 0.60 for offset in center_offsets)
+        )
 
     def test_same_supplied_draws_are_deterministic(self):
         first = build_browser_landing_offset(
-            SequenceSupplier(0.20, 0.375)
+            SequenceSupplier(0.80, 0.375)
         )
         second = build_browser_landing_offset(
-            SequenceSupplier(0.20, 0.375)
+            SequenceSupplier(0.80, 0.375)
         )
 
         self.assertEqual(first, second)
