@@ -110,7 +110,7 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
             script,
         )
         self.assertLess(
-            script.index("showResult(spin.winner.title);"),
+            script.index("showResult(spin.winner.title, spin.winner.id);"),
             script.index("scheduleOverlayHide();"),
         )
 
@@ -364,6 +364,106 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
         self.assertIn("count <= MAX_VISIBLE_LABELS", script)
         self.assertIn("shape.dataset.candidateId", script)
         self.assertIn("countElement.textContent", script)
+
+    def test_result_title_is_never_ellipsized_or_single_line(self):
+        css = asset_text(WHEEL_RUNTIME_BROWSER_STYLE_PATH)
+
+        result_css = css.split(
+            ".spin-result strong {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("overflow-wrap: anywhere", result_css)
+        self.assertIn("text-wrap: balance", result_css)
+        self.assertIn("white-space: normal", result_css)
+        self.assertNotIn("text-overflow: ellipsis", result_css)
+        self.assertNotIn("white-space: nowrap", result_css)
+
+    def test_result_title_uses_length_aware_responsive_sizes(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+        css = asset_text(WHEEL_RUNTIME_BROWSER_STYLE_PATH)
+
+        for required in (
+            "function resultTitleSize(title)",
+            'return "extra-long"',
+            'return "long"',
+            'return "medium"',
+            'return "short"',
+            "resultElement.dataset.titleSize = resultTitleSize(fullTitle)",
+        ):
+            self.assertIn(required, script)
+
+        for selector in (
+            '.spin-result[data-title-size="medium"] strong',
+            '.spin-result[data-title-size="long"] strong',
+            '.spin-result[data-title-size="extra-long"] strong',
+        ):
+            self.assertIn(selector, css)
+
+    def test_show_result_preserves_complete_title_text(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        show_method = script.split(
+            "function showResult(title, candidateId) {",
+            1,
+        )[1].split(
+            "function resetWheelRotation()",
+            1,
+        )[0]
+        self.assertIn(
+            'const fullTitle = String(title || "").trim()',
+            show_method,
+        )
+        self.assertIn(
+            "winnerElement.textContent = fullTitle",
+            show_method,
+        )
+        self.assertNotIn("truncate(", show_method)
+        self.assertNotIn("slice(", show_method)
+
+    def test_result_card_and_winning_segment_receive_celebration(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+        css = asset_text(WHEEL_RUNTIME_BROWSER_STYLE_PATH)
+
+        for required in (
+            "function clearWinnerHighlight()",
+            "function highlightWinner(candidateId)",
+            "wheel__segment--winner",
+            "wheel__label--winner",
+            'resultElement.classList.add("spin-result--visible")',
+            "highlightWinner(candidateId)",
+            "showResult(spin.winner.title, spin.winner.id)",
+        ):
+            self.assertIn(required, script)
+
+        for required in (
+            ".spin-result--visible",
+            "@keyframes winner-card-reveal",
+            "@keyframes winner-title-reveal",
+            "@keyframes winner-segment-pulse",
+            ".wheel__segment--winner",
+            ".wheel__label--winner",
+        ):
+            self.assertIn(required, css)
+
+    def test_hiding_result_clears_all_celebration_state(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        hide_method = script.split(
+            "function hideResult() {",
+            1,
+        )[1].split(
+            "function showResult(",
+            1,
+        )[0]
+        self.assertIn(
+            'resultElement.classList.remove("spin-result--visible")',
+            hide_method,
+        )
+        self.assertIn(
+            'resultElement.removeAttribute("data-title-size")',
+            hide_method,
+        )
+        self.assertIn("clearWinnerHighlight()", hide_method)
 
     def test_browser_avoids_mutable_local_client_storage(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)

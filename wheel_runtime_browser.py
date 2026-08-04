@@ -319,20 +319,25 @@ body[data-mode="overlay"] .wheel__caption {
   left: 50%;
   bottom: 5%;
   display: grid;
-  min-width: min(78%, 520px);
-  gap: 4px;
-  padding: 13px 20px 15px;
+  width: min(88%, 720px);
+  gap: 7px;
+  padding: 15px 24px 18px;
   border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 18px;
   background: rgba(12, 13, 20, 0.9);
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.38);
   text-align: center;
   transform: translateX(-50%);
+  transform-origin: center;
   backdrop-filter: blur(12px);
 }
 
 .spin-result[hidden] {
   display: none;
+}
+
+.spin-result--visible {
+  animation: winner-card-reveal 620ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .spin-result span {
@@ -344,20 +349,102 @@ body[data-mode="overlay"] .wheel__caption {
 }
 
 .spin-result strong {
-  overflow: hidden;
-  font-size: clamp(1rem, 3vw, 1.65rem);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: block;
+  width: 100%;
+  color: #ffffff;
+  font-size: clamp(1.35rem, 3.4vw, 2.15rem);
+  font-weight: 850;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  white-space: normal;
+  animation: winner-title-reveal 760ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.spin-result[data-title-size="medium"] strong {
+  font-size: clamp(1.2rem, 2.9vw, 1.8rem);
+}
+
+.spin-result[data-title-size="long"] strong {
+  font-size: clamp(1.05rem, 2.45vw, 1.5rem);
+  line-height: 1.12;
+}
+
+.spin-result[data-title-size="extra-long"] strong {
+  font-size: clamp(0.9rem, 2vw, 1.2rem);
+  line-height: 1.16;
 }
 
 body[data-mode="overlay"] .spin-result {
   bottom: 2.5%;
-  min-width: min(86%, 620px);
+  width: min(92%, 780px);
   border-color: rgba(255, 255, 255, 0.3);
   background: rgba(10, 11, 17, 0.92);
   box-shadow:
     0 18px 44px rgba(0, 0, 0, 0.48),
     0 0 30px rgba(255, 255, 255, 0.08);
+}
+
+.wheel__segment--winner {
+  filter:
+    brightness(1.22)
+    saturate(1.2)
+    drop-shadow(0 0 11px rgba(255, 255, 255, 0.72));
+  animation: winner-segment-pulse 920ms ease-in-out 2;
+}
+
+.wheel__label--winner {
+  fill: #ffffff;
+  font-weight: 900;
+  stroke-width: 5px;
+}
+
+@keyframes winner-card-reveal {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(28px) scale(0.88);
+  }
+
+  58% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(-6px) scale(1.035);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+
+@keyframes winner-title-reveal {
+  0% {
+    opacity: 0;
+    transform: scale(0.82);
+    letter-spacing: 0.06em;
+  }
+
+  64% {
+    opacity: 1;
+    transform: scale(1.045);
+    letter-spacing: 0;
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    letter-spacing: 0;
+  }
+}
+
+@keyframes winner-segment-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.78;
+  }
 }
 
 .runtime__footer {
@@ -386,6 +473,20 @@ body[data-mode="overlay"] .spin-result {
 
   .wheel__label {
     font-size: 12px;
+  }
+
+  .spin-result {
+    width: min(94%, 720px);
+    padding: 12px 15px 14px;
+  }
+
+  .spin-result strong {
+    font-size: clamp(1.05rem, 5.5vw, 1.5rem);
+  }
+
+  .spin-result[data-title-size="long"] strong,
+  .spin-result[data-title-size="extra-long"] strong {
+    font-size: clamp(0.88rem, 4.5vw, 1.18rem);
   }
 }
 """
@@ -549,14 +650,69 @@ function updateWheelLabelOrientation(wheelRotation) {
   });
 }
 
-function hideResult() {
-  resultElement.hidden = true;
-  winnerElement.textContent = "";
+function resultTitleSize(title) {
+  const length = Array.from(String(title || "").trim()).length;
+  if (length > 96) {
+    return "extra-long";
+  }
+  if (length > 62) {
+    return "long";
+  }
+  if (length > 34) {
+    return "medium";
+  }
+  return "short";
 }
 
-function showResult(title) {
-  winnerElement.textContent = String(title || "");
+function clearWinnerHighlight() {
+  segmentsElement
+    .querySelectorAll(
+      ".wheel__segment--winner, .wheel__label--winner",
+    )
+    .forEach((element) => {
+      element.classList.remove(
+        "wheel__segment--winner",
+        "wheel__label--winner",
+      );
+    });
+}
+
+function highlightWinner(candidateId) {
+  const normalizedId = String(candidateId || "");
+  clearWinnerHighlight();
+
+  segmentsElement
+    .querySelectorAll("[data-candidate-id]")
+    .forEach((element) => {
+      if (element.dataset.candidateId !== normalizedId) {
+        return;
+      }
+      if (element.classList.contains("wheel__segment")) {
+        element.classList.add("wheel__segment--winner");
+      }
+      if (element.classList.contains("wheel__label")) {
+        element.classList.add("wheel__label--winner");
+      }
+    });
+}
+
+function hideResult() {
+  resultElement.hidden = true;
+  resultElement.classList.remove("spin-result--visible");
+  resultElement.removeAttribute("data-title-size");
+  winnerElement.textContent = "";
+  clearWinnerHighlight();
+}
+
+function showResult(title, candidateId) {
+  const fullTitle = String(title || "").trim();
+  winnerElement.textContent = fullTitle;
+  resultElement.dataset.titleSize = resultTitleSize(fullTitle);
   resultElement.hidden = false;
+  resultElement.classList.remove("spin-result--visible");
+  void resultElement.offsetWidth;
+  resultElement.classList.add("spin-result--visible");
+  highlightWinner(candidateId);
 }
 
 function resetWheelRotation() {
@@ -816,7 +972,7 @@ function animateSpin(spin, snapshot) {
     detailElement.textContent = (
       `Spin ${spin.sequence} · ${spin.issued_at}`
     );
-    showResult(spin.winner.title);
+    showResult(spin.winner.title, spin.winner.id);
     scheduleOverlayHide();
   }, totalDuration + 80);
 }
