@@ -6,6 +6,7 @@ import copy
 import math
 import tkinter as tk
 from tkinter import messagebox, ttk
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from collection_wheel import EmptyWheelPoolError, ExhaustedWheelPoolError
 from collection_wheel_animation import build_spin_frames, build_wheel_layout
@@ -327,8 +328,9 @@ class CollectionWheelDialog:
             runtime_frame,
             text=(
                 "Start the local browser Wheel, then paste its URL into an "
-                "OBS Browser Source. The browser follows this dialog's "
-                "current filters and predetermined results."
+                "OBS Browser Source. The transparent overlay follows "
+                "this dialog's filters and results, and stays hidden while "
+                "idle."
             ),
             wraplength=930,
         ).grid(
@@ -471,6 +473,21 @@ class CollectionWheelDialog:
             justify="center",
         ).pack(fill="x", pady=(12, 0))
 
+    @staticmethod
+    def _obs_browser_url(browser_url):
+        parts = urlsplit(str(browser_url).strip())
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query["mode"] = "overlay"
+        return urlunsplit(
+            (
+                parts.scheme,
+                parts.netloc,
+                parts.path,
+                urlencode(query),
+                parts.fragment,
+            )
+        )
+
     @classmethod
     def _browser_spin_duration_ms(cls):
         return max(
@@ -482,7 +499,8 @@ class CollectionWheelDialog:
         if self._spinning or not self._pool_available:
             return
         try:
-            browser_url = self.runtime_bridge.start(self._active_pool)
+            preview_url = self.runtime_bridge.start(self._active_pool)
+            browser_url = self._obs_browser_url(preview_url)
             self.runtime_url_var.set(browser_url)
             copied = self._copy_browser_url(show_error=False)
             count = len(self._active_pool)

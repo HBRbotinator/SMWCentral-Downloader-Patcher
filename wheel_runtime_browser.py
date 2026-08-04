@@ -27,7 +27,11 @@ _HTML = """<!doctype html>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
-  <main class="runtime" aria-labelledby="runtime-title">
+  <main
+    id="runtime-root"
+    class="runtime"
+    aria-labelledby="runtime-title"
+  >
     <header class="runtime__header">
       <div>
         <p class="runtime__eyebrow">SMWC Downloader &amp; Patcher</p>
@@ -116,7 +120,12 @@ body {
   display: grid;
   place-items: center;
   padding: 24px;
+  overflow: hidden;
   color: #f7f7fb;
+}
+
+body:not([data-mode]) .runtime {
+  visibility: hidden;
 }
 
 .runtime {
@@ -127,7 +136,45 @@ body {
   background:
     linear-gradient(145deg, rgba(24, 25, 35, 0.96), rgba(9, 10, 16, 0.94));
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  opacity: 1;
+  visibility: visible;
+  transform: scale(1);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    visibility 180ms step-start;
   backdrop-filter: blur(14px);
+}
+
+body[data-mode="overlay"] {
+  padding: 0;
+}
+
+body[data-mode="overlay"] .runtime {
+  width: min(96vw, 940px);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+body[data-mode="overlay"]:not(.overlay-active) .runtime {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: scale(0.985);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    visibility 180ms step-end;
+}
+
+body[data-mode="overlay"].overlay-active .runtime {
+  opacity: 1;
+  visibility: visible;
+  transform: scale(1);
 }
 
 .runtime__header,
@@ -185,6 +232,21 @@ body {
   width: min(100%, 760px);
   margin: 22px auto;
   aspect-ratio: 1;
+}
+
+body[data-mode="overlay"] .runtime__header,
+body[data-mode="overlay"] .runtime__footer {
+  display: none;
+}
+
+body[data-mode="overlay"] .wheel-stage {
+  width: min(94vmin, 900px);
+  margin: 0 auto;
+}
+
+body[data-mode="overlay"] .wheel__count,
+body[data-mode="overlay"] .wheel__caption {
+  display: none;
 }
 
 .wheel {
@@ -288,6 +350,16 @@ body {
   white-space: nowrap;
 }
 
+body[data-mode="overlay"] .spin-result {
+  bottom: 2.5%;
+  min-width: min(86%, 620px);
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(10, 11, 17, 0.92);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.48),
+    0 0 30px rgba(255, 255, 255, 0.08);
+}
+
 .runtime__footer {
   color: rgba(255, 255, 255, 0.58);
   font-size: 0.78rem;
@@ -326,8 +398,15 @@ const SNAPSHOT_PATH = "/api/v1/snapshot";
 const SPIN_PATH = "/api/v1/spin";
 const POLL_INTERVAL_MS = 750;
 const MAX_VISIBLE_LABELS = 36;
+const OVERLAY_RESULT_HOLD_MS = 5000;
 const SPIN_EASING = "cubic-bezier(0.12, 0.7, 0.1, 1)";
+const DISPLAY_MODE = (
+  new URLSearchParams(window.location.search).get("mode") === "overlay"
+    ? "overlay"
+    : "preview"
+);
 
+const runtimeElement = document.getElementById("runtime-root");
 const statusElement = document.getElementById("runtime-status");
 const detailElement = document.getElementById("snapshot-detail");
 const segmentsElement = document.getElementById("wheel-segments");
@@ -342,6 +421,50 @@ let lastObservedSpinId = "";
 let currentRotation = 0;
 let animationGeneration = 0;
 let refreshInProgress = false;
+let overlayHideTimer = null;
+
+document.body.dataset.mode = DISPLAY_MODE;
+
+function isOverlayMode() {
+  return DISPLAY_MODE === "overlay";
+}
+
+function clearOverlayHideTimer() {
+  if (overlayHideTimer === null) {
+    return;
+  }
+  window.clearTimeout(overlayHideTimer);
+  overlayHideTimer = null;
+}
+
+function showOverlay() {
+  if (!isOverlayMode()) {
+    return;
+  }
+  clearOverlayHideTimer();
+  document.body.classList.add("overlay-active");
+  runtimeElement.setAttribute("aria-hidden", "false");
+}
+
+function hideOverlay() {
+  if (!isOverlayMode()) {
+    return;
+  }
+  clearOverlayHideTimer();
+  document.body.classList.remove("overlay-active");
+  runtimeElement.setAttribute("aria-hidden", "true");
+}
+
+function scheduleOverlayHide() {
+  if (!isOverlayMode()) {
+    return;
+  }
+  clearOverlayHideTimer();
+  overlayHideTimer = window.setTimeout(
+    hideOverlay,
+    OVERLAY_RESULT_HOLD_MS,
+  );
+}
 
 function setStatus(text, state) {
   statusElement.textContent = text;
@@ -406,6 +529,7 @@ function resetWheelRotation() {
   segmentsElement.style.transition = "none";
   segmentsElement.style.transform = "rotate(0deg)";
   hideResult();
+  hideOverlay();
 }
 
 function renderEmptyWheel() {
@@ -541,6 +665,7 @@ function animateSpin(spin, snapshot) {
     snapshot.candidates.length,
   );
 
+  showOverlay();
   hideResult();
   setStatus("Spinning…", "ready");
   detailElement.textContent = "Winner selected by the desktop application.";
@@ -566,6 +691,7 @@ function animateSpin(spin, snapshot) {
       `Spin ${spin.sequence} · ${spin.issued_at}`
     );
     showResult(spin.winner.title);
+    scheduleOverlayHide();
   }, duration + 80);
 }
 
@@ -587,6 +713,7 @@ function observeSpin(spin, snapshot) {
   }
 
   if (!spinMatchesSnapshot(spin, snapshot)) {
+    hideOverlay();
     setStatus("Synchronizing…", "waiting");
     detailElement.textContent = (
       "Waiting for the snapshot used by the latest spin."
@@ -646,6 +773,7 @@ async function refreshRuntime() {
       currentSnapshot = null;
       lastSnapshotIdentity = "";
       renderEmptyWheel();
+      hideOverlay();
       return;
     }
 
@@ -656,6 +784,7 @@ async function refreshRuntime() {
     const revision = snapshot.source?.revision;
 
     if (!spinStatus.configured) {
+      hideOverlay();
       setStatus("Preview connected", "ready");
       detailElement.textContent = revision
         ? `${count} candidates · revision ${revision}`
@@ -664,6 +793,7 @@ async function refreshRuntime() {
     }
 
     if (!spinStatus.ready) {
+      hideOverlay();
       setStatus("Ready for spin", "ready");
       detailElement.textContent = `${count} candidates loaded`;
       return;
@@ -686,6 +816,7 @@ async function refreshRuntime() {
 }
 
 renderEmptyWheel();
+hideOverlay();
 refreshRuntime();
 window.setInterval(refreshRuntime, POLL_INTERVAL_MS);
 """

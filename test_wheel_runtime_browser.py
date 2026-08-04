@@ -1,4 +1,4 @@
-"""Contracts for browser rendering and predetermined spin animation."""
+"""Contracts for browser preview and idle-hidden OBS overlay modes."""
 
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
     def test_html_uses_local_assets_and_accessible_result_status(self):
         html = asset_text(WHEEL_RUNTIME_BROWSER_PATH)
 
+        self.assertIn('id="runtime-root"', html)
         self.assertIn('href="./style.css"', html)
         self.assertIn('src="./app.js"', html)
         self.assertNotIn("<style", html)
@@ -63,6 +64,84 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
         self.assertIn('id="spin-result"', html)
         self.assertIn('id="spin-winner"', html)
         self.assertIn('aria-live="polite"', html)
+
+    def test_query_parameter_selects_overlay_or_preview_mode(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        self.assertIn("new URLSearchParams(window.location.search)", script)
+        self.assertIn('.get("mode") === "overlay"', script)
+        self.assertIn('? "overlay"', script)
+        self.assertIn(': "preview"', script)
+        self.assertIn(
+            "document.body.dataset.mode = DISPLAY_MODE",
+            script,
+        )
+
+    def test_overlay_stays_hidden_until_a_spin_is_animated(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        self.assertIn("function showOverlay()", script)
+        self.assertIn("function hideOverlay()", script)
+        self.assertIn(
+            'document.body.classList.add("overlay-active")',
+            script,
+        )
+        self.assertIn(
+            'document.body.classList.remove("overlay-active")',
+            script,
+        )
+        self.assertLess(
+            script.index("showOverlay();"),
+            script.index('setStatus("Spinning…", "ready")'),
+        )
+        self.assertIn("renderEmptyWheel();\nhideOverlay();", script)
+
+    def test_overlay_holds_result_then_returns_to_hidden_idle(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        self.assertIn("const OVERLAY_RESULT_HOLD_MS = 5000", script)
+        self.assertIn("function scheduleOverlayHide()", script)
+        self.assertIn(
+            "overlayHideTimer = window.setTimeout(",
+            script,
+        )
+        self.assertIn(
+            "OVERLAY_RESULT_HOLD_MS",
+            script,
+        )
+        self.assertLess(
+            script.index("showResult(spin.winner.title);"),
+            script.index("scheduleOverlayHide();"),
+        )
+
+    def test_overlay_css_removes_preview_chrome_and_background(self):
+        css = asset_text(WHEEL_RUNTIME_BROWSER_STYLE_PATH)
+
+        self.assertIn('body[data-mode="overlay"] .runtime__header', css)
+        self.assertIn('body[data-mode="overlay"] .runtime__footer', css)
+        self.assertIn("display: none", css)
+        self.assertIn('body[data-mode="overlay"] .runtime {', css)
+        self.assertIn("background: transparent", css)
+        self.assertIn("box-shadow: none", css)
+        self.assertIn(
+            'body[data-mode="overlay"]:not(.overlay-active) .runtime',
+            css,
+        )
+        self.assertIn("visibility: hidden", css)
+        self.assertIn("opacity: 0", css)
+
+    def test_preview_mode_retains_full_runtime_chrome(self):
+        css = asset_text(WHEEL_RUNTIME_BROWSER_STYLE_PATH)
+        html = asset_text(WHEEL_RUNTIME_BROWSER_PATH)
+
+        self.assertIn('class="runtime__header"', html)
+        self.assertIn('class="runtime__footer"', html)
+        self.assertIn("Wheel Runtime", html)
+        self.assertIn("Read-only preview", html)
+        self.assertNotIn(
+            'body[data-mode="preview"] .runtime__header',
+            css,
+        )
 
     def test_javascript_reads_all_runtime_state_with_get_only(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
@@ -180,6 +259,7 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
             script,
         )
         self.assertIn("renderWheel(snapshot.candidates)", script)
+        self.assertIn("hideOverlay();", script)
 
     def test_refresh_loop_prevents_overlapping_requests(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)

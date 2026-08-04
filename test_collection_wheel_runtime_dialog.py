@@ -108,8 +108,33 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
             "Stop",
             "runtime_bridge_factory=CollectionWheelRuntimeBridge",
             "self.runtime_bridge =",
+            "stays hidden while",
+            "idle",
         ):
             self.assertIn(required, source)
+
+    def test_obs_url_adds_overlay_mode_without_losing_query(self):
+        self.assertEqual(
+            CollectionWheelDialog._obs_browser_url(
+                "http://127.0.0.1:8765/wheel/"
+            ),
+            "http://127.0.0.1:8765/wheel/?mode=overlay",
+        )
+        self.assertEqual(
+            CollectionWheelDialog._obs_browser_url(
+                "http://127.0.0.1:8765/wheel/?quality=high"
+            ),
+            (
+                "http://127.0.0.1:8765/wheel/"
+                "?quality=high&mode=overlay"
+            ),
+        )
+        self.assertEqual(
+            CollectionWheelDialog._obs_browser_url(
+                "http://127.0.0.1:8765/wheel/?mode=preview"
+            ),
+            "http://127.0.0.1:8765/wheel/?mode=overlay",
+        )
 
     def test_browser_duration_matches_native_animation_schedule(self):
         expected = max(
@@ -122,7 +147,7 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
             expected,
         )
 
-    def test_start_uses_active_pool_and_copies_obs_url(self):
+    def test_start_uses_active_pool_and_copies_overlay_url(self):
         dialog = fake_dialog()
 
         dialog._start_browser_runtime()
@@ -131,14 +156,14 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
             dialog.runtime_bridge.calls[0],
             ("start", dialog._active_pool),
         )
+        expected_url = (
+            "http://127.0.0.1:8765/wheel/?mode=overlay"
+        )
         self.assertEqual(
             dialog.runtime_url_var.get(),
-            "http://127.0.0.1:8765/wheel/",
+            expected_url,
         )
-        self.assertEqual(
-            dialog.window.clipboard,
-            "http://127.0.0.1:8765/wheel/",
-        )
+        self.assertEqual(dialog.window.clipboard, expected_url)
         self.assertIn("OBS URL copied", dialog.runtime_status_var.get())
         self.assertEqual(dialog.runtime_start_button.state, "disabled")
         self.assertEqual(dialog.runtime_copy_button.state, "normal")
