@@ -295,6 +295,41 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
             script,
         )
 
+    def test_labels_use_radial_angles_and_flip_when_inverted(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        for required in (
+            "function signedDegrees(angle)",
+            "function labelFlipForRotation(baseAngle, wheelRotation)",
+            "function updateWheelLabelOrientation(wheelRotation)",
+            'segmentsElement.querySelectorAll(".wheel__label")',
+            "screenAngle > 90 || screenAngle < -90 ? 180 : 0",
+            "label.dataset.baseAngle = String(midpoint)",
+            "label.dataset.labelX = position.x.toFixed(3)",
+            "label.dataset.labelY = position.y.toFixed(3)",
+            "`rotate(${baseAngle + flip} ${x} ${y})`",
+        ):
+            self.assertIn(required, script)
+
+    def test_label_orientation_updates_for_every_motion_phase(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        apply_method = script.split(
+            "function applySpinPhase(",
+            1,
+        )[1].split(
+            "function animateSpin(",
+            1,
+        )[0]
+        self.assertIn(
+            "updateWheelLabelOrientation(target)",
+            apply_method,
+        )
+        self.assertIn(
+            "updateWheelLabelOrientation(currentRotation)",
+            script,
+        )
+
     def test_snapshot_change_resets_visual_rotation_safely(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 

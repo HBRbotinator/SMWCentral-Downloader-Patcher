@@ -523,6 +523,32 @@ function createSvgElement(name, attributes = {}) {
   return element;
 }
 
+function signedDegrees(angle) {
+  return ((angle + 180) % 360 + 360) % 360 - 180;
+}
+
+function labelFlipForRotation(baseAngle, wheelRotation) {
+  const screenAngle = signedDegrees(baseAngle + wheelRotation);
+  return screenAngle > 90 || screenAngle < -90 ? 180 : 0;
+}
+
+function updateWheelLabelOrientation(wheelRotation) {
+  const labels = segmentsElement.querySelectorAll(".wheel__label");
+  labels.forEach((label) => {
+    const baseAngle = Number(label.dataset.baseAngle);
+    const x = Number(label.dataset.labelX);
+    const y = Number(label.dataset.labelY);
+    const flip = labelFlipForRotation(
+      baseAngle,
+      wheelRotation,
+    );
+    label.setAttribute(
+      "transform",
+      `rotate(${baseAngle + flip} ${x} ${y})`,
+    );
+  });
+}
+
 function hideResult() {
   resultElement.hidden = true;
   winnerElement.textContent = "";
@@ -538,6 +564,7 @@ function resetWheelRotation() {
   currentRotation = 0;
   segmentsElement.style.transition = "none";
   segmentsElement.style.transform = "rotate(0deg)";
+  updateWheelLabelOrientation(currentRotation);
   hideResult();
   hideOverlay();
 }
@@ -605,6 +632,9 @@ function renderWheel(candidates) {
         "dominant-baseline": "middle",
       });
       label.dataset.candidateId = candidateId;
+      label.dataset.baseAngle = String(midpoint);
+      label.dataset.labelX = position.x.toFixed(3);
+      label.dataset.labelY = position.y.toFixed(3);
       label.textContent = truncate(
         candidate.title,
         count < 8 ? 24 : 15,
@@ -724,6 +754,7 @@ function applySpinPhase(
   if (generation !== animationGeneration) {
     return;
   }
+  updateWheelLabelOrientation(target);
   segmentsElement.style.transition = (
     `transform ${duration}ms ${easing}`
   );

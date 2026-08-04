@@ -83,6 +83,7 @@ class FakeBridge:
 def fake_dialog(bridge=None):
     dialog = CollectionWheelDialog.__new__(CollectionWheelDialog)
     dialog.runtime_bridge = bridge or FakeBridge()
+    dialog.browser_landing_offset_supplier = lambda: 0.23
     dialog.runtime_status_var = FakeVar("Browser Wheel stopped")
     dialog.runtime_url_var = FakeVar()
     dialog.runtime_start_button = FakeButton()
@@ -107,6 +108,7 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
             "Copy OBS URL",
             "Stop",
             "runtime_bridge_factory=CollectionWheelRuntimeBridge",
+            "browser_landing_offset_supplier=build_browser_landing_offset",
             "self.runtime_bridge =",
             "stays hidden while",
             "idle",
@@ -226,10 +228,36 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
                     CollectionWheelDialog._browser_spin_duration_ms()
                 ),
                 "turns": CollectionWheelDialog.BROWSER_SPIN_TURNS,
-                "landing_offset": (
-                    CollectionWheelDialog.BROWSER_LANDING_OFFSET
-                ),
+                "landing_offset": 0.23,
             },
+        )
+
+    def test_each_publication_uses_one_python_supplied_offset(self):
+        dialog = fake_dialog()
+        dialog.runtime_bridge.running = True
+        offsets = iter((0.21, 0.79))
+        dialog.browser_landing_offset_supplier = lambda: next(offsets)
+        pool = [{"id": "one", "title": "One"}]
+        result = SimpleNamespace(
+            candidate_id="one",
+            candidate={"id": "one", "title": "One"},
+        )
+
+        self.assertTrue(
+            dialog._publish_browser_selection(pool, result)
+        )
+        self.assertTrue(
+            dialog._publish_browser_selection(pool, result)
+        )
+
+        publish_calls = [
+            call
+            for call in dialog.runtime_bridge.calls
+            if call[0] == "publish"
+        ]
+        self.assertEqual(
+            [call[3]["landing_offset"] for call in publish_calls],
+            [0.21, 0.79],
         )
 
     def test_dialog_publishes_after_selection_and_before_native_animation(self):
@@ -302,6 +330,20 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
         self.assertEqual(dialog.runtime_start_button.state, "disabled")
         self.assertEqual(dialog.runtime_copy_button.state, "normal")
         self.assertEqual(dialog.runtime_stop_button.state, "disabled")
+
+    def test_constructor_rejects_non_callable_landing_supplier(self):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "if not callable(browser_landing_offset_supplier):",
+            source,
+        )
+        self.assertIn(
+            "browser_landing_offset_supplier must be callable",
+            source,
+        )
 
     def test_dialog_never_selects_in_browser_or_opens_external_apps(self):
         source = Path("ui/collection_wheel_dialog.py").read_text(

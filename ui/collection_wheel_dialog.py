@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from collection_wheel import EmptyWheelPoolError, ExhaustedWheelPoolError
 from collection_wheel_animation import build_spin_frames, build_wheel_layout
 from wheel_runtime_bridge import CollectionWheelRuntimeBridge
+from wheel_runtime_landing import build_browser_landing_offset
 
 
 class CollectionWheelDialog:
@@ -31,7 +32,6 @@ class CollectionWheelDialog:
     POINTER_ANGLE = 90.0
     RESULT_DETAILS_WIDTH = 320
     RESULT_DETAILS_WRAP = 300
-    BROWSER_LANDING_OFFSET = 0.5
 
     COMPLETION_OPTIONS = (
         ALL_VALUE,
@@ -78,6 +78,7 @@ class CollectionWheelDialog:
         on_close=None,
         runtime_bridge=None,
         runtime_bridge_factory=CollectionWheelRuntimeBridge,
+        browser_landing_offset_supplier=build_browser_landing_offset,
     ):
         self.parent = parent
         self.model = model
@@ -89,6 +90,13 @@ class CollectionWheelDialog:
             runtime_bridge
             if runtime_bridge is not None
             else runtime_bridge_factory(self.model)
+        )
+        if not callable(browser_landing_offset_supplier):
+            raise TypeError(
+                "browser_landing_offset_supplier must be callable"
+            )
+        self.browser_landing_offset_supplier = (
+            browser_landing_offset_supplier
         )
         self.window = None
 
@@ -577,12 +585,13 @@ class CollectionWheelDialog:
         if not self.runtime_bridge.running:
             return True
         try:
+            landing_offset = self.browser_landing_offset_supplier()
             self.runtime_bridge.publish_selection(
                 pool,
                 result.candidate_id,
                 duration_ms=self._browser_spin_duration_ms(),
                 turns=self.BROWSER_SPIN_TURNS,
-                landing_offset=self.BROWSER_LANDING_OFFSET,
+                landing_offset=landing_offset,
             )
         except Exception as error:
             self.runtime_status_var.set(
