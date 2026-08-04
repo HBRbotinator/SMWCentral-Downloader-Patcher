@@ -21,6 +21,12 @@ The displayed URL is authoritative. The default runtime normally uses
 `127.0.0.1` on port `8765`, but integrations should use the URL shown by the
 dialog rather than constructing one.
 
+The dialog displays the transparent overlay form:
+
+`/wheel/?mode=overlay`
+
+The base `/wheel/` URL remains a full preview and diagnostics page.
+
 The runtime starts from the exact active pool. It does not expose the complete
 Collection when filters have removed candidates.
 
@@ -35,8 +41,13 @@ In OBS:
 4. Keep the application and Collection Wheel dialog open while the source is in
    use.
 
-The page has a transparent outer background and a responsive layout. It loads no
+The overlay has a transparent outer background and removes the preview title,
+status badge, footer, card background, border, and diagnostic text. It loads no
 external framework, CDN, font, script, image, or stylesheet.
+
+The overlay is fully hidden while idle. A newly observed spin reveals it before
+animation, keeps the result visible for five seconds, and then returns to a
+transparent hidden state.
 
 Reloading the OBS source displays the current snapshot. A previously published
 spin is treated as current state, but each newly observed sequence is animated
@@ -62,6 +73,31 @@ for that reroll.
 
 Browser publication occurs after selection. A browser-runtime error therefore
 does not reroll, replace, or invalidate the native result.
+
+## Browser animation and result presentation
+
+The Browser / OBS Wheel uses a separate show-oriented schedule:
+
+- nine seconds total duration;
+- eight full turns;
+- a launch phase;
+- a sustained cruise phase;
+- an extended anticipation phase across roughly the final segment.
+
+The exact final rotation still comes from the published Python-authored
+instruction.
+
+Python also chooses a safe visual landing offset inside the predetermined
+winner's segment. Most spins use early-edge or late-edge bands, with a smaller
+center band for variety. Every target keeps at least an 18% segment margin from
+either boundary.
+
+Segment labels are radial. The browser tracks each label's combined wheel angle
+and flips it by 180 degrees whenever it would otherwise appear upside down.
+
+The final result displays the complete title. Long and exceptionally long names
+wrap and use responsive size tiers rather than being ellipsized. The result
+card, title, winning segment, and winning label receive a brief celebration.
 
 ## Predetermined spin validation
 
@@ -107,7 +143,8 @@ The loopback service exposes these current routes:
 | GET / HEAD | `/api/v1/health` | Snapshot and spin readiness |
 | GET / HEAD | `/api/v1/snapshot` | Latest validated eligible-pool snapshot |
 | GET / HEAD | `/api/v1/spin` | Latest Python-authored spin instruction |
-| GET / HEAD | `/wheel/` | Browser / OBS renderer |
+| GET / HEAD | `/wheel/` | Full browser preview and diagnostics |
+| GET / HEAD | `/wheel/?mode=overlay` | Transparent idle-hidden OBS presentation |
 | GET / HEAD | `/wheel/style.css` | Embedded renderer styling |
 | GET / HEAD | `/wheel/app.js` | Embedded read-only renderer client |
 
@@ -162,8 +199,9 @@ the dialog reports that the previous pool was retained.
 
 ### A spin does not animate in OBS
 
-Confirm that the native spin completed selection and that the dialog did not
-report a browser publication error.
+Confirm that OBS uses the displayed URL ending in `?mode=overlay`, that the
+native spin completed selection, and that the dialog did not report a browser
+publication error.
 
 The browser deliberately refuses to animate a spin whose snapshot timestamp,
 revision, candidate count, winner index, or winner ID does not match its current
@@ -171,6 +209,12 @@ snapshot. It waits for synchronization rather than showing a misleading result.
 
 Reloading an OBS Browser Source resets page-local observation state. It does not
 cause Python to choose another winner.
+
+### The overlay appears empty between spins
+
+That is the intended OBS behavior. Overlay mode hides the complete wheel and
+result presentation while idle. Use the base `/wheel/` URL when a continuously
+visible preview and diagnostics page is needed.
 
 ## Current limitations and future boundary
 

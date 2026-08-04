@@ -90,6 +90,42 @@ While the runtime is active:
 
 Closing the Collection Wheel dialog stops its managed browser runtime.
 
+### Preview and OBS overlay modes
+
+The runtime exposes two visual modes from the same local page:
+
+- `/wheel/` is the full preview and diagnostics view.
+- `/wheel/?mode=overlay` is the transparent OBS presentation.
+
+The dialog displays and copies the overlay URL. In overlay mode, the title,
+status badge, footer, card background, border, and preview text are omitted.
+
+The overlay stays fully hidden while idle. A newly published spin reveals the
+wheel, the winner remains visible for five seconds, and the complete overlay
+then returns to a transparent hidden state.
+
+### Browser spin presentation
+
+The Browser / OBS Wheel uses a dedicated show-oriented animation rather than
+the shorter native timing:
+
+- nine seconds total;
+- eight full turns;
+- launch, cruise, and extended anticipation phases;
+- a final slowdown covering roughly the last segment before the result.
+
+Python chooses one safe visual landing offset inside the predetermined winner's
+segment. Most spins finish in an early-edge or late-edge band, while some remain
+nearer the center. Every landing retains a clear boundary margin, so suspense
+does not make the result visually ambiguous.
+
+Segment labels are oriented radially and flip by 180 degrees when their current
+screen angle would otherwise make them upside down.
+
+The winner presentation displays the complete title. Long titles wrap and use
+responsive size tiers instead of ellipsis. The result card, title, winning
+segment, and winning label receive a brief celebration before the overlay hides.
+
 See the [Browser / OBS Wheel guide](WHEEL_BROWSER_RUNTIME.md) for setup,
 architecture, API routes, security boundaries, and troubleshooting.
 

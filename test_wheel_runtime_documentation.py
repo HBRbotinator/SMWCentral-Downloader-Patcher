@@ -20,6 +20,10 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
             "Configure OBS",
             "Add a **Browser** source",
             "Copy OBS URL",
+            "/wheel/?mode=overlay",
+            "base `/wheel/` URL remains a full preview",
+            "fully hidden while idle",
+            "five seconds",
             "Keep the application and Collection Wheel dialog open",
             "Runtime lifecycle",
             "Closing the Collection Wheel dialog",
@@ -36,6 +40,23 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
             "Python publishes a versioned spin instruction",
             "same result",
             "does not reroll, replace, or invalidate the native result",
+        ):
+            self.assertIn(required, self.normalized)
+
+    def test_documents_final_overlay_presentation(self):
+        for required in (
+            "Browser animation and result presentation",
+            "nine seconds total duration",
+            "eight full turns",
+            "launch phase",
+            "sustained cruise phase",
+            "extended anticipation phase",
+            "safe visual landing offset",
+            "18% segment margin",
+            "flips it by 180 degrees",
+            "complete title",
+            "responsive size tiers",
+            "brief celebration",
         ):
             self.assertIn(required, self.normalized)
 
@@ -61,6 +82,7 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
             "/api/v1/snapshot",
             "/api/v1/spin",
             "/wheel/",
+            "/wheel/?mode=overlay",
             "/wheel/style.css",
             "/wheel/app.js",
         ):
@@ -96,6 +118,8 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
             "OBS shows a connection error",
             "waiting for a snapshot",
             "spin does not animate",
+            "overlay appears empty between spins",
+            "intended OBS behavior",
             "Current limitations and future boundary",
             "standalone or tray-hosted process",
             "Streamer.bot control",

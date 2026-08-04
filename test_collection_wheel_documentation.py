@@ -55,6 +55,17 @@ class CollectionWheelDocumentationTest(unittest.TestCase):
             "Python selects the winner once",
             "browser receives and animates that predetermined winner",
             "Closing the Collection Wheel dialog stops",
+            "Preview and OBS overlay modes",
+            "/wheel/?mode=overlay",
+            "fully hidden while idle",
+            "five seconds",
+            "nine seconds total",
+            "eight full turns",
+            "launch, cruise, and extended anticipation phases",
+            "safe visual landing offset",
+            "flip by 180 degrees",
+            "complete title",
+            "responsive size tiers",
             "Browser / OBS Wheel guide",
         ):
             self.assertIn(required, guide)

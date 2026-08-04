@@ -27,13 +27,19 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 - Kept the browser synchronized with the exact filtered and reroll pools.
 - Animated the Python-authored predetermined winner without browser-side
   selection.
+- Added a full preview URL and a transparent OBS overlay that hides while idle,
+  reveals each spin, holds the result for five seconds, and hides again.
+- Added a nine-second eight-turn launch, cruise, and anticipation animation.
+- Added safe Python-authored near-edge landing variation.
+- Kept rotating segment labels upright.
+- Wrapped and responsively sized complete winner titles with a result
+  celebration.
 - Added a read-only health, snapshot, and spin-state API.
 - Added a self-contained browser renderer with no external assets.
 - Kept standalone operation, Streamer.bot commands, and remote access outside
   the current scope.
 
 <!-- wheel-browser-runtime:end -->
-
 <!-- planner-foundation:start -->
 ### Planner foundation
 
