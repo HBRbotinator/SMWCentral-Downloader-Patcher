@@ -101,7 +101,7 @@ The dialog displays and copies the overlay URL. In overlay mode, the title,
 status badge, footer, card background, border, and preview text are omitted.
 
 The overlay stays fully hidden while idle. A newly published spin reveals the
-wheel, the winner remains visible for five seconds, and the complete overlay
+wheel, the winner remains visible for eight seconds, and the complete overlay
 then returns to a transparent hidden state.
 
 ### Browser spin presentation
@@ -109,22 +109,31 @@ then returns to a transparent hidden state.
 The Browser / OBS Wheel uses a dedicated show-oriented animation rather than
 the shorter native timing:
 
-- nine seconds total;
-- eight full turns;
-- launch, cruise, and extended anticipation phases;
-- a final slowdown covering roughly the last segment before the result.
+- 10.5 seconds total;
+- nine full turns;
+- one continuous frame-driven motion curve;
+- smooth acceleration through the first 10%;
+- a high-speed middle through 27%;
+- continuous deceleration over the final 73%;
+- a smooth zero-speed finish without a staged transition or braking handoff.
 
 Python chooses one safe visual landing offset inside the predetermined winner's
-segment. Most spins finish in an early-edge or late-edge band, while some remain
-nearer the center. Every landing retains a clear boundary margin, so suspense
-does not make the result visually ambiguous.
+segment from nine weighted bands. The early and late sides each receive 47% of
+the probability, while the center receives 6%. Hairline bands from 0.025 to
+0.055 and from 0.945 to 0.975 allow the pointer to creep just inside the selected
+segment or stop just before the following segment while preserving a visible
+margin.
 
 Segment labels are oriented radially and flip by 180 degrees when their current
 screen angle would otherwise make them upside down.
 
 The winner presentation displays the complete title. Long titles wrap and use
 responsive size tiers instead of ellipsis. The result card, title, winning
-segment, and winning label receive a brief celebration before the overlay hides.
+segment, and winning label receive an extended celebration before the overlay
+hides. Spark count, angle, distance, delay, hue, and scale, together with card
+tilt and ring expansion, vary between spins. That variation is derived from the
+immutable Python-authored spin identity, is repeatable for the same instruction,
+and cannot influence filtering or winner selection.
 
 See the [Browser / OBS Wheel guide](WHEEL_BROWSER_RUNTIME.md) for setup,
 architecture, API routes, security boundaries, and troubleshooting.

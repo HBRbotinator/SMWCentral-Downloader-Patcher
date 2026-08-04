@@ -58,14 +58,22 @@ class CollectionWheelDocumentationTest(unittest.TestCase):
             "Preview and OBS overlay modes",
             "/wheel/?mode=overlay",
             "fully hidden while idle",
-            "five seconds",
-            "nine seconds total",
-            "eight full turns",
-            "launch, cruise, and extended anticipation phases",
-            "safe visual landing offset",
+            "eight seconds",
+            "10.5 seconds total",
+            "nine full turns",
+            "one continuous frame-driven motion curve",
+            "continuous deceleration over the final 73%",
+            "nine weighted bands",
+            "each receive 47%",
+            "center receives 6%",
+            "0.025 to 0.055",
+            "0.945 to 0.975",
             "flip by 180 degrees",
             "complete title",
             "responsive size tiers",
+            "Spark count, angle, distance, delay, hue, and scale",
+            "immutable Python-authored spin identity",
+            "cannot influence filtering or winner selection",
             "Browser / OBS Wheel guide",
         ):
             self.assertIn(required, guide)
@@ -162,6 +170,10 @@ class CollectionWheelDocumentationTest(unittest.TestCase):
             "Python-authored predetermined winner",
             "read-only health, snapshot, and spin-state API",
             "self-contained browser renderer",
+            "10.5-second",
+            "nine weighted landing bands",
+            "eight-second result hold",
+            "spin-seeded celebration variation",
         ):
             self.assertIn(required, browser)
 

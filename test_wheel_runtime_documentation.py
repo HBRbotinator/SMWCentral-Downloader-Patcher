@@ -23,7 +23,7 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
             "/wheel/?mode=overlay",
             "base `/wheel/` URL remains a full preview",
             "fully hidden while idle",
-            "five seconds",
+            "eight seconds",
             "Keep the application and Collection Wheel dialog open",
             "Runtime lifecycle",
             "Closing the Collection Wheel dialog",
@@ -46,19 +46,41 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
     def test_documents_final_overlay_presentation(self):
         for required in (
             "Browser animation and result presentation",
-            "nine seconds total duration",
-            "eight full turns",
-            "launch phase",
-            "sustained cruise phase",
-            "extended anticipation phase",
-            "safe visual landing offset",
-            "18% segment margin",
+            "10.5 seconds total duration",
+            "nine full turns",
+            "continuous `requestAnimationFrame`-driven motion curve",
+            "high-speed middle through 27%",
+            "continuous deceleration over the final 73%",
+            "tapering smoothly to zero",
+            "nine weighted bands",
+            "Hairline early",
+            "`0.025–0.055`",
+            "Hairline late",
+            "`0.945–0.975`",
+            "each receive 47% total probability",
+            "Center",
+            "6%",
             "flips it by 180 degrees",
             "complete title",
             "responsive size tiers",
-            "brief celebration",
+            "`WINNER!`",
+            "eight seconds",
+            "celebration rings",
+            "spark rays",
+            "immutable Python-authored spin ID",
+            "no browser entropy source",
         ):
             self.assertIn(required, self.normalized)
+
+    def test_rejects_superseded_presentation_numbers(self):
+        for stale in (
+            "five seconds",
+            "nine seconds total duration",
+            "eight full turns",
+            "18% segment margin",
+            "browser contains no random source",
+        ):
+            self.assertNotIn(stale, self.normalized)
 
     def test_documents_spin_validation_contract(self):
         for required in (
@@ -72,7 +94,8 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
             "winner index",
             "animation duration",
             "landing offset",
-            "browser contains no random source",
+            "no entropy source",
+            "Presentation variation is deterministically derived",
         ):
             self.assertIn(required, self.normalized)
 

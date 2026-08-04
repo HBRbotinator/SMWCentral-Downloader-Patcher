@@ -46,7 +46,7 @@ status badge, footer, card background, border, and diagnostic text. It loads no
 external framework, CDN, font, script, image, or stylesheet.
 
 The overlay is fully hidden while idle. A newly observed spin reveals it before
-animation, keeps the result visible for five seconds, and then returns to a
+animation, keeps the result visible for eight seconds, and then returns to a
 transparent hidden state.
 
 Reloading the OBS source displays the current snapshot. A previously published
@@ -78,26 +78,51 @@ does not reroll, replace, or invalidate the native result.
 
 The Browser / OBS Wheel uses a separate show-oriented schedule:
 
-- nine seconds total duration;
-- eight full turns;
-- a launch phase;
-- a sustained cruise phase;
-- an extended anticipation phase across roughly the final segment.
+- 10.5 seconds total duration;
+- nine full turns;
+- one continuous `requestAnimationFrame`-driven motion curve;
+- smooth acceleration through the first 10%;
+- a high-speed middle through 27%;
+- continuous deceleration over the final 73%;
+- velocity and acceleration tapering smoothly to zero.
 
-The exact final rotation still comes from the published Python-authored
-instruction.
+The animation does not switch between staged CSS transitions, so the final
+slowdown has no braking handoff. The exact final rotation still comes from the
+published Python-authored instruction.
 
-Python also chooses a safe visual landing offset inside the predetermined
-winner's segment. Most spins use early-edge or late-edge bands, with a smaller
-center band for variety. Every target keeps at least an 18% segment margin from
-either boundary.
+Python chooses a safe visual landing offset inside the predetermined winner's
+segment from nine weighted bands:
+
+| Landing region | Segment position | Weight |
+| --- | --- | --- |
+| Hairline early | `0.025–0.055` | 8% |
+| Extreme early | `0.07–0.13` | 14% |
+| Early | `0.18–0.32` | 15% |
+| Inner early | `0.36–0.46` | 10% |
+| Center | `0.47–0.53` | 6% |
+| Inner late | `0.54–0.64` | 10% |
+| Late | `0.68–0.82` | 15% |
+| Extreme late | `0.87–0.93` | 14% |
+| Hairline late | `0.945–0.975` | 8% |
+
+The early and late sides each receive 47% total probability. Hairline finishes
+can creep just inside the selected segment or stop just before the following
+segment while retaining a small visible margin.
 
 Segment labels are radial. The browser tracks each label's combined wheel angle
 and flips it by 180 degrees whenever it would otherwise appear upside down.
 
 The final result displays the complete title. Long and exceptionally long names
-wrap and use responsive size tiers rather than being ellipsized. The result
-card, title, winning segment, and winning label receive a brief celebration.
+wrap and use responsive size tiers rather than being ellipsized. The overlay
+announces `WINNER!`, holds the result for eight seconds, expands celebration
+rings, emits spark rays, animates the result card and title, and pulses the
+winning segment.
+
+Spark count, angle, distance, delay, hue, and scale vary, as do card tilt and
+ring expansion. This presentation variation is derived from the immutable
+Python-authored spin ID, sequence, and winner ID. It is repeatable for the same
+instruction, uses no browser entropy source, and cannot influence the selected
+winner.
 
 ## Predetermined spin validation
 
@@ -119,7 +144,7 @@ Before animating, the browser verifies that the instruction matches the exact
 snapshot and candidate at the published index. A mismatched instruction waits
 for synchronization instead of animating against the wrong pool.
 
-The browser contains no random source or winner-selection function.
+The browser contains no entropy source or winner-selection function. Presentation variation is deterministically derived from the immutable spin identity.
 
 ## Runtime lifecycle
 
