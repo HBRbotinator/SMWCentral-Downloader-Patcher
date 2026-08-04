@@ -224,6 +224,55 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
         self.assertIn("requestAnimationFrame", script)
         self.assertIn("cubic-bezier", script)
 
+    def test_spin_uses_launch_cruise_and_anticipation_phases(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        for required in (
+            "function buildSpinMotionPlan(spin, snapshot)",
+            "function applySpinPhase(",
+            "SPIN_LAUNCH_SHARE = 0.16",
+            "SPIN_CRUISE_SHARE = 0.47",
+            "SPIN_LAUNCH_EASING",
+            "SPIN_CRUISE_EASING",
+            "SPIN_ANTICIPATION_EASING",
+            "plan.launchTarget",
+            "plan.cruiseTarget",
+            "plan.target",
+            "plan.anticipationDuration",
+        ):
+            self.assertIn(required, script)
+
+        self.assertLess(
+            script.index("plan.launchTarget"),
+            script.index("plan.cruiseTarget"),
+        )
+
+    def test_final_anticipation_arc_scales_with_segment_width(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        for required in (
+            "const segmentAngle = 360 / snapshot.candidates.length",
+            "segmentAngle * SPIN_ANTICIPATION_SEGMENTS",
+            "SPIN_MIN_ANTICIPATION_ARC",
+            "SPIN_MAX_ANTICIPATION_ARC",
+            "totalDistance * 0.25",
+            "const cruiseTarget = target - anticipationArc",
+        ):
+            self.assertIn(required, script)
+
+    def test_browser_no_longer_uses_one_shot_transition(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        self.assertNotIn("const SPIN_EASING =", script)
+        self.assertNotIn(
+            "`transform ${duration}ms ${SPIN_EASING}`",
+            script,
+        )
+        self.assertGreaterEqual(
+            script.count("applySpinPhase("),
+            4,
+        )
+
     def test_rotation_formula_lands_requested_segment_under_pointer(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 

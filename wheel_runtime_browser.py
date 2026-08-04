@@ -399,7 +399,17 @@ const SPIN_PATH = "/api/v1/spin";
 const POLL_INTERVAL_MS = 750;
 const MAX_VISIBLE_LABELS = 36;
 const OVERLAY_RESULT_HOLD_MS = 5000;
-const SPIN_EASING = "cubic-bezier(0.12, 0.7, 0.1, 1)";
+const SPIN_LAUNCH_SHARE = 0.16;
+const SPIN_CRUISE_SHARE = 0.47;
+const SPIN_LAUNCH_DISTANCE_SHARE = 0.24;
+const SPIN_MIN_ANTICIPATION_ARC = 42;
+const SPIN_MAX_ANTICIPATION_ARC = 160;
+const SPIN_ANTICIPATION_SEGMENTS = 1.3;
+const SPIN_LAUNCH_EASING = "cubic-bezier(0.45, 0, 0.75, 0.35)";
+const SPIN_CRUISE_EASING = "linear";
+const SPIN_ANTICIPATION_EASING = (
+  "cubic-bezier(0.08, 0.72, 0.12, 1)"
+);
 const DISPLAY_MODE = (
   new URLSearchParams(window.location.search).get("mode") === "overlay"
     ? "overlay"
@@ -657,34 +667,119 @@ function targetRotationForSpin(spin, candidateCount) {
   );
 }
 
-function animateSpin(spin, snapshot) {
-  const generation = ++animationGeneration;
+function buildSpinMotionPlan(spin, snapshot) {
   const duration = Number(spin.animation.duration_ms);
+  const start = currentRotation;
   const target = targetRotationForSpin(
     spin,
     snapshot.candidates.length,
+  );
+  const totalDistance = target - start;
+  const segmentAngle = 360 / snapshot.candidates.length;
+  const requestedAnticipationArc = (
+    segmentAngle * SPIN_ANTICIPATION_SEGMENTS
+  );
+  const anticipationArc = Math.min(
+    SPIN_MAX_ANTICIPATION_ARC,
+    Math.max(
+      SPIN_MIN_ANTICIPATION_ARC,
+      requestedAnticipationArc,
+    ),
+    totalDistance * 0.25,
+  );
+  const preAnticipationDistance = totalDistance - anticipationArc;
+  const launchTarget = (
+    start
+    + preAnticipationDistance * SPIN_LAUNCH_DISTANCE_SHARE
+  );
+  const cruiseTarget = target - anticipationArc;
+  const launchDuration = Math.round(
+    duration * SPIN_LAUNCH_SHARE
+  );
+  const cruiseDuration = Math.round(
+    duration * SPIN_CRUISE_SHARE
+  );
+  const anticipationDuration = Math.max(
+    1,
+    duration - launchDuration - cruiseDuration,
+  );
+
+  return {
+    start,
+    target,
+    launchTarget,
+    cruiseTarget,
+    launchDuration,
+    cruiseDuration,
+    anticipationDuration,
+  };
+}
+
+function applySpinPhase(
+  generation,
+  target,
+  duration,
+  easing,
+) {
+  if (generation !== animationGeneration) {
+    return;
+  }
+  segmentsElement.style.transition = (
+    `transform ${duration}ms ${easing}`
+  );
+  segmentsElement.style.transform = `rotate(${target}deg)`;
+}
+
+function animateSpin(spin, snapshot) {
+  const generation = ++animationGeneration;
+  const plan = buildSpinMotionPlan(spin, snapshot);
+  const cruiseStart = plan.launchDuration;
+  const anticipationStart = (
+    plan.launchDuration + plan.cruiseDuration
+  );
+  const totalDuration = (
+    anticipationStart + plan.anticipationDuration
   );
 
   showOverlay();
   hideResult();
   setStatus("Spinning…", "ready");
   detailElement.textContent = "Winner selected by the desktop application.";
-  segmentsElement.style.transition = (
-    `transform ${duration}ms ${SPIN_EASING}`
-  );
+  segmentsElement.style.transition = "none";
+  segmentsElement.style.transform = `rotate(${plan.start}deg)`;
 
   window.requestAnimationFrame(() => {
-    if (generation !== animationGeneration) {
-      return;
-    }
-    currentRotation = target;
-    segmentsElement.style.transform = `rotate(${target}deg)`;
+    applySpinPhase(
+      generation,
+      plan.launchTarget,
+      plan.launchDuration,
+      SPIN_LAUNCH_EASING,
+    );
   });
+
+  window.setTimeout(() => {
+    applySpinPhase(
+      generation,
+      plan.cruiseTarget,
+      plan.cruiseDuration,
+      SPIN_CRUISE_EASING,
+    );
+  }, cruiseStart);
+
+  window.setTimeout(() => {
+    applySpinPhase(
+      generation,
+      plan.target,
+      plan.anticipationDuration,
+      SPIN_ANTICIPATION_EASING,
+    );
+  }, anticipationStart);
 
   window.setTimeout(() => {
     if (generation !== animationGeneration) {
       return;
     }
+    currentRotation = plan.target;
     segmentsElement.style.transition = "none";
     setStatus("Result ready", "ready");
     detailElement.textContent = (
@@ -692,7 +787,7 @@ function animateSpin(spin, snapshot) {
     );
     showResult(spin.winner.title);
     scheduleOverlayHide();
-  }, duration + 80);
+  }, totalDuration + 80);
 }
 
 function spinWasAlreadyObserved(spin) {

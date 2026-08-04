@@ -136,15 +136,31 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
             "http://127.0.0.1:8765/wheel/?mode=overlay",
         )
 
-    def test_browser_duration_matches_native_animation_schedule(self):
-        expected = max(
-            1000,
+    def test_browser_has_dedicated_show_oriented_schedule(self):
+        native_duration = (
             CollectionWheelDialog.SPIN_FRAME_DELAY_MS
-            * (CollectionWheelDialog.SPIN_FRAME_COUNT - 1),
+            * (CollectionWheelDialog.SPIN_FRAME_COUNT - 1)
         )
+
         self.assertEqual(
             CollectionWheelDialog._browser_spin_duration_ms(),
-            expected,
+            9000,
+        )
+        self.assertEqual(
+            CollectionWheelDialog.BROWSER_SPIN_DURATION_MS,
+            9000,
+        )
+        self.assertEqual(
+            CollectionWheelDialog.BROWSER_SPIN_TURNS,
+            8,
+        )
+        self.assertGreater(
+            CollectionWheelDialog.BROWSER_SPIN_DURATION_MS,
+            native_duration,
+        )
+        self.assertGreater(
+            CollectionWheelDialog.BROWSER_SPIN_TURNS,
+            CollectionWheelDialog.SPIN_TURNS,
         )
 
     def test_start_uses_active_pool_and_copies_overlay_url(self):
@@ -209,7 +225,7 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
                 "duration_ms": (
                     CollectionWheelDialog._browser_spin_duration_ms()
                 ),
-                "turns": CollectionWheelDialog.SPIN_TURNS,
+                "turns": CollectionWheelDialog.BROWSER_SPIN_TURNS,
                 "landing_offset": (
                     CollectionWheelDialog.BROWSER_LANDING_OFFSET
                 ),

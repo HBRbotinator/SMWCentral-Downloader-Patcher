@@ -26,6 +26,8 @@ class CollectionWheelDialog:
     SPIN_TURNS = 5
     SPIN_FRAME_COUNT = 61
     SPIN_FRAME_DELAY_MS = 28
+    BROWSER_SPIN_DURATION_MS = 9000
+    BROWSER_SPIN_TURNS = 8
     POINTER_ANGLE = 90.0
     RESULT_DETAILS_WIDTH = 320
     RESULT_DETAILS_WRAP = 300
@@ -490,10 +492,7 @@ class CollectionWheelDialog:
 
     @classmethod
     def _browser_spin_duration_ms(cls):
-        return max(
-            1000,
-            cls.SPIN_FRAME_DELAY_MS * (cls.SPIN_FRAME_COUNT - 1),
-        )
+        return cls.BROWSER_SPIN_DURATION_MS
 
     def _start_browser_runtime(self):
         if self._spinning or not self._pool_available:
@@ -582,7 +581,7 @@ class CollectionWheelDialog:
                 pool,
                 result.candidate_id,
                 duration_ms=self._browser_spin_duration_ms(),
-                turns=self.SPIN_TURNS,
+                turns=self.BROWSER_SPIN_TURNS,
                 landing_offset=self.BROWSER_LANDING_OFFSET,
             )
         except Exception as error:
