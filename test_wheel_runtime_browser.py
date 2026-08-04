@@ -233,8 +233,8 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
             "function naturalSpinProgress(elapsedShare)",
             "function animateSpinFrame(",
             "function finishSpin(generation, plan, spin)",
-            "SPIN_ACCELERATION_END = 0.11",
-            "SPIN_DECELERATION_START = 0.21",
+            "SPIN_ACCELERATION_END = 0.10",
+            "SPIN_DECELERATION_START = 0.27",
             "SPIN_DECELERATION_BIAS = -0.35",
             "currentRotation = plan.start + plan.distance * progress",
         ):
@@ -250,6 +250,17 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
         self.assertNotIn("setTimeout", animation)
         self.assertNotIn("applySpinPhase", animation)
         self.assertIn("requestAnimationFrame", animation)
+
+    def test_final_timing_has_shorter_deceleration_share(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        self.assertIn("SPIN_ACCELERATION_END = 0.10", script)
+        self.assertIn("SPIN_DECELERATION_START = 0.27", script)
+        self.assertIn(
+            "const decelerationDuration = 1 - SPIN_DECELERATION_START",
+            script,
+        )
+        self.assertNotIn("SPIN_DECELERATION_START = 0.21", script)
 
     def test_velocity_curve_tapers_continuously_to_zero(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
@@ -272,7 +283,7 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
     def test_long_deceleration_begins_early_in_total_duration(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 
-        self.assertIn("SPIN_DECELERATION_START = 0.21", script)
+        self.assertIn("SPIN_DECELERATION_START = 0.27", script)
         self.assertIn("SPIN_DECELERATION_BIAS = -0.35", script)
         self.assertNotIn("SPIN_LAUNCH_EASING", script)
         self.assertNotIn("SPIN_CRUISE_EASING", script)

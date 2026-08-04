@@ -647,8 +647,8 @@ const MAX_VISIBLE_LABELS = 36;
 const OVERLAY_RESULT_HOLD_MS = 8000;
 const WINNER_SPARK_MIN_COUNT = 16;
 const WINNER_SPARK_COUNT_RANGE = 9;
-const SPIN_ACCELERATION_END = 0.11;
-const SPIN_DECELERATION_START = 0.21;
+const SPIN_ACCELERATION_END = 0.10;
+const SPIN_DECELERATION_START = 0.27;
 const SPIN_DECELERATION_BIAS = -0.35;
 const DISPLAY_MODE = (
   new URLSearchParams(window.location.search).get("mode") === "overlay"
