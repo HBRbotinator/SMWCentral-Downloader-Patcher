@@ -1,4 +1,4 @@
-"""Contracts for dramatic but unambiguous browser Wheel landings."""
+"""Contracts for weighted near-boundary browser Wheel landings."""
 
 from __future__ import annotations
 
@@ -9,7 +9,12 @@ from wheel_runtime_landing import (
     BROWSER_LANDING_EARLY_BAND,
     BROWSER_LANDING_EXTREME_EARLY_BAND,
     BROWSER_LANDING_EXTREME_LATE_BAND,
+    BROWSER_LANDING_HAIRLINE_EARLY_BAND,
+    BROWSER_LANDING_HAIRLINE_LATE_BAND,
+    BROWSER_LANDING_INNER_EARLY_BAND,
+    BROWSER_LANDING_INNER_LATE_BAND,
     BROWSER_LANDING_LATE_BAND,
+    BROWSER_LANDING_WEIGHTED_BANDS,
     build_browser_landing_offset,
 )
 
@@ -26,131 +31,103 @@ class SequenceSupplier:
 
 
 class WheelRuntimeLandingTest(unittest.TestCase):
-    def test_extreme_early_zone_creeps_just_inside_winner(self):
+    def test_weighted_bands_sum_to_one(self):
+        self.assertEqual(len(BROWSER_LANDING_WEIGHTED_BANDS), 9)
+        self.assertAlmostEqual(
+            sum(weight for _band, weight in BROWSER_LANDING_WEIGHTED_BANDS),
+            1.0,
+        )
+
+    def test_weighted_bands_are_ordered_and_non_overlapping(self):
+        previous_upper = 0.0
+        for band, weight in BROWSER_LANDING_WEIGHTED_BANDS:
+            lower, upper = band
+            self.assertGreater(lower, previous_upper)
+            self.assertGreater(upper, lower)
+            self.assertGreater(weight, 0.0)
+            previous_upper = upper
+
+    def test_hairline_early_can_creep_just_inside_winner(self):
         offset = build_browser_landing_offset(
-            SequenceSupplier(0.10, 0.50)
+            SequenceSupplier(0.02, 0.50)
         )
+        self.assertEqual(offset, 0.04)
+        self.assertGreaterEqual(offset, BROWSER_LANDING_HAIRLINE_EARLY_BAND[0])
+        self.assertLessEqual(offset, BROWSER_LANDING_HAIRLINE_EARLY_BAND[1])
 
-        self.assertEqual(offset, 0.09)
-        self.assertGreaterEqual(
-            offset,
-            BROWSER_LANDING_EXTREME_EARLY_BAND[0],
-        )
-        self.assertLessEqual(
-            offset,
-            BROWSER_LANDING_EXTREME_EARLY_BAND[1],
-        )
-
-    def test_early_zone_still_provides_less_extreme_finishes(self):
+    def test_hairline_late_can_stop_just_before_next_entry(self):
         offset = build_browser_landing_offset(
-            SequenceSupplier(0.30, 0.50)
+            SequenceSupplier(0.98, 0.50)
         )
+        self.assertEqual(offset, 0.96)
+        self.assertGreaterEqual(offset, BROWSER_LANDING_HAIRLINE_LATE_BAND[0])
+        self.assertLessEqual(offset, BROWSER_LANDING_HAIRLINE_LATE_BAND[1])
 
-        self.assertEqual(offset, 0.26)
-        self.assertGreaterEqual(offset, BROWSER_LANDING_EARLY_BAND[0])
-        self.assertLessEqual(offset, BROWSER_LANDING_EARLY_BAND[1])
-
-    def test_center_zone_remains_available_for_variety(self):
-        offset = build_browser_landing_offset(
-            SequenceSupplier(0.50, 0.75)
-        )
-
-        self.assertEqual(offset, 0.55)
-        self.assertGreaterEqual(offset, BROWSER_LANDING_CENTER_BAND[0])
-        self.assertLessEqual(offset, BROWSER_LANDING_CENTER_BAND[1])
-
-    def test_late_zone_stops_near_next_boundary(self):
-        offset = build_browser_landing_offset(
-            SequenceSupplier(0.60, 0.25)
-        )
-
-        self.assertEqual(offset, 0.70)
-        self.assertGreaterEqual(offset, BROWSER_LANDING_LATE_BAND[0])
-        self.assertLessEqual(offset, BROWSER_LANDING_LATE_BAND[1])
-
-    def test_extreme_late_zone_creeps_just_before_next_entry(self):
-        offset = build_browser_landing_offset(
-            SequenceSupplier(0.90, 0.50)
-        )
-
-        self.assertEqual(offset, 0.91)
-        self.assertGreaterEqual(
-            offset,
-            BROWSER_LANDING_EXTREME_LATE_BAND[0],
-        )
-        self.assertLessEqual(
-            offset,
-            BROWSER_LANDING_EXTREME_LATE_BAND[1],
-        )
-
-    def test_all_zones_keep_a_visible_boundary_margin(self):
+    def test_every_visual_zone_is_reachable(self):
         draws = (
-            (0.00, 0.00),
-            (0.25, 0.999999),
-            (0.26, 0.00),
-            (0.44, 0.999999),
-            (0.45, 0.00),
-            (0.54, 0.999999),
-            (0.55, 0.00),
-            (0.73, 0.999999),
-            (0.74, 0.00),
-            (0.99, 0.999999),
+            (0.04, BROWSER_LANDING_HAIRLINE_EARLY_BAND),
+            (0.10, BROWSER_LANDING_EXTREME_EARLY_BAND),
+            (0.28, BROWSER_LANDING_EARLY_BAND),
+            (0.42, BROWSER_LANDING_INNER_EARLY_BAND),
+            (0.50, BROWSER_LANDING_CENTER_BAND),
+            (0.58, BROWSER_LANDING_INNER_LATE_BAND),
+            (0.70, BROWSER_LANDING_LATE_BAND),
+            (0.84, BROWSER_LANDING_EXTREME_LATE_BAND),
+            (0.96, BROWSER_LANDING_HAIRLINE_LATE_BAND),
         )
+        for zone_draw, expected_band in draws:
+            with self.subTest(zone_draw=zone_draw):
+                offset = build_browser_landing_offset(
+                    SequenceSupplier(zone_draw, 0.50)
+                )
+                self.assertGreaterEqual(offset, expected_band[0])
+                self.assertLessEqual(offset, expected_band[1])
 
+    def test_early_and_late_sides_are_favored_over_center(self):
+        early_weight = sum(
+            weight for _band, weight in BROWSER_LANDING_WEIGHTED_BANDS[:4]
+        )
+        center_weight = BROWSER_LANDING_WEIGHTED_BANDS[4][1]
+        late_weight = sum(
+            weight for _band, weight in BROWSER_LANDING_WEIGHTED_BANDS[5:]
+        )
+        self.assertAlmostEqual(early_weight, 0.47)
+        self.assertAlmostEqual(center_weight, 0.06)
+        self.assertAlmostEqual(late_weight, 0.47)
+        self.assertGreater(early_weight, center_weight)
+        self.assertGreater(late_weight, center_weight)
+
+    def test_all_zones_keep_a_minimum_visible_margin(self):
+        draws = (
+            (0.00, 0.00), (0.07, 0.999999),
+            (0.08, 0.00), (0.21, 0.999999),
+            (0.22, 0.00), (0.36, 0.999999),
+            (0.37, 0.00), (0.46, 0.999999),
+            (0.47, 0.00), (0.52, 0.999999),
+            (0.53, 0.00), (0.62, 0.999999),
+            (0.63, 0.00), (0.77, 0.999999),
+            (0.78, 0.00), (0.91, 0.999999),
+            (0.92, 0.00), (0.99, 0.999999),
+        )
         for zone, position in draws:
             with self.subTest(zone=zone, position=position):
                 offset = build_browser_landing_offset(
                     SequenceSupplier(zone, position)
                 )
-                self.assertGreaterEqual(offset, 0.06)
-                self.assertLessEqual(offset, 0.94)
-
-    def test_extreme_edge_zones_are_more_common_than_center(self):
-        extreme_draws = (0.00, 0.25, 0.74, 0.99)
-        center_draws = (0.45, 0.54)
-
-        extreme_offsets = [
-            build_browser_landing_offset(
-                SequenceSupplier(draw, 0.50)
-            )
-            for draw in extreme_draws
-        ]
-        center_offsets = [
-            build_browser_landing_offset(
-                SequenceSupplier(draw, 0.50)
-            )
-            for draw in center_draws
-        ]
-
-        self.assertTrue(
-            all(
-                offset <= 0.12 or offset >= 0.88
-                for offset in extreme_offsets
-            )
-        )
-        self.assertTrue(
-            all(0.40 <= offset <= 0.60 for offset in center_offsets)
-        )
+                self.assertGreaterEqual(offset, 0.025)
+                self.assertLessEqual(offset, 0.975)
 
     def test_same_supplied_draws_are_deterministic(self):
         first = build_browser_landing_offset(
-            SequenceSupplier(0.80, 0.375)
+            SequenceSupplier(0.81, 0.375)
         )
         second = build_browser_landing_offset(
-            SequenceSupplier(0.80, 0.375)
+            SequenceSupplier(0.81, 0.375)
         )
-
         self.assertEqual(first, second)
 
     def test_supplier_contract_rejects_invalid_draws(self):
-        invalid_values = (
-            -0.01,
-            1.0,
-            float("nan"),
-            float("inf"),
-            True,
-            "invalid",
-        )
+        invalid_values = (-0.01, 1.0, float("nan"), float("inf"), True, "invalid")
         for value in invalid_values:
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):

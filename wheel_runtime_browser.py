@@ -366,7 +366,8 @@ body[data-mode="overlay"] .wheel__caption {
     translate(-50%, -50%)
     rotate(var(--spark-angle))
     translateX(0)
-    scaleX(0.35);
+    scaleX(0.35)
+    scaleY(var(--spark-scale, 1));
 }
 
 .wheel-stage--winner .winner-burst__spark {
@@ -470,7 +471,7 @@ body[data-mode="overlay"] .spin-result {
       translateX(-50%)
       translateY(58px)
       scale(0.68)
-      rotate(-2deg);
+      rotate(var(--winner-tilt-start, -2deg));
   }
 
   42% {
@@ -480,7 +481,7 @@ body[data-mode="overlay"] .spin-result {
       translateX(-50%)
       translateY(-18px)
       scale(1.12)
-      rotate(1.2deg);
+      rotate(var(--winner-tilt-overshoot, 1.2deg));
   }
 
   68% {
@@ -558,7 +559,7 @@ body[data-mode="overlay"] .spin-result {
 
   100% {
     opacity: 0;
-    transform: scale(1.34);
+    transform: scale(var(--winner-ring-scale, 1.34));
   }
 }
 
@@ -586,7 +587,8 @@ body[data-mode="overlay"] .spin-result {
       translate(-50%, -50%)
       rotate(var(--spark-angle))
       translateX(var(--spark-distance))
-      scaleX(1);
+      scaleX(1)
+      scaleY(var(--spark-scale, 1));
   }
 }
 
@@ -643,9 +645,11 @@ const SPIN_PATH = "/api/v1/spin";
 const POLL_INTERVAL_MS = 750;
 const MAX_VISIBLE_LABELS = 36;
 const OVERLAY_RESULT_HOLD_MS = 8000;
-const WINNER_SPARK_COUNT = 20;
-const SPIN_ACCELERATION_END = 0.12;
-const SPIN_DECELERATION_START = 0.22;
+const WINNER_SPARK_MIN_COUNT = 16;
+const WINNER_SPARK_COUNT_RANGE = 9;
+const SPIN_ACCELERATION_END = 0.11;
+const SPIN_DECELERATION_START = 0.21;
+const SPIN_DECELERATION_BIAS = -0.35;
 const DISPLAY_MODE = (
   new URLSearchParams(window.location.search).get("mode") === "overlay"
     ? "overlay"
@@ -788,21 +792,72 @@ function updateWheelLabelOrientation(wheelRotation) {
   });
 }
 
-function prepareWinnerBurst() {
+function seedFromText(value) {
+  let seed = 2166136261;
+  for (const character of String(value || "")) {
+    seed ^= character.codePointAt(0);
+    seed = Math.imul(seed, 16777619);
+  }
+  return (seed >>> 0) || 0x9e3779b9;
+}
+
+function createSeededUnit(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state += 0x6d2b79f5;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function prepareWinnerBurst(spin) {
+  const seedText = [
+    spin?.spin_id || "",
+    spin?.sequence || "",
+    spin?.winner?.id || "",
+  ].join("|");
+  const unit = createSeededUnit(seedFromText(seedText));
+  const sparkCount = (
+    WINNER_SPARK_MIN_COUNT
+    + Math.floor(unit() * WINNER_SPARK_COUNT_RANGE)
+  );
+  const baseRotation = unit() * 360;
   const fragment = document.createDocumentFragment();
-  for (let index = 0; index < WINNER_SPARK_COUNT; index += 1) {
+
+  for (let index = 0; index < sparkCount; index += 1) {
     const spark = document.createElement("span");
-    const angle = index * 360 / WINNER_SPARK_COUNT;
-    const distance = 245 + (index % 5) * 18;
-    const delay = (index % 4) * 24;
-    const hue = (index * 47 + 34) % 360;
+    const evenAngle = index * 360 / sparkCount;
+    const angleJitter = (unit() - 0.5) * 16;
+    const angle = baseRotation + evenAngle + angleJitter;
+    const distance = 215 + unit() * 145;
+    const delay = Math.floor(unit() * 150);
+    const hue = Math.floor(unit() * 360);
+    const scale = 0.72 + unit() * 0.72;
     spark.className = "winner-burst__spark";
     spark.style.setProperty("--spark-angle", `${angle}deg`);
     spark.style.setProperty("--spark-distance", `${distance}px`);
     spark.style.setProperty("--spark-delay", `${delay}ms`);
     spark.style.setProperty("--spark-hue", String(hue));
+    spark.style.setProperty("--spark-scale", String(scale));
     fragment.appendChild(spark);
   }
+
+  const tiltDirection = unit() < 0.5 ? -1 : 1;
+  const tiltStrength = 1.6 + unit() * 1.2;
+  resultElement.style.setProperty(
+    "--winner-tilt-start",
+    `${tiltDirection * tiltStrength}deg`,
+  );
+  resultElement.style.setProperty(
+    "--winner-tilt-overshoot",
+    `${-tiltDirection * tiltStrength * 0.58}deg`,
+  );
+  wheelStageElement.style.setProperty(
+    "--winner-ring-scale",
+    String(1.28 + unit() * 0.16),
+  );
   burstElement.replaceChildren(fragment);
 }
 
@@ -810,8 +865,9 @@ function clearWinnerCelebration() {
   wheelStageElement.classList.remove("wheel-stage--winner");
 }
 
-function showWinnerCelebration() {
+function showWinnerCelebration(spin) {
   clearWinnerCelebration();
+  prepareWinnerBurst(spin);
   void wheelStageElement.offsetWidth;
   wheelStageElement.classList.add("wheel-stage--winner");
 }
@@ -872,7 +928,7 @@ function hideResult() {
   clearWinnerCelebration();
 }
 
-function showResult(title, candidateId) {
+function showResult(title, candidateId, spin) {
   const fullTitle = String(title || "").trim();
   resultLabelElement.textContent = (
     isOverlayMode() ? "WINNER!" : "Selected"
@@ -884,7 +940,7 @@ function showResult(title, candidateId) {
   void resultElement.offsetWidth;
   resultElement.classList.add("spin-result--visible");
   highlightWinner(candidateId);
-  showWinnerCelebration();
+  showWinnerCelebration(spin);
 }
 
 function resetWheelRotation() {
@@ -1039,6 +1095,17 @@ function smoothStepIntegral(value) {
   return unit ** 3 - 0.5 * unit ** 4;
 }
 
+function decelerationVelocityIntegral(value) {
+  const unit = clampUnit(value);
+  const bias = SPIN_DECELERATION_BIAS;
+  return (
+    unit
+    + (-3 + bias) * unit ** 3 / 3
+    + (2 - 2 * bias) * unit ** 4 / 4
+    + bias * unit ** 5 / 5
+  );
+}
+
 function naturalSpinProgress(elapsedShare) {
   const elapsed = clampUnit(elapsedShare);
   if (elapsed >= 1) {
@@ -1050,10 +1117,11 @@ function naturalSpinProgress(elapsedShare) {
     SPIN_DECELERATION_START - SPIN_ACCELERATION_END
   );
   const decelerationDuration = 1 - SPIN_DECELERATION_START;
+  const decelerationArea = decelerationVelocityIntegral(1);
   const totalVelocityArea = (
     accelerationDuration * 0.5
     + cruiseDuration
-    + decelerationDuration * 0.5
+    + decelerationDuration * decelerationArea
   );
 
   let traveledArea;
@@ -1077,7 +1145,7 @@ function naturalSpinProgress(elapsedShare) {
       accelerationDuration * 0.5
       + cruiseDuration
       + decelerationDuration
-        * (local - smoothStepIntegral(local))
+        * decelerationVelocityIntegral(local)
     );
   }
 
@@ -1110,7 +1178,7 @@ function finishSpin(generation, plan, spin) {
   detailElement.textContent = (
     `Spin ${spin.sequence} · ${spin.issued_at}`
   );
-  showResult(spin.winner.title, spin.winner.id);
+  showResult(spin.winner.title, spin.winner.id, spin);
   scheduleOverlayHide();
 }
 
@@ -1291,7 +1359,6 @@ async function refreshRuntime() {
   }
 }
 
-prepareWinnerBurst();
 renderEmptyWheel();
 hideOverlay();
 refreshRuntime();

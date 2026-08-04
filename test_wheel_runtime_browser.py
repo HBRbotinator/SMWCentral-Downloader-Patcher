@@ -110,7 +110,7 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
             script,
         )
         self.assertLess(
-            script.index("showResult(spin.winner.title, spin.winner.id);"),
+            script.index("showResult(spin.winner.title, spin.winner.id, spin);"),
             script.index("scheduleOverlayHide();"),
         )
 
@@ -233,8 +233,9 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
             "function naturalSpinProgress(elapsedShare)",
             "function animateSpinFrame(",
             "function finishSpin(generation, plan, spin)",
-            "SPIN_ACCELERATION_END = 0.12",
-            "SPIN_DECELERATION_START = 0.22",
+            "SPIN_ACCELERATION_END = 0.11",
+            "SPIN_DECELERATION_START = 0.21",
+            "SPIN_DECELERATION_BIAS = -0.35",
             "currentRotation = plan.start + plan.distance * progress",
         ):
             self.assertIn(required, script)
@@ -254,7 +255,7 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 
         progress = script.split(
-            "function naturalSpinProgress(elapsedShare) {",
+            "function decelerationVelocityIntegral(value) {",
             1,
         )[1].split(
             "function buildSpinMotionPlan",
@@ -262,9 +263,8 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
         )[0]
         for required in (
             "smoothStepIntegral(local)",
-            "accelerationDuration * 0.5",
-            "decelerationDuration * 0.5",
-            "local - smoothStepIntegral(local)",
+            "decelerationVelocityIntegral(local)",
+            "decelerationVelocityIntegral(1)",
             "return traveledArea / totalVelocityArea",
         ):
             self.assertIn(required, progress)
@@ -272,7 +272,8 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
     def test_long_deceleration_begins_early_in_total_duration(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 
-        self.assertIn("SPIN_DECELERATION_START = 0.22", script)
+        self.assertIn("SPIN_DECELERATION_START = 0.21", script)
+        self.assertIn("SPIN_DECELERATION_BIAS = -0.35", script)
         self.assertNotIn("SPIN_LAUNCH_EASING", script)
         self.assertNotIn("SPIN_CRUISE_EASING", script)
         self.assertNotIn("SPIN_ANTICIPATION_EASING", script)
@@ -408,7 +409,7 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 
         show_method = script.split(
-            "function showResult(title, candidateId) {",
+            "function showResult(title, candidateId, spin) {",
             1,
         )[1].split(
             "function resetWheelRotation()",
@@ -436,7 +437,7 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
             "wheel__label--winner",
             'resultElement.classList.add("spin-result--visible")',
             "highlightWinner(candidateId)",
-            "showResult(spin.winner.title, spin.winner.id)",
+            "showResult(spin.winner.title, spin.winner.id, spin)",
         ):
             self.assertIn(required, script)
 
@@ -488,31 +489,74 @@ class WheelRuntimeBrowserAssetTest(unittest.TestCase):
             self.assertIn(required, css)
 
         for required in (
-            "const WINNER_SPARK_COUNT = 20",
-            "function prepareWinnerBurst()",
-            "function showWinnerCelebration()",
+            "const WINNER_SPARK_MIN_COUNT = 16",
+            "const WINNER_SPARK_COUNT_RANGE = 9",
+            "function prepareWinnerBurst(spin)",
+            "function showWinnerCelebration(spin)",
             'isOverlayMode() ? "WINNER!" : "Selected"',
-            "showWinnerCelebration()",
-            "prepareWinnerBurst();",
+            "showWinnerCelebration(spin)",
+            "prepareWinnerBurst(spin)",
         ):
             self.assertIn(required, script)
 
-    def test_sparks_are_deterministic_and_not_browser_random(self):
+    def test_sparks_vary_by_spin_without_browser_entropy(self):
         script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
 
+        for required in (
+            "function seedFromText(value)",
+            "function createSeededUnit(seed)",
+            "function prepareWinnerBurst(spin)",
+            "spin?.spin_id",
+            "spin?.sequence",
+            "spin?.winner?.id",
+            "const sparkCount = (",
+            "const angleJitter = (unit() - 0.5) * 16",
+            "const distance = 215 + unit() * 145",
+            "const delay = Math.floor(unit() * 150)",
+            "const hue = Math.floor(unit() * 360)",
+            "--winner-tilt-start",
+            "--winner-tilt-overshoot",
+            "--winner-ring-scale",
+        ):
+            self.assertIn(required, script)
+
         prepare = script.split(
-            "function prepareWinnerBurst() {",
+            "function prepareWinnerBurst(spin) {",
             1,
         )[1].split(
             "function clearWinnerCelebration()",
             1,
         )[0]
-        self.assertIn(
-            "index * 360 / WINNER_SPARK_COUNT",
-            prepare,
-        )
-        self.assertIn("245 + (index % 5) * 18", prepare)
         self.assertNotIn("Math.random", prepare)
+        self.assertNotIn("crypto.getRandomValues", prepare)
+
+    def test_same_spin_identity_replays_same_presentation_seed(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        seed_block = script.split(
+            "function prepareWinnerBurst(spin) {",
+            1,
+        )[1].split(
+            "const unit =",
+            1,
+        )[0]
+        self.assertIn("spin?.spin_id", seed_block)
+        self.assertIn("spin?.sequence", seed_block)
+        self.assertIn("spin?.winner?.id", seed_block)
+        self.assertIn('.join("|")', seed_block)
+
+    def test_result_handoff_passes_complete_spin_to_celebration(self):
+        script = asset_text(WHEEL_RUNTIME_BROWSER_SCRIPT_PATH)
+
+        self.assertIn(
+            "function showResult(title, candidateId, spin)",
+            script,
+        )
+        self.assertIn("showWinnerCelebration(spin)", script)
+        self.assertIn(
+            "showResult(spin.winner.title, spin.winner.id, spin)",
+            script,
+        )
 
     def test_winner_hold_and_celebration_are_longer(self):
         css = asset_text(WHEEL_RUNTIME_BROWSER_STYLE_PATH)
