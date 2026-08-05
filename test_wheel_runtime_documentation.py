@@ -39,7 +39,7 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
             "native Collection Wheel model selects the winner",
             "one weighted landing offset",
             "shared landing offset",
-            "same 10.5-second duration",
+            "same 5.5-second duration",
             "nine turns",
             "continuous motion curve",
             "presentation-level",
@@ -52,7 +52,7 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
     def test_documents_final_overlay_presentation(self):
         for required in (
             "Browser animation and result presentation",
-            "10.5 seconds total duration",
+            "5.5 seconds total duration",
             "nine full turns",
             "continuous `requestAnimationFrame`-driven motion curve",
             "high-speed middle through 27%",

@@ -65,7 +65,7 @@ For a normal spin:
 3. The dialog refreshes the browser snapshot from the exact selection pool.
 4. Python publishes a versioned spin instruction containing the predetermined
    winner and shared landing offset.
-5. The native and browser renderers use the same 10.5-second duration, nine
+5. The native and browser renderers use the same 5.5-second duration, nine
    turns, continuous motion curve, winner, and landing position.
 
 The browser observes the instruction through the local read-only endpoint. Its
@@ -84,7 +84,7 @@ does not reroll, replace, or invalidate the native result.
 The Browser / OBS Wheel uses the show-oriented schedule below. The native Wheel
 uses the same schedule whenever the managed runtime is running:
 
-- 10.5 seconds total duration;
+- 5.5 seconds total duration;
 - nine full turns;
 - one continuous `requestAnimationFrame`-driven motion curve;
 - smooth acceleration through the first 10%;
