@@ -7,6 +7,17 @@ import re
 import unittest
 from copy import deepcopy
 
+from wheel_external_command import (
+    WHEEL_EXTERNAL_COMMAND_ACTIONS,
+    WHEEL_EXTERNAL_COMMAND_KEYS,
+    WHEEL_EXTERNAL_COMMAND_SCHEMA,
+    WHEEL_EXTERNAL_COMMAND_VERSION,
+    WheelExternalCommandError,
+    parse_wheel_external_command,
+    serialize_wheel_external_command,
+    wheel_external_command_to_document,
+)
+
 
 COMMAND_SCHEMA = "smwc-wheel-command"
 COMMAND_VERSION = 1
@@ -359,6 +370,50 @@ class WheelExternalCommandContractSpecificationTest(
                 "test_valid_spin_command_is_parsed_exactly",
             },
         )
+
+
+class WheelExternalCommandImplementationTest(
+    WheelExternalCommandContractMixin,
+    unittest.TestCase,
+):
+    """Run the reusable specification against production code."""
+
+    def parse_command(self, document):
+        return parse_wheel_external_command(document)
+
+    def command_to_document(self, command):
+        return wheel_external_command_to_document(command)
+
+    def serialize_command(self, command):
+        return serialize_wheel_external_command(command)
+
+    def assert_contract_error(self, document):
+        with self.assertRaises(WheelExternalCommandError):
+            parse_wheel_external_command(document)
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            WHEEL_EXTERNAL_COMMAND_SCHEMA,
+            COMMAND_SCHEMA,
+        )
+        self.assertEqual(
+            WHEEL_EXTERNAL_COMMAND_VERSION,
+            COMMAND_VERSION,
+        )
+        self.assertEqual(
+            WHEEL_EXTERNAL_COMMAND_ACTIONS,
+            COMMAND_ACTIONS,
+        )
+        self.assertEqual(
+            WHEEL_EXTERNAL_COMMAND_KEYS,
+            COMMAND_KEYS,
+        )
+
+    def test_projection_requires_production_command_type(self):
+        with self.assertRaises(TypeError):
+            wheel_external_command_to_document(
+                VALID_COMMAND_DOCUMENTS[0]
+            )
 
 
 if __name__ == "__main__":
