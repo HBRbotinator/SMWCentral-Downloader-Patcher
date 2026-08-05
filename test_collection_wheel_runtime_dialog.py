@@ -146,11 +146,11 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
 
         self.assertEqual(
             CollectionWheelDialog._browser_spin_duration_ms(),
-            10500,
+            5488,
         )
         self.assertEqual(
             CollectionWheelDialog.BROWSER_SPIN_DURATION_MS,
-            10500,
+            5488,
         )
         self.assertEqual(
             CollectionWheelDialog.BROWSER_SPIN_TURNS,

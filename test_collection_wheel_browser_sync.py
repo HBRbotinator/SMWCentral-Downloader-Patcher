@@ -27,12 +27,12 @@ class CollectionWheelBrowserSyncTest(unittest.TestCase):
         frames = build_timed_spin_frames(
             self._layout(),
             turns=9,
-            duration_ms=10500,
+            duration_ms=5488,
             frame_delay_ms=28,
         )
 
-        self.assertEqual(len(frames), 376)
-        self.assertEqual((len(frames) - 1) * 28, 10500)
+        self.assertEqual(len(frames), 197)
+        self.assertEqual((len(frames) - 1) * 28, 5488)
         self.assertEqual(frames[0], 0.0)
         self.assertGreaterEqual(frames[-1], 9 * 360.0)
 
@@ -42,7 +42,7 @@ class CollectionWheelBrowserSyncTest(unittest.TestCase):
         frames = build_timed_spin_frames(
             layout,
             turns=9,
-            duration_ms=10500,
+            duration_ms=5488,
             frame_delay_ms=28,
             pointer_angle=90.0,
             landing_offset=landing_offset,
@@ -60,7 +60,7 @@ class CollectionWheelBrowserSyncTest(unittest.TestCase):
         frames = build_timed_spin_frames(
             self._layout(),
             turns=9,
-            duration_ms=10500,
+            duration_ms=5488,
             frame_delay_ms=28,
             acceleration_end=0.10,
             deceleration_start=0.27,
@@ -104,7 +104,7 @@ class CollectionWheelBrowserSyncTest(unittest.TestCase):
 
         defaults = {
             "turns": 9,
-            "duration_ms": 10500,
+            "duration_ms": 5488,
             "frame_delay_ms": 28,
             "acceleration_end": 0.10,
             "deceleration_start": 0.27,

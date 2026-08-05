@@ -28,7 +28,7 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 - Animated the Python-authored predetermined winner without browser-side
   selection.
 - Added a full preview URL and a transparent OBS overlay that hides while idle.
-- Finalized a continuous 10.5-second, nine-turn show animation with smooth
+- Finalized a continuous 5.5-second, nine-turn show animation with smooth
   acceleration, a high-speed middle, and deceleration tapering to zero.
 - Added nine weighted landing bands, including hairline-edge finishes, while
   keeping the winner and landing offset Python-authored.
