@@ -7,6 +7,20 @@ import re
 import unittest
 from copy import deepcopy
 
+from bulk_collection_import import (
+    BULK_COLLECTION_IMPORT_DOCUMENT_KEYS,
+    BULK_COLLECTION_IMPORT_ENTRY_KEYS,
+    BULK_COLLECTION_IMPORT_FORBIDDEN_ATTRIBUTE_KEYS,
+    BULK_COLLECTION_IMPORT_GROUP_KEYS,
+    BULK_COLLECTION_IMPORT_SCHEMA,
+    BULK_COLLECTION_IMPORT_SOURCE_REFERENCE_KEYS,
+    BULK_COLLECTION_IMPORT_VERSION,
+    BulkCollectionImportError,
+    bulk_collection_import_to_document,
+    parse_bulk_collection_import,
+    serialize_bulk_collection_import,
+)
+
 
 IMPORT_SCHEMA = "smwc-bulk-collection-import"
 IMPORT_VERSION = 1
@@ -263,7 +277,15 @@ class BulkCollectionImportContractMixin:
             VALID_IMPORT_DOCUMENT,
         )
         self.assertNotIn("\n", serialized)
-        self.assertNotIn(": ", serialized)
+        self.assertEqual(
+            serialized,
+            json.dumps(
+                json.loads(serialized),
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ),
+        )
         self.assertEqual(
             serialized,
             self.serialize_import(
@@ -518,6 +540,107 @@ class BulkCollectionImportContractSpecificationTest(
                 "test_valid_hybrid_import_is_parsed_exactly",
             },
         )
+
+
+class BulkCollectionImportImplementationTest(
+    BulkCollectionImportContractMixin,
+    unittest.TestCase,
+):
+    """Run the reusable specification against production code."""
+
+    def parse_import(self, document):
+        return parse_bulk_collection_import(document)
+
+    def import_to_document(self, import_document):
+        return bulk_collection_import_to_document(
+            import_document
+        )
+
+    def serialize_import(self, import_document):
+        return serialize_bulk_collection_import(
+            import_document
+        )
+
+    def assert_contract_error(self, document):
+        with self.assertRaises(BulkCollectionImportError):
+            parse_bulk_collection_import(document)
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_SCHEMA,
+            IMPORT_SCHEMA,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_VERSION,
+            IMPORT_VERSION,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_DOCUMENT_KEYS,
+            DOCUMENT_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_ENTRY_KEYS,
+            ENTRY_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_SOURCE_REFERENCE_KEYS,
+            SOURCE_REFERENCE_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_GROUP_KEYS,
+            GROUP_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_FORBIDDEN_ATTRIBUTE_KEYS,
+            set(FORBIDDEN_ATTRIBUTE_KEYS),
+        )
+
+    def test_projection_requires_production_document_type(self):
+        with self.assertRaises(TypeError):
+            bulk_collection_import_to_document(
+                VALID_IMPORT_DOCUMENT
+            )
+
+    def test_nested_attributes_are_immutable_and_detached(self):
+        parsed = parse_bulk_collection_import(
+            VALID_IMPORT_DOCUMENT
+        )
+        attributes = parsed.entries[0].attributes
+
+        with self.assertRaises(TypeError):
+            attributes["difficulty"] = "Changed"
+        with self.assertRaises(TypeError):
+            attributes["authors"][0] = "Changed"
+
+        projected = bulk_collection_import_to_document(parsed)
+        projected["entries"][0]["attributes"]["tags"].append(
+            "changed"
+        )
+        self.assertEqual(
+            bulk_collection_import_to_document(parsed)[
+                "entries"
+            ][0]["attributes"]["tags"],
+            ["vanilla", "short"],
+        )
+
+    def test_non_json_and_non_finite_attributes_are_rejected(self):
+        invalid_values = (
+            object(),
+            b"bytes",
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+        )
+        for invalid_value in invalid_values:
+            document = deepcopy(VALID_IMPORT_DOCUMENT)
+            document["entries"][0]["attributes"]["invalid"] = (
+                invalid_value
+            )
+            with self.subTest(invalid_value=invalid_value):
+                with self.assertRaises(
+                    BulkCollectionImportError
+                ):
+                    parse_bulk_collection_import(document)
 
 
 if __name__ == "__main__":
