@@ -10,6 +10,7 @@ from collection_wheel import CollectionWheelSelectionService
 from planner_collection import PlannerCollectionProjection
 from planner_query import PlannerCollectionQuery
 from planner_store import PlannerStore
+from wheel_runtime_contract import build_wheel_runtime_snapshot
 
 
 SMWC_RATING_THRESHOLDS = (1.0, 2.0, 3.0, 4.0, 4.5, 5.0)
@@ -172,10 +173,112 @@ class CollectionWheelModel:
             excluded_ids=excluded_ids,
         )
 
+    def runtime_snapshot(
+        self,
+        collection_records,
+        *,
+        generated_at=None,
+        source_revision=None,
+    ):
+        """Capture the complete Collection for an external Wheel runtime.
+
+        This method performs no reload, save, export, or other file-system
+        operation. The returned versioned document is detached from Collection
+        and Planner records.
+        """
+
+        projected = self._project(collection_records)
+        planner_available = self.planner_refinements_available
+        planner_lists = (
+            self.planner_store.get_lists()
+            if planner_available
+            else []
+        )
+        candidates = [
+            self._runtime_candidate(
+                record,
+                include_planner=planner_available,
+            )
+            for record in projected
+        ]
+        return build_wheel_runtime_snapshot(
+            candidates,
+            planner_lists=planner_lists,
+            planner_available=planner_available,
+            generated_at=generated_at,
+            source_revision=source_revision,
+        )
+
     def _project(self, collection_records):
         if collection_records is None:
             raise ValueError("Collection records are required")
         return self.projection.project_collection(collection_records)
+
+    def _runtime_candidate(self, record, *, include_planner):
+        if not isinstance(record, dict):
+            raise ValueError(
+                "Projected Collection records must be dictionaries"
+            )
+
+        candidate = {
+            "id": record.get("id"),
+            "title": record.get("title"),
+            "authors": copy.deepcopy(
+                record.get("authors", record.get("author", []))
+            ),
+            "type": self._runtime_type(record),
+            "difficulty": self._runtime_difficulty(record),
+            "completed": bool(record.get("completed", False)),
+            "downloaded": self._has_recorded_download(record),
+            "smwc_rating": self._smwc_rating(record),
+            "release_year": self._release_year(record),
+        }
+        if include_planner:
+            candidate["planner"] = {
+                "lifecycle": str(
+                    record.get("planner_lifecycle_status", "")
+                ).strip(),
+                "horizon": str(
+                    record.get("planner_horizon", "")
+                ).strip(),
+                "list_ids": copy.deepcopy(
+                    record.get("planner_list_ids", [])
+                ),
+                "next_position": record.get(
+                    "planner_next_position"
+                ),
+            }
+        return candidate
+
+    @staticmethod
+    def _runtime_type(record):
+        hack_types = record.get("hack_types")
+        if isinstance(hack_types, (list, tuple)):
+            values = [
+                str(value).strip()
+                for value in hack_types
+                if str(value).strip()
+            ]
+            if values:
+                return ", ".join(values)
+
+        return str(
+            record.get(
+                "hack_type",
+                record.get("type", ""),
+            )
+        ).strip()
+
+    @staticmethod
+    def _runtime_difficulty(record):
+        difficulty = str(record.get("difficulty", "")).strip()
+        if difficulty:
+            return difficulty
+
+        raw_fields = record.get("raw_fields")
+        if isinstance(raw_fields, dict):
+            return str(raw_fields.get("difficulty", "")).strip()
+        return ""
 
     def _wheel_criteria(
         self,

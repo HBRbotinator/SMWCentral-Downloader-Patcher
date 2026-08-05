@@ -9,31 +9,63 @@ import unittest
 from pathlib import Path
 
 
+_MISSING = object()
+
+
+def _restore_module(name, previous):
+    if previous is _MISSING:
+        sys.modules.pop(name, None)
+    else:
+        sys.modules[name] = previous
+
+
 def _load_dialog_class():
-    if "collection_wheel" not in sys.modules:
-        wheel_stub = types.ModuleType("collection_wheel")
-
-        class _WheelError(ValueError):
-            pass
-
-        wheel_stub.EmptyWheelPoolError = _WheelError
-        wheel_stub.ExhaustedWheelPoolError = _WheelError
-        sys.modules["collection_wheel"] = wheel_stub
-
-    if "collection_wheel_animation" not in sys.modules:
-        animation_stub = types.ModuleType("collection_wheel_animation")
-        animation_stub.build_spin_frames = lambda *_args, **_kwargs: ()
-        animation_stub.build_wheel_layout = lambda *_args, **_kwargs: None
-        sys.modules["collection_wheel_animation"] = animation_stub
-
-    path = Path("ui/collection_wheel_dialog.py").resolve()
-    spec = importlib.util.spec_from_file_location(
-        "collection_wheel_dialog_stability_under_test",
-        path,
+    previous_wheel = sys.modules.get("collection_wheel", _MISSING)
+    previous_animation = sys.modules.get(
+        "collection_wheel_animation",
+        _MISSING,
     )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.CollectionWheelDialog
+
+    try:
+        if previous_wheel is _MISSING:
+            wheel_stub = types.ModuleType("collection_wheel")
+
+            class _WheelError(ValueError):
+                pass
+
+            wheel_stub.EmptyWheelPoolError = _WheelError
+            wheel_stub.ExhaustedWheelPoolError = _WheelError
+            sys.modules["collection_wheel"] = wheel_stub
+
+        if previous_animation is _MISSING:
+            animation_stub = types.ModuleType(
+                "collection_wheel_animation"
+            )
+            animation_stub.build_spin_frames = (
+                lambda *_args, **_kwargs: ()
+            )
+            animation_stub.build_timed_spin_frames = (
+                lambda *_args, **_kwargs: ()
+            )
+            animation_stub.build_wheel_layout = (
+                lambda *_args, **_kwargs: None
+            )
+            sys.modules["collection_wheel_animation"] = animation_stub
+
+        path = Path("ui/collection_wheel_dialog.py").resolve()
+        spec = importlib.util.spec_from_file_location(
+            "collection_wheel_dialog_stability_under_test",
+            path,
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.CollectionWheelDialog
+    finally:
+        _restore_module(
+            "collection_wheel_animation",
+            previous_animation,
+        )
+        _restore_module("collection_wheel", previous_wheel)
 
 
 CollectionWheelDialog = _load_dialog_class()

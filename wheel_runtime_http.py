@@ -1,0 +1,510 @@
+"""Loopback-only read-only HTTP surface for the Wheel runtime."""
+
+from __future__ import annotations
+
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
+from urllib.parse import urlsplit
+
+from wheel_runtime_browser import (
+    WHEEL_RUNTIME_BROWSER_PATH,
+    WHEEL_RUNTIME_BROWSER_REDIRECT_PATH,
+    get_wheel_runtime_browser_asset,
+)
+from wheel_runtime_snapshot_provider import (
+    WheelRuntimeSnapshotUnavailableError,
+)
+from wheel_runtime_spin import (
+    WheelRuntimeSpinUnavailableError,
+)
+
+
+WHEEL_RUNTIME_HTTP_API_VERSION = 1
+WHEEL_RUNTIME_HEALTH_PATH = "/api/v1/health"
+WHEEL_RUNTIME_SNAPSHOT_PATH = "/api/v1/snapshot"
+WHEEL_RUNTIME_SPIN_PATH = "/api/v1/spin"
+WHEEL_RUNTIME_DEFAULT_HOST = "127.0.0.1"
+WHEEL_RUNTIME_DEFAULT_PORT = 8765
+
+_ALLOWED_HOSTS = frozenset({"127.0.0.1", "localhost"})
+
+
+class WheelRuntimeHttpService:
+    """Own a small loopback-only HTTP server around a snapshot provider."""
+
+    def __init__(
+        self,
+        provider: Any,
+        *,
+        spin_coordinator: Any | None = None,
+        host: str = WHEEL_RUNTIME_DEFAULT_HOST,
+        port: int = WHEEL_RUNTIME_DEFAULT_PORT,
+    ) -> None:
+        _validate_provider(provider)
+        _validate_spin_coordinator(spin_coordinator)
+        self._host = _validate_host(host)
+        self._port = _validate_port(port)
+        self._provider = provider
+        self._spin_coordinator = spin_coordinator
+        self._lock = threading.RLock()
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return self._server is not None
+
+    @property
+    def address(self) -> tuple[str, int]:
+        with self._lock:
+            if self._server is None:
+                raise RuntimeError("Wheel runtime HTTP service is not running")
+            host, port = self._server.server_address[:2]
+            return str(host), int(port)
+
+    @property
+    def base_url(self) -> str:
+        host, port = self.address
+        display_host = (
+            "127.0.0.1"
+            if host in {"0.0.0.0", ""}
+            else host
+        )
+        return f"http://{display_host}:{port}"
+
+    @property
+    def browser_url(self) -> str:
+        return self.base_url + WHEEL_RUNTIME_BROWSER_PATH
+
+    def start(self) -> tuple[str, int]:
+        """Start once and return the actual bound loopback address."""
+
+        with self._lock:
+            if self._server is not None:
+                return self.address
+
+            handler_class = _handler_for(
+                self._provider,
+                self._spin_coordinator,
+            )
+            server = ThreadingHTTPServer(
+                (self._host, self._port),
+                handler_class,
+            )
+            server.daemon_threads = True
+            server.allow_reuse_address = True
+
+            thread = threading.Thread(
+                target=server.serve_forever,
+                name="WheelRuntimeHttpService",
+                daemon=True,
+            )
+            self._server = server
+            self._thread = thread
+            thread.start()
+            return self.address
+
+    def stop(self) -> None:
+        """Stop safely; repeated calls are harmless."""
+
+        with self._lock:
+            server = self._server
+            thread = self._thread
+            self._server = None
+            self._thread = None
+
+        if server is None:
+            return
+
+        server.shutdown()
+        server.server_close()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=5.0)
+
+    def __enter__(self) -> "WheelRuntimeHttpService":
+        self.start()
+        return self
+
+    def __exit__(self, _type, _value, _traceback) -> None:
+        self.stop()
+
+
+def _handler_for(
+    provider: Any,
+    spin_coordinator: Any | None,
+) -> type[BaseHTTPRequestHandler]:
+    class WheelRuntimeRequestHandler(BaseHTTPRequestHandler):
+        server_version = "SMWCWheelRuntime/1"
+        sys_version = ""
+
+        def do_GET(self) -> None:
+            self._dispatch(include_body=True)
+
+        def do_HEAD(self) -> None:
+            self._dispatch(include_body=False)
+
+        def do_POST(self) -> None:
+            self._method_not_allowed()
+
+        def do_PUT(self) -> None:
+            self._method_not_allowed()
+
+        def do_PATCH(self) -> None:
+            self._method_not_allowed()
+
+        def do_DELETE(self) -> None:
+            self._method_not_allowed()
+
+        def do_OPTIONS(self) -> None:
+            self._method_not_allowed()
+
+        def log_message(self, _format: str, *_args: Any) -> None:
+            return
+
+        def _dispatch(self, *, include_body: bool) -> None:
+            path = urlsplit(self.path).path
+
+            if path == WHEEL_RUNTIME_BROWSER_REDIRECT_PATH:
+                self._send_redirect(WHEEL_RUNTIME_BROWSER_PATH)
+                return
+
+            browser_asset = get_wheel_runtime_browser_asset(path)
+            if browser_asset is not None:
+                self._send_bytes(
+                    200,
+                    browser_asset.payload,
+                    content_type=browser_asset.content_type,
+                    include_body=include_body,
+                    browser_asset=True,
+                )
+                return
+
+            if path == WHEEL_RUNTIME_HEALTH_PATH:
+                self._send_json(
+                    200,
+                    _health_document(
+                        provider,
+                        spin_coordinator,
+                    ),
+                    include_body=include_body,
+                )
+                return
+
+            if path == WHEEL_RUNTIME_SNAPSHOT_PATH:
+                try:
+                    body = provider.current_json()
+                except WheelRuntimeSnapshotUnavailableError as error:
+                    self._send_json(
+                        503,
+                        _error_document(
+                            "snapshot_unavailable",
+                            str(error),
+                        ),
+                        include_body=include_body,
+                    )
+                    return
+                except Exception:
+                    self._send_json(
+                        500,
+                        _error_document(
+                            "snapshot_error",
+                            "The Wheel runtime snapshot could not be read",
+                        ),
+                        include_body=include_body,
+                    )
+                    return
+
+                self._send_bytes(
+                    200,
+                    body.encode("utf-8"),
+                    content_type="application/json; charset=utf-8",
+                    include_body=include_body,
+                )
+                return
+
+            if path == WHEEL_RUNTIME_SPIN_PATH:
+                if spin_coordinator is None:
+                    self._send_json(
+                        503,
+                        _error_document(
+                            "spin_runtime_unavailable",
+                            "The Wheel spin runtime is not configured",
+                        ),
+                        include_body=include_body,
+                    )
+                    return
+
+                try:
+                    body = spin_coordinator.current_json()
+                except WheelRuntimeSpinUnavailableError as error:
+                    self._send_json(
+                        503,
+                        _error_document(
+                            "spin_unavailable",
+                            str(error),
+                        ),
+                        include_body=include_body,
+                    )
+                    return
+                except Exception:
+                    self._send_json(
+                        500,
+                        _error_document(
+                            "spin_error",
+                            "The Wheel runtime spin could not be read",
+                        ),
+                        include_body=include_body,
+                    )
+                    return
+
+                self._send_bytes(
+                    200,
+                    body.encode("utf-8"),
+                    content_type="application/json; charset=utf-8",
+                    include_body=include_body,
+                )
+                return
+
+            self._send_json(
+                404,
+                _error_document(
+                    "not_found",
+                    "The requested Wheel runtime resource was not found",
+                ),
+                include_body=include_body,
+            )
+
+        def _send_redirect(self, location: str) -> None:
+            self.send_response(308)
+            self.send_header("Location", location)
+            self._common_headers(
+                0,
+                content_type="text/plain; charset=utf-8",
+                browser_asset=True,
+            )
+            self.end_headers()
+
+        def _method_not_allowed(self) -> None:
+            payload = _json_bytes(
+                _error_document(
+                    "method_not_allowed",
+                    "This Wheel runtime API is read-only",
+                )
+            )
+            self.send_response(405)
+            self.send_header("Allow", "GET, HEAD")
+            self._common_headers(
+                len(payload),
+                content_type="application/json; charset=utf-8",
+            )
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def _send_json(
+            self,
+            status: int,
+            document: dict[str, Any],
+            *,
+            include_body: bool,
+        ) -> None:
+            self._send_bytes(
+                status,
+                _json_bytes(document),
+                content_type="application/json; charset=utf-8",
+                include_body=include_body,
+            )
+
+        def _send_bytes(
+            self,
+            status: int,
+            payload: bytes,
+            *,
+            content_type: str,
+            include_body: bool,
+            browser_asset: bool = False,
+        ) -> None:
+            self.send_response(status)
+            self._common_headers(
+                len(payload),
+                content_type=content_type,
+                browser_asset=browser_asset,
+            )
+            self.end_headers()
+            if include_body:
+                self.wfile.write(payload)
+
+        def _common_headers(
+            self,
+            content_length: int,
+            *,
+            content_type: str,
+            browser_asset: bool = False,
+        ) -> None:
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(content_length))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            if browser_asset:
+                self.send_header(
+                    "Content-Security-Policy",
+                    "default-src 'none'; "
+                    "script-src 'self'; "
+                    "style-src 'self'; "
+                    "connect-src 'self'; "
+                    "img-src 'self' data:; "
+                    "base-uri 'none'; "
+                    "form-action 'none'; "
+                    "frame-ancestors *",
+                )
+            else:
+                self.send_header(
+                    "Content-Security-Policy",
+                    "default-src 'none'; frame-ancestors 'none'",
+                )
+
+    return WheelRuntimeRequestHandler
+
+
+def _health_document(
+    provider: Any,
+    spin_coordinator: Any | None,
+) -> dict[str, Any]:
+    try:
+        snapshot_status = provider.status()
+    except Exception:
+        snapshot_status = {
+            "ready": False,
+            "successful_refreshes": 0,
+            "generated_at": None,
+            "source_revision": None,
+            "candidate_count": 0,
+            "planner_available": False,
+            "last_error": "Snapshot provider status is unavailable",
+        }
+
+    spin_status = _spin_status(spin_coordinator)
+    return {
+        "service": "smwc-wheel-runtime",
+        "api_version": WHEEL_RUNTIME_HTTP_API_VERSION,
+        "read_only": True,
+        "snapshot": snapshot_status,
+        "spin": spin_status,
+    }
+
+
+def _spin_status(
+    spin_coordinator: Any | None,
+) -> dict[str, Any]:
+    if spin_coordinator is None:
+        return {
+            "configured": False,
+            "ready": False,
+            "successful_publications": 0,
+            "sequence": None,
+            "spin_id": None,
+            "issued_at": None,
+            "winner_id": None,
+            "winner_title": None,
+            "snapshot_generated_at": None,
+            "source_revision": None,
+            "last_error": None,
+        }
+
+    try:
+        status = dict(spin_coordinator.status())
+    except Exception:
+        status = {
+            "ready": False,
+            "successful_publications": 0,
+            "sequence": None,
+            "spin_id": None,
+            "issued_at": None,
+            "winner_id": None,
+            "winner_title": None,
+            "snapshot_generated_at": None,
+            "source_revision": None,
+            "last_error": "Spin coordinator status is unavailable",
+        }
+
+    return {
+        "configured": True,
+        **status,
+    }
+
+
+def _error_document(code: str, message: str) -> dict[str, Any]:
+    return {
+        "error": {
+            "code": code,
+            "message": message,
+        }
+    }
+
+
+def _json_bytes(document: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            document,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _validate_provider(provider: Any) -> None:
+    for name in ("status", "current_json"):
+        if not callable(getattr(provider, name, None)):
+            raise TypeError(
+                f"provider must provide callable {name}()"
+            )
+
+
+def _validate_spin_coordinator(
+    spin_coordinator: Any | None,
+) -> None:
+    if spin_coordinator is None:
+        return
+
+    for name in ("status", "current_json"):
+        if not callable(getattr(spin_coordinator, name, None)):
+            raise TypeError(
+                f"spin_coordinator must provide callable {name}()"
+            )
+
+
+def _validate_host(host: str) -> str:
+    if not isinstance(host, str):
+        raise TypeError("host must be a string")
+    normalized = host.strip().casefold()
+    if normalized not in _ALLOWED_HOSTS:
+        raise ValueError(
+            "Wheel runtime HTTP service may bind only to "
+            "127.0.0.1 or localhost"
+        )
+    return normalized
+
+
+def _validate_port(port: int) -> int:
+    if isinstance(port, bool) or not isinstance(port, int):
+        raise TypeError("port must be an integer")
+    if not 0 <= port <= 65535:
+        raise ValueError("port must be between 0 and 65535")
+    return port
+
+
+__all__ = [
+    "WHEEL_RUNTIME_HTTP_API_VERSION",
+    "WHEEL_RUNTIME_HEALTH_PATH",
+    "WHEEL_RUNTIME_SNAPSHOT_PATH",
+    "WHEEL_RUNTIME_SPIN_PATH",
+    "WHEEL_RUNTIME_DEFAULT_HOST",
+    "WHEEL_RUNTIME_DEFAULT_PORT",
+    "WheelRuntimeHttpService",
+]
