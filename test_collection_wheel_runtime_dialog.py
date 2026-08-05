@@ -215,7 +215,7 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
         )
 
         self.assertTrue(
-            dialog._publish_browser_selection(pool, result)
+            dialog._publish_browser_selection(pool, result, 0.23)
         )
         call = dialog.runtime_bridge.calls[-1]
         self.assertEqual(call[0], "publish")
@@ -232,11 +232,9 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
             },
         )
 
-    def test_each_publication_uses_one_python_supplied_offset(self):
+    def test_publication_uses_the_supplied_native_landing_offset(self):
         dialog = fake_dialog()
         dialog.runtime_bridge.running = True
-        offsets = iter((0.21, 0.79))
-        dialog.browser_landing_offset_supplier = lambda: next(offsets)
         pool = [{"id": "one", "title": "One"}]
         result = SimpleNamespace(
             candidate_id="one",
@@ -244,20 +242,58 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
         )
 
         self.assertTrue(
-            dialog._publish_browser_selection(pool, result)
-        )
-        self.assertTrue(
-            dialog._publish_browser_selection(pool, result)
+            dialog._publish_browser_selection(
+                pool,
+                result,
+                0.79,
+            )
         )
 
-        publish_calls = [
-            call
-            for call in dialog.runtime_bridge.calls
-            if call[0] == "publish"
-        ]
+        publish_call = dialog.runtime_bridge.calls[-1]
+        self.assertEqual(publish_call[3]["landing_offset"], 0.79)
+
+    def test_native_timing_switches_only_while_browser_is_running(self):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+        method = source.split(
+            "    def _native_spin_frames(self, layout, landing_offset):",
+            1,
+        )[1].split(
+            "    def _update_runtime_controls",
+            1,
+        )[0]
+
+        self.assertIn("if not self.runtime_bridge.running", method)
+        self.assertIn("return build_spin_frames(", method)
+        self.assertIn("return build_timed_spin_frames(", method)
+        self.assertIn("duration_ms=self.BROWSER_SPIN_DURATION_MS", method)
+        self.assertIn("turns=self.BROWSER_SPIN_TURNS", method)
+        self.assertIn("landing_offset=landing_offset", method)
+
+    def test_spin_reuses_one_landing_offset_for_both_renderers(self):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+        spin_method = source.split(
+            "    def _spin(self, exclude_current=False):",
+            1,
+        )[1].split(
+            "    def _begin_spin_animation",
+            1,
+        )[0]
+
         self.assertEqual(
-            [call[3]["landing_offset"] for call in publish_calls],
-            [0.21, 0.79],
+            spin_method.count("self.browser_landing_offset_supplier()"),
+            1,
+        )
+        self.assertIn(
+            "frames = self._native_spin_frames(",
+            spin_method,
+        )
+        self.assertIn(
+            "result,\n            landing_offset,",
+            spin_method,
         )
 
     def test_dialog_publishes_after_selection_and_before_native_animation(self):
@@ -275,7 +311,7 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
         select_index = spin_method.index("self.model.select_from_pool(")
         pool_index = spin_method.index("animation_pool = [")
         publish_index = spin_method.index(
-            "self._publish_browser_selection(animation_pool, result)"
+            "self._publish_browser_selection("
         )
         animate_index = spin_method.index(
             "self._begin_spin_animation(layout, frames, result)"

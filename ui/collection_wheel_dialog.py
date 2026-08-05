@@ -9,7 +9,11 @@ from tkinter import messagebox, ttk
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from collection_wheel import EmptyWheelPoolError, ExhaustedWheelPoolError
-from collection_wheel_animation import build_spin_frames, build_wheel_layout
+from collection_wheel_animation import (
+    build_spin_frames,
+    build_timed_spin_frames,
+    build_wheel_layout,
+)
 from wheel_runtime_bridge import CollectionWheelRuntimeBridge
 from wheel_runtime_landing import build_browser_landing_offset
 
@@ -29,6 +33,9 @@ class CollectionWheelDialog:
     SPIN_FRAME_DELAY_MS = 28
     BROWSER_SPIN_DURATION_MS = 10500
     BROWSER_SPIN_TURNS = 9
+    BROWSER_SPIN_ACCELERATION_END = 0.10
+    BROWSER_SPIN_DECELERATION_START = 0.27
+    BROWSER_SPIN_DECELERATION_BIAS = -0.35
     POINTER_ANGLE = 90.0
     RESULT_DETAILS_WIDTH = 320
     RESULT_DETAILS_WRAP = 300
@@ -581,11 +588,15 @@ class CollectionWheelDialog:
         )
         return True
 
-    def _publish_browser_selection(self, pool, result):
+    def _publish_browser_selection(
+        self,
+        pool,
+        result,
+        landing_offset,
+    ):
         if not self.runtime_bridge.running:
             return True
         try:
-            landing_offset = self.browser_landing_offset_supplier()
             self.runtime_bridge.publish_selection(
                 pool,
                 result.candidate_id,
@@ -611,6 +622,27 @@ class CollectionWheelDialog:
             f"Spinning to {result.candidate.get('title', result.candidate_id)}"
         )
         return True
+
+    def _native_spin_frames(self, layout, landing_offset):
+        if not self.runtime_bridge.running:
+            return build_spin_frames(
+                layout,
+                turns=self.SPIN_TURNS,
+                frame_count=self.SPIN_FRAME_COUNT,
+                pointer_angle=self.POINTER_ANGLE,
+            )
+
+        return build_timed_spin_frames(
+            layout,
+            turns=self.BROWSER_SPIN_TURNS,
+            duration_ms=self.BROWSER_SPIN_DURATION_MS,
+            frame_delay_ms=self.SPIN_FRAME_DELAY_MS,
+            pointer_angle=self.POINTER_ANGLE,
+            landing_offset=landing_offset,
+            acceleration_end=self.BROWSER_SPIN_ACCELERATION_END,
+            deceleration_start=self.BROWSER_SPIN_DECELERATION_START,
+            deceleration_bias=self.BROWSER_SPIN_DECELERATION_BIAS,
+        )
 
     def _update_runtime_controls(self):
         if not self.runtime_start_button:
@@ -862,11 +894,14 @@ class CollectionWheelDialog:
                 selected_id=result.candidate_id,
                 max_labels=self.MAX_WHEEL_LABELS,
             )
-            frames = build_spin_frames(
+            landing_offset = (
+                self.browser_landing_offset_supplier()
+                if self.runtime_bridge.running
+                else 0.5
+            )
+            frames = self._native_spin_frames(
                 layout,
-                turns=self.SPIN_TURNS,
-                frame_count=self.SPIN_FRAME_COUNT,
-                pointer_angle=self.POINTER_ANGLE,
+                landing_offset,
             )
         except EmptyWheelPoolError:
             messagebox.showinfo(
@@ -890,7 +925,11 @@ class CollectionWheelDialog:
             )
             return
 
-        self._publish_browser_selection(animation_pool, result)
+        self._publish_browser_selection(
+            animation_pool,
+            result,
+            landing_offset,
+        )
         self._begin_spin_animation(layout, frames, result)
 
     def _begin_spin_animation(self, layout, frames, result):
