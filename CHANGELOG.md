@@ -32,6 +32,10 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
   acceleration, a high-speed middle, and deceleration tapering to zero.
 - Added nine weighted landing bands, including hairline-edge finishes, while
   keeping the winner and landing offset Python-authored.
+- Synchronized the native Wheel to the same show timing and exact landing offset
+  whenever the managed Browser runtime is active.
+- Preserved the quick five-turn, 61-frame native-only animation while the
+  Browser runtime is stopped.
 - Kept rotating segment labels upright.
 - Wrapped and responsively sized complete winner titles.
 - Added an eight-second result hold and spin-seeded celebration variation for

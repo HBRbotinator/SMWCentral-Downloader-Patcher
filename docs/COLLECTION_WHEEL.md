@@ -64,6 +64,20 @@ The native graphical Wheel uses a non-blocking decelerating animation and lands
 with the selected segment beneath the pointer. The result is revealed only after
 the animation finishes.
 
+When the Browser Wheel is stopped, the native Wheel keeps its quick desktop
+animation: five turns, 61 frames, and approximately 1.68 seconds.
+
+When the managed Browser Wheel is running, the native Wheel switches to the
+shared presentation schedule: 10.5 seconds, nine turns, and the same continuous
+acceleration and deceleration curve used by the browser. Python supplies one
+weighted landing offset for the spin, and both renderers use that exact offset.
+They therefore reveal the same winner at the same position within its segment.
+
+The browser observes the published instruction through its local read-only
+endpoint, so its visible start can differ by part of the polling interval. The
+renderers are presentation-synchronized but are not guaranteed to match on
+every rendered frame.
+
 ## Spin Again
 
 **Spin Again** performs a one-call reroll that excludes only the current result.
@@ -85,7 +99,10 @@ While the runtime is active:
 - Spin Wheel publishes the same pool used by native selection;
 - Spin Again publishes the exact reroll pool after excluding the current result;
 - Python selects the winner once;
+- Python supplies one weighted landing offset for both renderers;
 - the browser receives and animates that predetermined winner;
+- the native Wheel uses the same 10.5-second schedule while the runtime runs;
+- both Wheels land on the same position inside the winner segment;
 - browser publication failure does not replace or invalidate the native result.
 
 Closing the Collection Wheel dialog stops its managed browser runtime.
@@ -106,8 +123,8 @@ then returns to a transparent hidden state.
 
 ### Browser spin presentation
 
-The Browser / OBS Wheel uses a dedicated show-oriented animation rather than
-the shorter native timing:
+The Browser / OBS Wheel uses the show-oriented schedule. While its managed
+runtime is running, the native Wheel uses this same schedule:
 
 - 10.5 seconds total;
 - nine full turns;

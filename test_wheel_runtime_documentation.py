@@ -37,8 +37,14 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
             "exact current eligible pool",
             "exact reroll pool",
             "native Collection Wheel model selects the winner",
-            "Python publishes a versioned spin instruction",
-            "same result",
+            "one weighted landing offset",
+            "shared landing offset",
+            "same 10.5-second duration",
+            "nine turns",
+            "continuous motion curve",
+            "presentation-level",
+            "not guaranteed frame-for-frame",
+            "winner, and landing position",
             "does not reroll, replace, or invalidate the native result",
         ):
             self.assertIn(required, self.normalized)
@@ -69,6 +75,10 @@ class WheelRuntimeDocumentationTest(unittest.TestCase):
             "spark rays",
             "immutable Python-authored spin ID",
             "no browser entropy source",
+            "native Wheel uses the same schedule",
+            "exact published landing offset",
+            "five-turn, 61-frame",
+            "approximately 1.68-second animation",
         ):
             self.assertIn(required, self.normalized)
 

@@ -61,11 +61,16 @@ the exact current eligible pool.
 For a normal spin:
 
 1. The native Collection Wheel model selects the winner.
-2. The dialog refreshes the browser snapshot from the exact selection pool.
-3. Python publishes a versioned spin instruction containing the predetermined
-   winner.
-4. The native and browser renderers animate independently toward the same
-   result.
+2. Python chooses one weighted landing offset for that selected segment.
+3. The dialog refreshes the browser snapshot from the exact selection pool.
+4. Python publishes a versioned spin instruction containing the predetermined
+   winner and shared landing offset.
+5. The native and browser renderers use the same 10.5-second duration, nine
+   turns, continuous motion curve, winner, and landing position.
+
+The browser observes the instruction through the local read-only endpoint. Its
+visible start can differ by part of the polling interval, so synchronization is
+presentation-level and is not guaranteed frame-for-frame.
 
 For **Spin Again**, the browser snapshot uses the exact reroll pool after the
 current result has been excluded. The previous result is not shown as eligible
@@ -76,7 +81,8 @@ does not reroll, replace, or invalidate the native result.
 
 ## Browser animation and result presentation
 
-The Browser / OBS Wheel uses a separate show-oriented schedule:
+The Browser / OBS Wheel uses the show-oriented schedule below. The native Wheel
+uses the same schedule whenever the managed runtime is running:
 
 - 10.5 seconds total duration;
 - nine full turns;
@@ -89,6 +95,11 @@ The Browser / OBS Wheel uses a separate show-oriented schedule:
 The animation does not switch between staged CSS transitions, so the final
 slowdown has no braking handoff. The exact final rotation still comes from the
 published Python-authored instruction.
+
+The native Wheel reuses the same timing constants and the exact published
+landing offset while the managed runtime is active. When the runtime is stopped,
+the native-only workflow returns to its quick five-turn, 61-frame,
+approximately 1.68-second animation.
 
 Python chooses a safe visual landing offset inside the predetermined winner's
 segment from nine weighted bands:

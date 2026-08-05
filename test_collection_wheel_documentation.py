@@ -40,6 +40,16 @@ class CollectionWheelDocumentationTest(unittest.TestCase):
             "Spin Again",
             "equal chance",
             "selected segment beneath the pointer",
+            "Browser Wheel is stopped",
+            "five turns, 61 frames",
+            "approximately 1.68 seconds",
+            "managed Browser Wheel is running",
+            "shared presentation schedule",
+            "10.5 seconds, nine turns",
+            "one weighted landing offset",
+            "both renderers use that exact offset",
+            "presentation-synchronized",
+            "not guaranteed to match on every rendered frame",
             "Collection result focus",
         ):
             self.assertIn(required, guide)
@@ -53,6 +63,9 @@ class CollectionWheelDocumentationTest(unittest.TestCase):
             "Copy OBS URL",
             "Spin Again publishes the exact reroll pool",
             "Python selects the winner once",
+            "one weighted landing offset for both renderers",
+            "native Wheel uses the same 10.5-second schedule",
+            "same position inside the winner segment",
             "browser receives and animates that predetermined winner",
             "Closing the Collection Wheel dialog stops",
             "Preview and OBS overlay modes",
@@ -174,6 +187,8 @@ class CollectionWheelDocumentationTest(unittest.TestCase):
             "nine weighted landing bands",
             "eight-second result hold",
             "spin-seeded celebration variation",
+            "Synchronized the native Wheel",
+            "quick five-turn, 61-frame native-only animation",
         ):
             self.assertIn(required, browser)
 
