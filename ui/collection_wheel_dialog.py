@@ -14,6 +14,8 @@ from collection_wheel_animation import (
     build_timed_spin_frames,
     build_wheel_layout,
 )
+from wheel_external_command_pump import WheelExternalCommandPump
+from wheel_external_command_queue import WheelExternalCommandQueue
 from wheel_runtime_bridge import CollectionWheelRuntimeBridge
 from wheel_runtime_landing import build_browser_landing_offset
 
@@ -39,6 +41,7 @@ class CollectionWheelDialog:
     POINTER_ANGLE = 90.0
     RESULT_DETAILS_WIDTH = 320
     RESULT_DETAILS_WRAP = 300
+    EXTERNAL_COMMAND_POLL_MS = 100
 
     COMPLETION_OPTIONS = (
         ALL_VALUE,
@@ -86,6 +89,9 @@ class CollectionWheelDialog:
         runtime_bridge=None,
         runtime_bridge_factory=CollectionWheelRuntimeBridge,
         browser_landing_offset_supplier=build_browser_landing_offset,
+        external_command_queue=None,
+        external_command_queue_factory=WheelExternalCommandQueue,
+        external_command_pump_factory=WheelExternalCommandPump,
     ):
         self.parent = parent
         self.model = model
@@ -105,6 +111,15 @@ class CollectionWheelDialog:
         self.browser_landing_offset_supplier = (
             browser_landing_offset_supplier
         )
+        self.external_command_queue = (
+            external_command_queue
+            if external_command_queue is not None
+            else external_command_queue_factory()
+        )
+        self.external_command_pump_factory = (
+            external_command_pump_factory
+        )
+        self.external_command_pump = None
         self.window = None
 
         self.search_var = tk.StringVar()
@@ -153,10 +168,22 @@ class CollectionWheelDialog:
         self._pending_result = None
 
         self._create_window()
+        self.external_command_pump = (
+            self.external_command_pump_factory(
+                command_queue=self.external_command_queue,
+                schedule=self.window.after,
+                cancel=self.window.after_cancel,
+                dispatch=self._dispatch_external_command,
+                busy=lambda: self._spinning,
+                on_error=self._handle_external_command_error,
+                poll_interval_ms=self.EXTERNAL_COMMAND_POLL_MS,
+            )
+        )
         self._populate_filter_choices()
         self._bind_filters()
         self._refresh_pool_state()
         self._finalize_window()
+        self.external_command_pump.start()
 
     @property
     def is_open(self):
@@ -171,6 +198,9 @@ class CollectionWheelDialog:
     def close(self):
         if not self.window:
             return
+        if self.external_command_pump is not None:
+            self.external_command_pump.stop()
+        self.external_command_queue.close()
         self._cancel_spin_animation()
         self._stop_browser_runtime(show_error=False)
         window = self.window
@@ -508,6 +538,24 @@ class CollectionWheelDialog:
     @classmethod
     def _browser_spin_duration_ms(cls):
         return cls.BROWSER_SPIN_DURATION_MS
+
+
+    def _dispatch_external_command(self, command):
+        if command.action == "spin":
+            self._spin(exclude_current=False)
+            return
+        if command.action == "reroll":
+            self._spin(exclude_current=True)
+            return
+        raise ValueError(
+            f"Unsupported external Wheel action: {command.action}"
+        )
+
+    def _handle_external_command_error(self, command, error):
+        self.detail_var.set(
+            "External Wheel command "
+            f"{command.command_id} could not run: {error}"
+        )
 
     def _start_browser_runtime(self):
         if self._spinning or not self._pool_available:

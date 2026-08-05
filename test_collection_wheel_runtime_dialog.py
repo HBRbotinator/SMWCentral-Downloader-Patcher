@@ -104,6 +104,10 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
 
         for required in (
             "Browser / OBS Wheel",
+            "external_command_queue_factory=WheelExternalCommandQueue",
+            "external_command_pump_factory=WheelExternalCommandPump",
+            "self.external_command_queue =",
+            "self.external_command_pump =",
             "Start Browser Wheel",
             "Copy OBS URL",
             "Stop",
@@ -394,6 +398,112 @@ class CollectionWheelRuntimeDialogTest(unittest.TestCase):
             'method: "POST"',
         ):
             self.assertNotIn(forbidden, source)
+
+    def test_external_command_pump_uses_tk_scheduler_and_busy_state(self):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+        constructor = source.split(
+            "    def __init__(",
+            1,
+        )[1].split(
+            "    @property\n    def is_open",
+            1,
+        )[0]
+
+        self.assertIn("schedule=self.window.after", constructor)
+        self.assertIn("cancel=self.window.after_cancel", constructor)
+        self.assertIn(
+            "dispatch=self._dispatch_external_command",
+            constructor,
+        )
+        self.assertIn("busy=lambda: self._spinning", constructor)
+        self.assertIn(
+            "poll_interval_ms=self.EXTERNAL_COMMAND_POLL_MS",
+            constructor,
+        )
+        self.assertIn("self.external_command_pump.start()", constructor)
+
+    def test_external_commands_reuse_existing_spin_path(self):
+        dialog = fake_dialog()
+        calls = []
+        dialog._spin = lambda exclude_current=False: calls.append(
+            exclude_current
+        )
+
+        dialog._dispatch_external_command(
+            SimpleNamespace(action="spin")
+        )
+        dialog._dispatch_external_command(
+            SimpleNamespace(action="reroll")
+        )
+
+        self.assertEqual(calls, [False, True])
+
+    def test_unknown_external_action_fails_closed(self):
+        dialog = fake_dialog()
+        dialog._spin = lambda exclude_current=False: None
+
+        with self.assertRaises(ValueError):
+            dialog._dispatch_external_command(
+                SimpleNamespace(action="select-winner")
+            )
+
+    def test_close_stops_command_pump_and_queue_before_destroy(self):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+        close_method = source.split(
+            "    def close(self):",
+            1,
+        )[1].split("    def _create_window", 1)[0]
+
+        pump_index = close_method.index(
+            "self.external_command_pump.stop()"
+        )
+        queue_index = close_method.index(
+            "self.external_command_queue.close()"
+        )
+        runtime_index = close_method.index(
+            "self._stop_browser_runtime(show_error=False)"
+        )
+        destroy_index = close_method.index("window.destroy()")
+
+        self.assertLess(pump_index, queue_index)
+        self.assertLess(queue_index, runtime_index)
+        self.assertLess(runtime_index, destroy_index)
+
+    def test_dialog_command_dispatch_has_no_transport_or_selection_logic(
+        self,
+    ):
+        source = Path("ui/collection_wheel_dialog.py").read_text(
+            encoding="utf-8"
+        )
+        method = source.split(
+            "    def _dispatch_external_command(self, command):",
+            1,
+        )[1].split(
+            "    def _handle_external_command_error",
+            1,
+        )[0]
+
+        self.assertIn(
+            "self._spin(exclude_current=False)",
+            method,
+        )
+        self.assertIn(
+            "self._spin(exclude_current=True)",
+            method,
+        )
+        for forbidden in (
+            "winner",
+            "candidate_id",
+            "landing_offset",
+            "http",
+            "token",
+            "authorization",
+        ):
+            self.assertNotIn(forbidden, method)
 
 
 if __name__ == "__main__":
