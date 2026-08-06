@@ -6,6 +6,26 @@ import json
 import unittest
 from copy import deepcopy
 
+from bulk_collection_import import (
+    parse_bulk_collection_import,
+)
+from bulk_collection_import_identity import (
+    parse_bulk_collection_identity_plan,
+)
+from bulk_collection_import_preview import (
+    BULK_COLLECTION_IMPORT_PREVIEW_GROUP_KEYS,
+    BULK_COLLECTION_IMPORT_PREVIEW_ITEM_KEYS,
+    BULK_COLLECTION_IMPORT_PREVIEW_OUTCOMES,
+    BULK_COLLECTION_IMPORT_PREVIEW_PLAN_KEYS,
+    BULK_COLLECTION_IMPORT_PREVIEW_SCHEMA,
+    BULK_COLLECTION_IMPORT_PREVIEW_SUMMARY_KEYS,
+    BULK_COLLECTION_IMPORT_PREVIEW_VERSION,
+    BulkCollectionImportPreviewError,
+    build_bulk_collection_import_preview,
+    bulk_collection_import_preview_to_document,
+    serialize_bulk_collection_import_preview,
+)
+
 
 PREVIEW_PLAN_SCHEMA = "smwc-bulk-collection-preview-plan"
 PREVIEW_PLAN_VERSION = 1
@@ -767,6 +787,121 @@ class BulkCollectionImportPreviewSpecificationTest(
                 "test_summary_is_derived_from_preview_items",
             },
         )
+
+
+class BulkCollectionImportPreviewImplementationTest(
+    BulkCollectionImportPreviewContractMixin,
+    unittest.TestCase,
+):
+    """Run the preview specification against production code."""
+
+    def parse_import(self, document):
+        return parse_bulk_collection_import(document)
+
+    def parse_identity_plan(self, document):
+        return parse_bulk_collection_identity_plan(document)
+
+    def build_preview(self, import_document, identity_plan):
+        return build_bulk_collection_import_preview(
+            import_document,
+            identity_plan,
+        )
+
+    def preview_to_document(self, preview):
+        return bulk_collection_import_preview_to_document(
+            preview
+        )
+
+    def serialize_preview(self, preview):
+        return serialize_bulk_collection_import_preview(
+            preview
+        )
+
+    def assert_preview_error(
+        self,
+        import_document,
+        identity_plan,
+    ):
+        with self.assertRaises(
+            BulkCollectionImportPreviewError
+        ):
+            build_bulk_collection_import_preview(
+                import_document,
+                identity_plan,
+            )
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PREVIEW_SCHEMA,
+            PREVIEW_PLAN_SCHEMA,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PREVIEW_VERSION,
+            PREVIEW_PLAN_VERSION,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PREVIEW_OUTCOMES,
+            PREVIEW_OUTCOMES,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PREVIEW_PLAN_KEYS,
+            PLAN_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PREVIEW_SUMMARY_KEYS,
+            SUMMARY_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PREVIEW_ITEM_KEYS,
+            ITEM_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PREVIEW_GROUP_KEYS,
+            GROUP_KEYS,
+        )
+
+    def test_identity_plan_parser_is_immutable_and_detached(self):
+        document = deepcopy(IDENTITY_PLAN_DOCUMENT)
+        plan = parse_bulk_collection_identity_plan(document)
+
+        document["resolutions"][0]["collection_keys"].append(
+            "changed"
+        )
+        with self.assertRaises((AttributeError, TypeError)):
+            plan.import_id = "changed"
+        with self.assertRaises((AttributeError, TypeError)):
+            plan.resolutions[0].collection_keys += ("changed",)
+
+        self.assertEqual(
+            plan.resolutions[0].collection_keys,
+            ("collection-source",),
+        )
+
+    def test_preview_rejects_source_reference_not_on_entry(self):
+        identity_document = deepcopy(
+            IDENTITY_PLAN_DOCUMENT
+        )
+        identity_document["resolutions"][0][
+            "proposed_source_references"
+        ][0]["external_id"] = "different-record"
+
+        with self.assertRaises(
+            BulkCollectionImportPreviewError
+        ):
+            build_bulk_collection_import_preview(
+                parse_bulk_collection_import(
+                    deepcopy(IMPORT_DOCUMENT)
+                ),
+                parse_bulk_collection_identity_plan(
+                    identity_document
+                ),
+            )
+
+    def test_projection_requires_production_preview_type(self):
+        with self.assertRaises(TypeError):
+            bulk_collection_import_preview_to_document(
+                EXPECTED_PREVIEW_DOCUMENT
+            )
 
 
 if __name__ == "__main__":

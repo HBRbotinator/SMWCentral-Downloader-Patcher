@@ -59,6 +59,7 @@ _SOURCE_REFERENCE_KEYS = (
 _COLLECTION_KEY_PATTERN = re.compile(
     r"^[A-Za-z0-9._:-]{1,128}$"
 )
+_WARNING_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class BulkCollectionIdentityResolutionError(ValueError):
@@ -144,6 +145,206 @@ def resolve_bulk_collection_identities(
         import_id=import_document.import_id,
         resolutions=tuple(resolutions),
     )
+
+
+def parse_bulk_collection_identity_plan(
+    document: Any,
+) -> BulkCollectionIdentityPlan:
+    """Parse one detached identity-plan document by shape."""
+
+    _require_exact_mapping(
+        document,
+        BULK_COLLECTION_IDENTITY_PLAN_KEYS,
+        "Bulk Collection identity plan",
+    )
+
+    schema = document["schema"]
+    if schema != BULK_COLLECTION_IDENTITY_PLAN_SCHEMA:
+        raise BulkCollectionIdentityResolutionError(
+            "Unsupported bulk Collection identity-plan schema."
+        )
+
+    version = document["version"]
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != BULK_COLLECTION_IDENTITY_PLAN_VERSION
+    ):
+        raise BulkCollectionIdentityResolutionError(
+            "Unsupported bulk Collection identity-plan version."
+        )
+
+    import_id = _require_pattern_text(
+        document["import_id"],
+        BULK_COLLECTION_IMPORT_ID_PATTERN,
+        "import_id",
+    )
+    resolutions_value = document["resolutions"]
+    if not isinstance(resolutions_value, list):
+        raise BulkCollectionIdentityResolutionError(
+            "resolutions must be a JSON array."
+        )
+
+    resolutions = tuple(
+        _parse_identity_resolution(item, index)
+        for index, item in enumerate(resolutions_value)
+    )
+    return BulkCollectionIdentityPlan(
+        schema=schema,
+        version=version,
+        import_id=import_id,
+        resolutions=resolutions,
+    )
+
+
+def _parse_identity_resolution(
+    value: Any,
+    index: int,
+) -> BulkCollectionIdentityResolution:
+    label = f"resolutions[{index}]"
+    _require_exact_mapping(
+        value,
+        BULK_COLLECTION_IDENTITY_RESOLUTION_KEYS,
+        label,
+    )
+
+    entry_key = _require_pattern_text(
+        value["entry_key"],
+        BULK_COLLECTION_IMPORT_ENTRY_KEY_PATTERN,
+        f"{label}.entry_key",
+    )
+    status = value["status"]
+    if status not in BULK_COLLECTION_IDENTITY_RESOLUTION_STATUSES:
+        raise BulkCollectionIdentityResolutionError(
+            f"{label}.status is unsupported."
+        )
+
+    collection_keys = _parse_collection_keys(
+        value["collection_keys"],
+        label,
+    )
+    matched_references = _parse_plan_source_references(
+        value["matched_source_references"],
+        f"{label}.matched_source_references",
+    )
+    proposed_references = _parse_plan_source_references(
+        value["proposed_source_references"],
+        f"{label}.proposed_source_references",
+    )
+    warnings = _parse_warnings(
+        value["warnings"],
+        label,
+    )
+
+    return BulkCollectionIdentityResolution(
+        entry_key=entry_key,
+        status=status,
+        collection_keys=collection_keys,
+        matched_source_references=matched_references,
+        proposed_source_references=proposed_references,
+        warnings=warnings,
+    )
+
+
+def _parse_collection_keys(
+    value: Any,
+    resolution_label: str,
+) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise BulkCollectionIdentityResolutionError(
+            f"{resolution_label}.collection_keys must be "
+            "a JSON array."
+        )
+
+    keys = []
+    seen = set()
+    for index, item in enumerate(value):
+        key = _require_pattern_text(
+            item,
+            _COLLECTION_KEY_PATTERN,
+            f"{resolution_label}.collection_keys[{index}]",
+        )
+        if key in seen:
+            raise BulkCollectionIdentityResolutionError(
+                f"{resolution_label}.collection_keys contains "
+                f"a duplicate: {key}"
+            )
+        seen.add(key)
+        keys.append(key)
+    return tuple(keys)
+
+
+def _parse_plan_source_references(
+    value: Any,
+    label: str,
+) -> tuple[BulkCollectionImportSourceReference, ...]:
+    if not isinstance(value, list):
+        raise BulkCollectionIdentityResolutionError(
+            f"{label} must be a JSON array."
+        )
+
+    references = []
+    seen = set()
+    for index, item in enumerate(value):
+        item_label = f"{label}[{index}]"
+        _require_exact_mapping(
+            item,
+            _SOURCE_REFERENCE_KEYS,
+            item_label,
+        )
+        source = _require_pattern_text(
+            item["source"],
+            BULK_COLLECTION_IMPORT_SOURCE_PATTERN,
+            f"{item_label}.source",
+        )
+        external_id = _require_external_id(
+            item["external_id"],
+            f"{item_label}.external_id",
+        )
+        key = (source, external_id)
+        if key in seen:
+            raise BulkCollectionIdentityResolutionError(
+                f"{label} contains a duplicate source reference: "
+                f"{source}:{external_id}"
+            )
+        seen.add(key)
+        references.append(
+            BulkCollectionImportSourceReference(
+                source=source,
+                external_id=external_id,
+            )
+        )
+    return tuple(references)
+
+
+def _parse_warnings(
+    value: Any,
+    resolution_label: str,
+) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise BulkCollectionIdentityResolutionError(
+            f"{resolution_label}.warnings must be a JSON array."
+        )
+
+    warnings = []
+    seen = set()
+    for index, item in enumerate(value):
+        if (
+            not isinstance(item, str)
+            or _WARNING_PATTERN.fullmatch(item) is None
+        ):
+            raise BulkCollectionIdentityResolutionError(
+                f"{resolution_label}.warnings[{index}] has "
+                "an invalid warning code."
+            )
+        if item in seen:
+            raise BulkCollectionIdentityResolutionError(
+                f"{resolution_label}.warnings contains a "
+                f"duplicate: {item}"
+            )
+        seen.add(item)
+        warnings.append(item)
+    return tuple(warnings)
 
 
 def bulk_collection_identity_plan_to_document(
@@ -705,6 +906,7 @@ __all__ = [
     "BulkCollectionIdentityResolutionError",
     "BulkCollectionIdentityResolution",
     "BulkCollectionIdentityPlan",
+    "parse_bulk_collection_identity_plan",
     "resolve_bulk_collection_identities",
     "bulk_collection_identity_plan_to_document",
     "serialize_bulk_collection_identity_plan",
