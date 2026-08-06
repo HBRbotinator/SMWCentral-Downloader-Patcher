@@ -6,6 +6,28 @@ import json
 import unittest
 from copy import deepcopy
 
+from bulk_collection_import import (
+    parse_bulk_collection_import,
+)
+from bulk_collection_import_merge import (
+    BULK_COLLECTION_IMPORT_MERGE_ACTIONS,
+    BULK_COLLECTION_IMPORT_MERGE_GROUP_KEYS,
+    BULK_COLLECTION_IMPORT_MERGE_ITEM_KEYS,
+    BULK_COLLECTION_IMPORT_MERGE_PLAN_KEYS,
+    BULK_COLLECTION_IMPORT_MERGE_SCHEMA,
+    BULK_COLLECTION_IMPORT_MERGE_SUMMARY_KEYS,
+    BULK_COLLECTION_IMPORT_MERGE_VALUE_ACTIONS,
+    BULK_COLLECTION_IMPORT_MERGE_VALUE_DECISION_KEYS,
+    BULK_COLLECTION_IMPORT_MERGE_VERSION,
+    BulkCollectionImportMergeError,
+    build_bulk_collection_import_merge_plan,
+    bulk_collection_import_merge_plan_to_document,
+    serialize_bulk_collection_import_merge_plan,
+)
+from bulk_collection_import_preview import (
+    parse_bulk_collection_import_preview,
+)
+
 
 MERGE_PLAN_SCHEMA = "smwc-bulk-collection-merge-plan"
 MERGE_PLAN_VERSION = 1
@@ -874,6 +896,119 @@ class BulkCollectionImportMergeSpecificationTest(
                 "test_user_owned_state_never_enters_merge_plan",
             },
         )
+
+
+class BulkCollectionImportMergeImplementationTest(
+    BulkCollectionImportMergeContractMixin,
+    unittest.TestCase,
+):
+    """Run the merge specification against production code."""
+
+    def parse_import(self, document):
+        return parse_bulk_collection_import(document)
+
+    def parse_preview(self, document):
+        return parse_bulk_collection_import_preview(document)
+
+    def build_merge_plan(
+        self,
+        import_document,
+        preview,
+        collection_records,
+    ):
+        return build_bulk_collection_import_merge_plan(
+            import_document,
+            preview,
+            collection_records,
+        )
+
+    def merge_plan_to_document(self, plan):
+        return bulk_collection_import_merge_plan_to_document(plan)
+
+    def serialize_merge_plan(self, plan):
+        return serialize_bulk_collection_import_merge_plan(plan)
+
+    def assert_merge_error(
+        self,
+        import_document,
+        preview,
+        collection_records,
+    ):
+        with self.assertRaises(BulkCollectionImportMergeError):
+            build_bulk_collection_import_merge_plan(
+                import_document,
+                preview,
+                collection_records,
+            )
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_MERGE_SCHEMA,
+            MERGE_PLAN_SCHEMA,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_MERGE_VERSION,
+            MERGE_PLAN_VERSION,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_MERGE_ACTIONS,
+            MERGE_ACTIONS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_MERGE_VALUE_ACTIONS,
+            VALUE_ACTIONS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_MERGE_PLAN_KEYS,
+            PLAN_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_MERGE_SUMMARY_KEYS,
+            SUMMARY_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_MERGE_ITEM_KEYS,
+            ITEM_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_MERGE_VALUE_DECISION_KEYS,
+            VALUE_DECISION_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_MERGE_GROUP_KEYS,
+            GROUP_KEYS,
+        )
+
+    def test_preview_parser_is_immutable_and_detached(self):
+        document = deepcopy(PREVIEW_DOCUMENT)
+        preview = parse_bulk_collection_import_preview(document)
+
+        document["items"][0]["warnings"].append("changed")
+        document["groups"][0]["entry_keys"].reverse()
+
+        with self.assertRaises((AttributeError, TypeError)):
+            preview.title = "changed"
+        with self.assertRaises((AttributeError, TypeError)):
+            preview.summary["total"] = 0
+
+        self.assertEqual(
+            preview.items[0].warnings,
+            (),
+        )
+        self.assertEqual(
+            preview.groups[0].entry_keys,
+            (
+                "safe-update",
+                "unchanged",
+                "new-entry",
+            ),
+        )
+
+    def test_projection_requires_production_plan_type(self):
+        with self.assertRaises(TypeError):
+            bulk_collection_import_merge_plan_to_document(
+                EXPECTED_MERGE_DOCUMENT
+            )
 
 
 if __name__ == "__main__":

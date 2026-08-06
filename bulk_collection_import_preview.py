@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
+import re
 
 from bulk_collection_import import (
     BulkCollectionImportDocument,
@@ -66,6 +67,16 @@ _STATUS_TO_OUTCOME = {
     "conflict": "review_required",
 }
 
+_IMPORT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_ENTRY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_GROUP_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_COLLECTION_KEY_PATTERN = re.compile(
+    r"^[A-Za-z0-9._:-]{1,128}$"
+)
+_SOURCE_PATTERN = re.compile(r"^[a-z][a-z0-9._-]{0,31}$")
+_WARNING_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_SOURCE_REFERENCE_KEYS = ("source", "external_id")
+
 
 class BulkCollectionImportPreviewError(ValueError):
     """Raised when an identity plan cannot safely form a preview."""
@@ -107,6 +118,412 @@ class BulkCollectionImportPreviewPlan:
     summary: Mapping[str, int]
     items: tuple[BulkCollectionImportPreviewItem, ...]
     groups: tuple[BulkCollectionImportPreviewGroup, ...]
+
+
+def parse_bulk_collection_import_preview(
+    document: Any,
+) -> BulkCollectionImportPreviewPlan:
+    """Parse and deeply detach one serialized preview plan."""
+
+    _require_exact_mapping(
+        document,
+        BULK_COLLECTION_IMPORT_PREVIEW_PLAN_KEYS,
+        "Bulk Collection import preview",
+    )
+
+    schema = document["schema"]
+    if schema != BULK_COLLECTION_IMPORT_PREVIEW_SCHEMA:
+        raise BulkCollectionImportPreviewError(
+            "Unsupported bulk Collection preview schema."
+        )
+
+    version = document["version"]
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != BULK_COLLECTION_IMPORT_PREVIEW_VERSION
+    ):
+        raise BulkCollectionImportPreviewError(
+            "Unsupported bulk Collection preview version."
+        )
+
+    import_id = _require_pattern_text(
+        document["import_id"],
+        _IMPORT_ID_PATTERN,
+        "import_id",
+    )
+    title = _require_title(document["title"], "title")
+    items = _parse_preview_items(document["items"])
+    groups = _parse_preview_groups(document["groups"])
+    summary = _parse_preview_summary(
+        document["summary"],
+        items,
+    )
+    _validate_preview_group_coverage(items, groups)
+
+    return BulkCollectionImportPreviewPlan(
+        schema=schema,
+        version=version,
+        import_id=import_id,
+        title=title,
+        summary=summary,
+        items=items,
+        groups=groups,
+    )
+
+
+def _parse_preview_items(
+    value: Any,
+) -> tuple[BulkCollectionImportPreviewItem, ...]:
+    if not isinstance(value, list):
+        raise BulkCollectionImportPreviewError(
+            "items must be a JSON array."
+        )
+
+    items = []
+    entry_keys = set()
+    for index, item in enumerate(value):
+        label = f"items[{index}]"
+        _require_exact_mapping(
+            item,
+            BULK_COLLECTION_IMPORT_PREVIEW_ITEM_KEYS,
+            label,
+        )
+        entry_key = _require_pattern_text(
+            item["entry_key"],
+            _ENTRY_KEY_PATTERN,
+            f"{label}.entry_key",
+        )
+        if entry_key in entry_keys:
+            raise BulkCollectionImportPreviewError(
+                f"Duplicate preview entry_key: {entry_key}"
+            )
+        entry_keys.add(entry_key)
+
+        outcome = item["outcome"]
+        if outcome not in BULK_COLLECTION_IMPORT_PREVIEW_OUTCOMES:
+            raise BulkCollectionImportPreviewError(
+                f"{label}.outcome is unsupported."
+            )
+        resolution_status = item["resolution_status"]
+        expected_outcome = _STATUS_TO_OUTCOME.get(
+            resolution_status
+        )
+        if expected_outcome != outcome:
+            raise BulkCollectionImportPreviewError(
+                f"{label} outcome does not match resolution status."
+            )
+
+        items.append(
+            BulkCollectionImportPreviewItem(
+                entry_key=entry_key,
+                title=_require_title(
+                    item["title"],
+                    f"{label}.title",
+                ),
+                outcome=outcome,
+                resolution_status=resolution_status,
+                collection_keys=_parse_preview_collection_keys(
+                    item["collection_keys"],
+                    label,
+                ),
+                proposed_source_references=(
+                    _parse_preview_source_references(
+                        item["proposed_source_references"],
+                        f"{label}.proposed_source_references",
+                    )
+                ),
+                warnings=_parse_preview_warnings(
+                    item["warnings"],
+                    label,
+                ),
+            )
+        )
+
+    return tuple(items)
+
+
+def _parse_preview_groups(
+    value: Any,
+) -> tuple[BulkCollectionImportPreviewGroup, ...]:
+    if not isinstance(value, list):
+        raise BulkCollectionImportPreviewError(
+            "groups must be a JSON array."
+        )
+
+    groups = []
+    group_keys = set()
+    for index, item in enumerate(value):
+        label = f"groups[{index}]"
+        _require_exact_mapping(
+            item,
+            BULK_COLLECTION_IMPORT_PREVIEW_GROUP_KEYS,
+            label,
+        )
+        group_key = _require_pattern_text(
+            item["group_key"],
+            _GROUP_KEY_PATTERN,
+            f"{label}.group_key",
+        )
+        if group_key in group_keys:
+            raise BulkCollectionImportPreviewError(
+                f"Duplicate preview group_key: {group_key}"
+            )
+        group_keys.add(group_key)
+
+        entry_keys_value = item["entry_keys"]
+        if not isinstance(entry_keys_value, list):
+            raise BulkCollectionImportPreviewError(
+                f"{label}.entry_keys must be a JSON array."
+            )
+        entry_keys = tuple(
+            _require_pattern_text(
+                entry_key,
+                _ENTRY_KEY_PATTERN,
+                f"{label}.entry_keys[{entry_index}]",
+            )
+            for entry_index, entry_key in enumerate(
+                entry_keys_value
+            )
+        )
+        groups.append(
+            BulkCollectionImportPreviewGroup(
+                group_key=group_key,
+                title=_require_title(
+                    item["title"],
+                    f"{label}.title",
+                ),
+                entry_keys=entry_keys,
+            )
+        )
+
+    return tuple(groups)
+
+
+def _parse_preview_summary(
+    value: Any,
+    items: tuple[BulkCollectionImportPreviewItem, ...],
+) -> Mapping[str, int]:
+    _require_exact_mapping(
+        value,
+        BULK_COLLECTION_IMPORT_PREVIEW_SUMMARY_KEYS,
+        "summary",
+    )
+    counts = {
+        outcome: sum(item.outcome == outcome for item in items)
+        for outcome in BULK_COLLECTION_IMPORT_PREVIEW_OUTCOMES
+    }
+    expected = {
+        "total": len(items),
+        "add_new": counts["add_new"],
+        "match_existing": counts["match_existing"],
+        "review_required": counts["review_required"],
+    }
+
+    for key, expected_value in expected.items():
+        actual = value[key]
+        if (
+            isinstance(actual, bool)
+            or not isinstance(actual, int)
+            or actual < 0
+            or actual != expected_value
+        ):
+            raise BulkCollectionImportPreviewError(
+                f"summary.{key} does not match preview items."
+            )
+
+    return MappingProxyType(expected)
+
+
+def _parse_preview_collection_keys(
+    value: Any,
+    item_label: str,
+) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise BulkCollectionImportPreviewError(
+            f"{item_label}.collection_keys must be a JSON array."
+        )
+
+    keys = []
+    seen = set()
+    for index, item in enumerate(value):
+        key = _require_pattern_text(
+            item,
+            _COLLECTION_KEY_PATTERN,
+            f"{item_label}.collection_keys[{index}]",
+        )
+        if key in seen:
+            raise BulkCollectionImportPreviewError(
+                f"{item_label}.collection_keys contains a duplicate."
+            )
+        seen.add(key)
+        keys.append(key)
+    return tuple(keys)
+
+
+def _parse_preview_source_references(
+    value: Any,
+    label: str,
+) -> tuple[BulkCollectionImportSourceReference, ...]:
+    if not isinstance(value, list):
+        raise BulkCollectionImportPreviewError(
+            f"{label} must be a JSON array."
+        )
+
+    references = []
+    seen = set()
+    for index, item in enumerate(value):
+        item_label = f"{label}[{index}]"
+        _require_exact_mapping(
+            item,
+            _SOURCE_REFERENCE_KEYS,
+            item_label,
+        )
+        source = _require_pattern_text(
+            item["source"],
+            _SOURCE_PATTERN,
+            f"{item_label}.source",
+        )
+        external_id = _require_external_id(
+            item["external_id"],
+            f"{item_label}.external_id",
+        )
+        key = (source, external_id)
+        if key in seen:
+            raise BulkCollectionImportPreviewError(
+                f"{label} contains a duplicate source reference."
+            )
+        seen.add(key)
+        references.append(
+            BulkCollectionImportSourceReference(
+                source=source,
+                external_id=external_id,
+            )
+        )
+    return tuple(references)
+
+
+def _parse_preview_warnings(
+    value: Any,
+    item_label: str,
+) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise BulkCollectionImportPreviewError(
+            f"{item_label}.warnings must be a JSON array."
+        )
+
+    warnings = []
+    seen = set()
+    for index, warning in enumerate(value):
+        if (
+            not isinstance(warning, str)
+            or _WARNING_PATTERN.fullmatch(warning) is None
+        ):
+            raise BulkCollectionImportPreviewError(
+                f"{item_label}.warnings[{index}] is invalid."
+            )
+        if warning in seen:
+            raise BulkCollectionImportPreviewError(
+                f"{item_label}.warnings contains a duplicate."
+            )
+        seen.add(warning)
+        warnings.append(warning)
+    return tuple(warnings)
+
+
+def _validate_preview_group_coverage(
+    items: tuple[BulkCollectionImportPreviewItem, ...],
+    groups: tuple[BulkCollectionImportPreviewGroup, ...],
+) -> None:
+    expected = {item.entry_key for item in items}
+    seen = set()
+    for group in groups:
+        for entry_key in group.entry_keys:
+            if entry_key not in expected:
+                raise BulkCollectionImportPreviewError(
+                    "Preview group references an unknown entry_key."
+                )
+            if entry_key in seen:
+                raise BulkCollectionImportPreviewError(
+                    "Preview entry appears more than once in groups."
+                )
+            seen.add(entry_key)
+
+    if seen != expected:
+        raise BulkCollectionImportPreviewError(
+            "Every preview item must appear exactly once in groups."
+        )
+
+
+def _require_exact_mapping(
+    value: Any,
+    expected_keys: tuple[str, ...],
+    label: str,
+) -> None:
+    if not isinstance(value, dict):
+        raise BulkCollectionImportPreviewError(
+            f"{label} must be a JSON object."
+        )
+    expected = set(expected_keys)
+    actual = set(value)
+    if actual == expected:
+        return
+
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+    details = []
+    if missing:
+        details.append("missing: " + ", ".join(missing))
+    if unexpected:
+        details.append("unexpected: " + ", ".join(unexpected))
+    raise BulkCollectionImportPreviewError(
+        f"{label} fields must match the preview contract "
+        f"({'; '.join(details)})."
+    )
+
+
+def _require_pattern_text(
+    value: Any,
+    pattern: re.Pattern[str],
+    label: str,
+) -> str:
+    if (
+        not isinstance(value, str)
+        or pattern.fullmatch(value) is None
+    ):
+        raise BulkCollectionImportPreviewError(
+            f"{label} has an invalid identifier format."
+        )
+    return value
+
+
+def _require_title(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+        or len(value) > 512
+    ):
+        raise BulkCollectionImportPreviewError(
+            f"{label} must be a non-empty trimmed string "
+            "of at most 512 characters."
+        )
+    return value
+
+
+def _require_external_id(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(character.isspace() for character in value)
+        or len(value) > 256
+    ):
+        raise BulkCollectionImportPreviewError(
+            f"{label} must be a non-empty non-whitespace "
+            "string of at most 256 characters."
+        )
+    return value
 
 
 def build_bulk_collection_import_preview(
@@ -366,6 +783,7 @@ __all__ = [
     "BulkCollectionImportPreviewItem",
     "BulkCollectionImportPreviewGroup",
     "BulkCollectionImportPreviewPlan",
+    "parse_bulk_collection_import_preview",
     "build_bulk_collection_import_preview",
     "bulk_collection_import_preview_to_document",
     "serialize_bulk_collection_import_preview",
