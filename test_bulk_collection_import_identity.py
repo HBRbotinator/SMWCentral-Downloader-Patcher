@@ -6,6 +6,22 @@ import json
 import unittest
 from copy import deepcopy
 
+from bulk_collection_import import (
+    parse_bulk_collection_import,
+)
+from bulk_collection_import_identity import (
+    BULK_COLLECTION_IDENTITY_PLAN_KEYS,
+    BULK_COLLECTION_IDENTITY_PLAN_SCHEMA,
+    BULK_COLLECTION_IDENTITY_PLAN_VERSION,
+    BULK_COLLECTION_IDENTITY_RESOLUTION_KEYS,
+    BULK_COLLECTION_IDENTITY_RESOLUTION_STATUSES,
+    BulkCollectionIdentityResolutionError,
+    bulk_collection_identity_plan_to_document,
+    normalize_bulk_collection_identity_text,
+    resolve_bulk_collection_identities,
+    serialize_bulk_collection_identity_plan,
+)
+
 
 IDENTITY_PLAN_SCHEMA = "smwc-bulk-collection-identity-plan"
 IDENTITY_PLAN_VERSION = 1
@@ -424,8 +440,8 @@ class BulkCollectionIdentityResolutionContractMixin:
                 "title": "Hybrid Hack",
                 "source_references": [
                     {
-                        "source": "smwc",
-                        "external_id": "100",
+                        "source": "kaizoff",
+                        "external_id": "hybrid-hack",
                     }
                 ],
                 "attributes": {
@@ -437,11 +453,18 @@ class BulkCollectionIdentityResolutionContractMixin:
             "first",
             "second",
         ]
+        identities = list(deepcopy(COLLECTION_IDENTITIES))
+        identities[0]["source_references"].append(
+            {
+                "source": "kaizoff",
+                "external_id": "hybrid-hack",
+            }
+        )
         parsed = self.parse_import(document)
 
         plan = self.resolve_identities(
             parsed,
-            deepcopy(COLLECTION_IDENTITIES),
+            identities,
         )
 
         self.assertEqual(
@@ -690,6 +713,104 @@ class BulkCollectionIdentityResolutionSpecificationTest(
                 "test_two_import_entries_cannot_silently_target_same_record",
             },
         )
+
+
+class BulkCollectionIdentityResolutionImplementationTest(
+    BulkCollectionIdentityResolutionContractMixin,
+    unittest.TestCase,
+):
+    """Run the identity specification against production code."""
+
+    def parse_import(self, document):
+        return parse_bulk_collection_import(document)
+
+    def resolve_identities(
+        self,
+        import_document,
+        collection_identities,
+    ):
+        return resolve_bulk_collection_identities(
+            import_document,
+            collection_identities,
+        )
+
+    def plan_to_document(self, plan):
+        return bulk_collection_identity_plan_to_document(plan)
+
+    def serialize_plan(self, plan):
+        return serialize_bulk_collection_identity_plan(plan)
+
+    def assert_resolution_error(
+        self,
+        import_document,
+        collection_identities,
+    ):
+        with self.assertRaises(
+            BulkCollectionIdentityResolutionError
+        ):
+            resolve_bulk_collection_identities(
+                import_document,
+                collection_identities,
+            )
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            BULK_COLLECTION_IDENTITY_PLAN_SCHEMA,
+            IDENTITY_PLAN_SCHEMA,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IDENTITY_PLAN_VERSION,
+            IDENTITY_PLAN_VERSION,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IDENTITY_RESOLUTION_STATUSES,
+            RESOLUTION_STATUSES,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IDENTITY_PLAN_KEYS,
+            PLAN_KEYS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IDENTITY_RESOLUTION_KEYS,
+            RESOLUTION_KEYS,
+        )
+
+    def test_normalization_is_case_punctuation_and_accent_insensitive(self):
+        values = (
+            "Metadata Match!",
+            "metadata-match",
+            "  metadata   match  ",
+            "MÉTADATA MATCH",
+        )
+
+        self.assertEqual(
+            {
+                normalize_bulk_collection_identity_text(value)
+                for value in values
+            },
+            {"metadata match"},
+        )
+
+    def test_collection_identity_input_is_strict_and_detached(self):
+        parsed = parse_bulk_collection_import(
+            deepcopy(IMPORT_DOCUMENT)
+        )
+        identities = list(deepcopy(COLLECTION_IDENTITIES))
+        identities[0]["unexpected"] = True
+
+        with self.assertRaises(
+            BulkCollectionIdentityResolutionError
+        ):
+            resolve_bulk_collection_identities(
+                parsed,
+                identities,
+            )
+
+    def test_projection_requires_production_plan_type(self):
+        with self.assertRaises(TypeError):
+            bulk_collection_identity_plan_to_document(
+                EXPECTED_PLAN_DOCUMENT
+            )
 
 
 if __name__ == "__main__":
