@@ -9,6 +9,16 @@ from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from bulk_collection_import import (
+    bulk_collection_import_to_document,
+)
+from bulk_collection_import_json import (
+    MAX_IMPORT_JSON_BYTES as PRODUCTION_MAX_IMPORT_JSON_BYTES,
+    BulkCollectionImportJsonError,
+    BulkCollectionImportJsonLoadResult,
+    load_bulk_collection_import_json,
+)
+
 
 MAX_IMPORT_JSON_BYTES = 16 * 1024 * 1024
 
@@ -311,6 +321,58 @@ class BulkCollectionImportJsonAdapterSpecificationTest(
                 "test_valid_utf8_json_loads_with_source_metadata",
             },
         )
+
+
+class BulkCollectionImportJsonAdapterImplementationTest(
+    BulkCollectionImportJsonAdapterContractMixin,
+    unittest.TestCase,
+):
+    """Run the local JSON specification against production code."""
+
+    def load_import_json(self, path):
+        return load_bulk_collection_import_json(path)
+
+    def import_to_document(self, import_document):
+        return bulk_collection_import_to_document(import_document)
+
+    def assert_adapter_error(self, path):
+        with self.assertRaises(BulkCollectionImportJsonError):
+            load_bulk_collection_import_json(path)
+
+    def test_production_size_limit_matches_specification(self):
+        self.assertEqual(
+            PRODUCTION_MAX_IMPORT_JSON_BYTES,
+            MAX_IMPORT_JSON_BYTES,
+        )
+
+    def test_production_result_type_is_fixed(self):
+        with TemporaryDirectory() as directory:
+            path = self._write_bytes(
+                directory,
+                "result.json",
+                self._canonical_bytes(),
+            )
+            loaded = load_bulk_collection_import_json(path)
+
+            self.assertIsInstance(
+                loaded,
+                BulkCollectionImportJsonLoadResult,
+            )
+
+    def test_nonstandard_json_constants_are_rejected(self):
+        with TemporaryDirectory() as directory:
+            document = deepcopy(VALID_IMPORT_DOCUMENT)
+            payload = json.dumps(document).replace(
+                '"Kaizo: Beginner"',
+                'NaN',
+            ).encode("utf-8")
+            path = self._write_bytes(
+                directory,
+                "nonstandard.json",
+                payload,
+            )
+
+            self.assert_adapter_error(path)
 
 
 if __name__ == "__main__":
