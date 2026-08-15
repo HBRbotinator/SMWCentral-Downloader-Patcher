@@ -431,7 +431,10 @@ EXPECTED_MERGE_DOCUMENT = {
             "title_decision": None,
             "source_reference_additions": [],
             "attribute_decisions": [],
-            "warnings": ["identity_review_required"],
+            "warnings": [
+                "identity_review_required",
+                "identity_ambiguous",
+            ],
         },
     ],
     "groups": deepcopy(IMPORT_DOCUMENT["groups"]),
@@ -549,7 +552,10 @@ class BulkCollectionImportMergeContractMixin:
         self.assertEqual(item.attribute_decisions, ())
         self.assertEqual(
             item.warnings,
-            ("identity_review_required",),
+            (
+                "identity_review_required",
+                "identity_ambiguous",
+            ),
         )
 
     def test_existing_only_shared_metadata_is_preserved(self):

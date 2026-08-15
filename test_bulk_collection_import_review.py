@@ -158,7 +158,10 @@ MERGE_DOCUMENT = {
             "title_decision": None,
             "source_reference_additions": [],
             "attribute_decisions": [],
-            "warnings": ["identity_review_required"],
+            "warnings": [
+                "identity_review_required",
+                "identity_ambiguous",
+            ],
         },
     ],
     "groups": [
@@ -825,6 +828,78 @@ class BulkCollectionImportReviewImplementationTest(
         }
 
         self.assert_review_error(document, merge_plan)
+
+
+class BulkCollectionImportHardIdentityConflictReviewTest(
+    unittest.TestCase
+):
+    """Hard identity conflicts must remain non-destructive."""
+
+    def _merge_plan(self, hard_warning):
+        document = deepcopy(MERGE_DOCUMENT)
+        item = document["items"][-1]
+        item["warnings"] = [
+            "identity_review_required",
+            "identity_conflict",
+            hard_warning,
+        ]
+        return _merge_plan_from_document(document)
+
+    def _decision_document(self, action, selected_key=None):
+        document = deepcopy(VALID_DECISION_DOCUMENT)
+        document["decisions"][-1] = {
+            "entry_key": "identity-review",
+            "action": action,
+            "selected_collection_key": selected_key,
+            "title_choice": None,
+            "attribute_choices": [],
+        }
+        return document
+
+    def test_source_identity_conflict_rejects_select_existing(self):
+        merge_plan = self._merge_plan(
+            "source_identity_conflict"
+        )
+
+        with self.assertRaises(BulkCollectionImportReviewError):
+            parse_bulk_collection_import_review_decisions(
+                self._decision_document(
+                    "select_existing",
+                    "collection-a",
+                ),
+                merge_plan,
+                SOURCE_SHA256,
+            )
+
+    def test_duplicate_target_conflict_rejects_create_new(self):
+        merge_plan = self._merge_plan(
+            "duplicate_import_target"
+        )
+
+        with self.assertRaises(BulkCollectionImportReviewError):
+            parse_bulk_collection_import_review_decisions(
+                self._decision_document("create_new"),
+                merge_plan,
+                SOURCE_SHA256,
+            )
+
+    def test_hard_identity_conflict_accepts_explicit_skip(self):
+        for warning in (
+            "source_identity_conflict",
+            "duplicate_import_target",
+        ):
+            with self.subTest(warning=warning):
+                decisions = (
+                    parse_bulk_collection_import_review_decisions(
+                        self._decision_document("skip"),
+                        self._merge_plan(warning),
+                        SOURCE_SHA256,
+                    )
+                )
+                self.assertEqual(
+                    decisions.decisions[-1].action,
+                    "skip",
+                )
 
 
 if __name__ == "__main__":

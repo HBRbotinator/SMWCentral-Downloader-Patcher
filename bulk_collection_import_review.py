@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from bulk_collection_import_merge import (
+    BULK_COLLECTION_IMPORT_HARD_IDENTITY_CONFLICT_WARNINGS,
+    BULK_COLLECTION_IMPORT_IDENTITY_AMBIGUOUS_WARNING,
+    BULK_COLLECTION_IMPORT_IDENTITY_CONFLICT_WARNING,
+    BULK_COLLECTION_IMPORT_IDENTITY_REVIEW_REQUIRED_WARNING,
     BulkCollectionImportMergeItem,
     BulkCollectionImportMergePlan,
 )
@@ -27,6 +31,19 @@ BULK_COLLECTION_IMPORT_REVIEW_ACTIONS = (
 BULK_COLLECTION_IMPORT_REVIEW_CONFLICT_CHOICES = (
     "keep_existing",
     "use_imported",
+)
+
+BULK_COLLECTION_IMPORT_AMBIGUOUS_IDENTITY_ACTIONS = (
+    "select_existing",
+    "create_new",
+    "skip",
+)
+BULK_COLLECTION_IMPORT_HARD_IDENTITY_CONFLICT_ACTIONS = (
+    "skip",
+)
+BULK_COLLECTION_IMPORT_METADATA_REVIEW_ACTIONS = (
+    "resolve_metadata",
+    "skip",
 )
 
 BULK_COLLECTION_IMPORT_REVIEW_DOCUMENT_KEYS = (
@@ -250,6 +267,73 @@ def _decision_entry_key(value: Any, index: int) -> str:
     return entry_key
 
 
+def bulk_collection_import_review_allowed_actions(
+    item: BulkCollectionImportMergeItem,
+) -> tuple[str, ...]:
+    """Return the safe review actions for one blocked merge row."""
+
+    if not isinstance(item, BulkCollectionImportMergeItem):
+        raise TypeError(
+            "item must be a BulkCollectionImportMergeItem"
+        )
+    if item.action != "review_required":
+        raise BulkCollectionImportReviewError(
+            "Review actions are only defined for review-required "
+            "merge items."
+        )
+
+    warnings = set(item.warnings)
+    identity_marker = (
+        BULK_COLLECTION_IMPORT_IDENTITY_REVIEW_REQUIRED_WARNING
+        in warnings
+    )
+    ambiguous_marker = (
+        BULK_COLLECTION_IMPORT_IDENTITY_AMBIGUOUS_WARNING
+        in warnings
+    )
+    conflict_marker = (
+        BULK_COLLECTION_IMPORT_IDENTITY_CONFLICT_WARNING
+        in warnings
+    )
+
+    if identity_marker:
+        if ambiguous_marker == conflict_marker:
+            raise BulkCollectionImportReviewError(
+                "Identity review must identify exactly one reason: "
+                "ambiguous or conflict."
+            )
+
+        hard_conflicts = warnings.intersection(
+            BULK_COLLECTION_IMPORT_HARD_IDENTITY_CONFLICT_WARNINGS
+        )
+        if ambiguous_marker:
+            if hard_conflicts:
+                raise BulkCollectionImportReviewError(
+                    "Ambiguous identity review cannot carry a hard "
+                    "identity-conflict warning."
+                )
+            return (
+                BULK_COLLECTION_IMPORT_AMBIGUOUS_IDENTITY_ACTIONS
+            )
+
+        if not hard_conflicts:
+            raise BulkCollectionImportReviewError(
+                "Identity conflict review requires a known hard "
+                "identity-conflict warning."
+            )
+        return (
+            BULK_COLLECTION_IMPORT_HARD_IDENTITY_CONFLICT_ACTIONS
+        )
+
+    if ambiguous_marker or conflict_marker:
+        raise BulkCollectionImportReviewError(
+            "Identity review reason marker requires "
+            "identity_review_required."
+        )
+
+    return BULK_COLLECTION_IMPORT_METADATA_REVIEW_ACTIONS
+
+
 def _parse_decision(
     value: Mapping[str, Any],
     item: BulkCollectionImportMergeItem,
@@ -326,6 +410,15 @@ def _validate_identity_review(
     item: BulkCollectionImportMergeItem,
     label: str,
 ) -> None:
+    allowed_actions = bulk_collection_import_review_allowed_actions(
+        item
+    )
+    if action not in allowed_actions:
+        raise BulkCollectionImportReviewError(
+            f"{label}.action is not safe for this identity "
+            "review reason."
+        )
+
     if title_choice is not None or attribute_choices:
         raise BulkCollectionImportReviewError(
             f"{label} identity decisions cannot contain metadata "
@@ -340,18 +433,11 @@ def _validate_identity_review(
             )
         return
 
-    if action in ("create_new", "skip"):
-        if selected_key is not None:
-            raise BulkCollectionImportReviewError(
-                f"{label} {action} decisions cannot select an "
-                "existing Collection record."
-            )
-        return
-
-    raise BulkCollectionImportReviewError(
-        f"{label} identity review must select_existing, "
-        "create_new, or skip."
-    )
+    if selected_key is not None:
+        raise BulkCollectionImportReviewError(
+            f"{label} {action} decisions cannot select an "
+            "existing Collection record."
+        )
 
 
 def _validate_metadata_review(
@@ -365,6 +451,14 @@ def _validate_metadata_review(
     item: BulkCollectionImportMergeItem,
     label: str,
 ) -> None:
+    allowed_actions = (
+        bulk_collection_import_review_allowed_actions(item)
+    )
+    if action not in allowed_actions:
+        raise BulkCollectionImportReviewError(
+            f"{label}.action is not safe for this metadata review."
+        )
+
     if action == "skip":
         if (
             selected_key is not None
@@ -547,6 +641,9 @@ __all__ = [
     "BULK_COLLECTION_IMPORT_REVIEW_VERSION",
     "BULK_COLLECTION_IMPORT_REVIEW_ACTIONS",
     "BULK_COLLECTION_IMPORT_REVIEW_CONFLICT_CHOICES",
+    "BULK_COLLECTION_IMPORT_AMBIGUOUS_IDENTITY_ACTIONS",
+    "BULK_COLLECTION_IMPORT_HARD_IDENTITY_CONFLICT_ACTIONS",
+    "BULK_COLLECTION_IMPORT_METADATA_REVIEW_ACTIONS",
     "BULK_COLLECTION_IMPORT_REVIEW_DOCUMENT_KEYS",
     "BULK_COLLECTION_IMPORT_REVIEW_DECISION_KEYS",
     "BULK_COLLECTION_IMPORT_REVIEW_ATTRIBUTE_CHOICE_KEYS",
@@ -555,6 +652,7 @@ __all__ = [
     "BulkCollectionImportReviewDecision",
     "BulkCollectionImportReviewDecisions",
     "parse_bulk_collection_import_review_decisions",
+    "bulk_collection_import_review_allowed_actions",
     "bulk_collection_import_review_decisions_to_document",
     "serialize_bulk_collection_import_review_decisions",
 ]

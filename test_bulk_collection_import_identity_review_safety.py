@@ -5,6 +5,15 @@ from __future__ import annotations
 import json
 import unittest
 
+from bulk_collection_import_merge import (
+    BulkCollectionImportMergeItem,
+    bulk_collection_import_identity_review_warnings,
+)
+from bulk_collection_import_review import (
+    BulkCollectionImportReviewError,
+    bulk_collection_import_review_allowed_actions,
+)
+
 
 IDENTITY_REVIEW_REQUIRED_WARNING = "identity_review_required"
 IDENTITY_AMBIGUOUS_WARNING = "identity_ambiguous"
@@ -361,6 +370,47 @@ class BulkCollectionIdentityReviewSafetySpecificationTest(
                 "test_source_identity_conflict_is_skip_only",
             },
         )
+
+
+class BulkCollectionIdentityReviewSafetyImplementationTest(
+    BulkCollectionIdentityReviewSafetyContractMixin,
+    unittest.TestCase,
+):
+    """Run the identity-review safety policy against production."""
+
+    def identity_review_warnings(
+        self,
+        resolution_status,
+        preview_warnings,
+    ):
+        return bulk_collection_import_identity_review_warnings(
+            resolution_status,
+            preview_warnings,
+        )
+
+    def _merge_item(self, document):
+        return BulkCollectionImportMergeItem(
+            entry_key=document["entry_key"],
+            action=document["action"],
+            collection_keys=tuple(
+                document["collection_keys"]
+            ),
+            title_decision=None,
+            source_reference_additions=(),
+            attribute_decisions=(),
+            warnings=tuple(document["warnings"]),
+        )
+
+    def allowed_review_actions(self, merge_item):
+        return bulk_collection_import_review_allowed_actions(
+            self._merge_item(merge_item)
+        )
+
+    def assert_invalid_review_item(self, merge_item):
+        with self.assertRaises(BulkCollectionImportReviewError):
+            bulk_collection_import_review_allowed_actions(
+                self._merge_item(merge_item)
+            )
 
 
 if __name__ == "__main__":

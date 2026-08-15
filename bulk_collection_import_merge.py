@@ -36,6 +36,20 @@ BULK_COLLECTION_IMPORT_MERGE_VALUE_ACTIONS = (
     "review_conflict",
 )
 
+BULK_COLLECTION_IMPORT_IDENTITY_REVIEW_REQUIRED_WARNING = (
+    "identity_review_required"
+)
+BULK_COLLECTION_IMPORT_IDENTITY_AMBIGUOUS_WARNING = (
+    "identity_ambiguous"
+)
+BULK_COLLECTION_IMPORT_IDENTITY_CONFLICT_WARNING = (
+    "identity_conflict"
+)
+BULK_COLLECTION_IMPORT_HARD_IDENTITY_CONFLICT_WARNINGS = (
+    "source_identity_conflict",
+    "duplicate_import_target",
+)
+
 BULK_COLLECTION_IMPORT_MERGE_PLAN_KEYS = (
     "schema",
     "version",
@@ -324,6 +338,66 @@ def serialize_bulk_collection_import_merge_plan(
     )
 
 
+def bulk_collection_import_identity_review_warnings(
+    resolution_status: str,
+    preview_warnings: Sequence[str],
+) -> tuple[str, ...]:
+    """Preserve the reason and source warnings for identity review."""
+
+    if resolution_status == "ambiguous":
+        reason = (
+            BULK_COLLECTION_IMPORT_IDENTITY_AMBIGUOUS_WARNING
+        )
+    elif resolution_status == "conflict":
+        reason = (
+            BULK_COLLECTION_IMPORT_IDENTITY_CONFLICT_WARNING
+        )
+    else:
+        raise BulkCollectionImportMergeError(
+            "Identity review requires ambiguous or conflict status."
+        )
+
+    if (
+        isinstance(preview_warnings, (str, bytes, bytearray))
+        or not isinstance(preview_warnings, Sequence)
+    ):
+        raise BulkCollectionImportMergeError(
+            "Identity review warnings must be a sequence."
+        )
+
+    warnings = [
+        BULK_COLLECTION_IMPORT_IDENTITY_REVIEW_REQUIRED_WARNING,
+        reason,
+    ]
+    for warning in preview_warnings:
+        if not isinstance(warning, str) or not warning:
+            raise BulkCollectionImportMergeError(
+                "Identity review warning codes must be "
+                "non-empty strings."
+            )
+        if warning not in warnings:
+            warnings.append(warning)
+
+    hard_conflicts = {
+        warning
+        for warning in warnings
+        if warning
+        in BULK_COLLECTION_IMPORT_HARD_IDENTITY_CONFLICT_WARNINGS
+    }
+    if resolution_status == "ambiguous" and hard_conflicts:
+        raise BulkCollectionImportMergeError(
+            "Ambiguous identity review cannot contain a hard "
+            "identity-conflict warning."
+        )
+    if resolution_status == "conflict" and not hard_conflicts:
+        raise BulkCollectionImportMergeError(
+            "Conflicting identity review requires a known hard "
+            "identity-conflict warning."
+        )
+
+    return tuple(warnings)
+
+
 def _build_identity_review_item(
     preview_item: Any,
 ) -> BulkCollectionImportMergeItem:
@@ -336,7 +410,10 @@ def _build_identity_review_item(
         title_decision=None,
         source_reference_additions=(),
         attribute_decisions=(),
-        warnings=("identity_review_required",),
+        warnings=bulk_collection_import_identity_review_warnings(
+            preview_item.resolution_status,
+            preview_item.warnings,
+        ),
     )
 
 
@@ -829,6 +906,10 @@ __all__ = [
     "BULK_COLLECTION_IMPORT_MERGE_VERSION",
     "BULK_COLLECTION_IMPORT_MERGE_ACTIONS",
     "BULK_COLLECTION_IMPORT_MERGE_VALUE_ACTIONS",
+    "BULK_COLLECTION_IMPORT_IDENTITY_REVIEW_REQUIRED_WARNING",
+    "BULK_COLLECTION_IMPORT_IDENTITY_AMBIGUOUS_WARNING",
+    "BULK_COLLECTION_IMPORT_IDENTITY_CONFLICT_WARNING",
+    "BULK_COLLECTION_IMPORT_HARD_IDENTITY_CONFLICT_WARNINGS",
     "BULK_COLLECTION_IMPORT_MERGE_PLAN_KEYS",
     "BULK_COLLECTION_IMPORT_MERGE_SUMMARY_KEYS",
     "BULK_COLLECTION_IMPORT_MERGE_ITEM_KEYS",
@@ -840,6 +921,7 @@ __all__ = [
     "BulkCollectionImportMergeGroup",
     "BulkCollectionImportMergePlan",
     "build_bulk_collection_import_merge_plan",
+    "bulk_collection_import_identity_review_warnings",
     "bulk_collection_import_merge_plan_to_document",
     "serialize_bulk_collection_import_merge_plan",
 ]
