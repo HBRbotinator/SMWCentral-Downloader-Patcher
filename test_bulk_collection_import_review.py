@@ -6,6 +6,26 @@ import json
 import unittest
 from copy import deepcopy
 
+from bulk_collection_import import (
+    BulkCollectionImportSourceReference,
+)
+from bulk_collection_import_merge import (
+    BulkCollectionImportMergeGroup,
+    BulkCollectionImportMergeItem,
+    BulkCollectionImportMergePlan,
+    BulkCollectionImportMergeValueDecision,
+)
+from bulk_collection_import_review import (
+    BULK_COLLECTION_IMPORT_REVIEW_ACTIONS,
+    BULK_COLLECTION_IMPORT_REVIEW_CONFLICT_CHOICES,
+    BULK_COLLECTION_IMPORT_REVIEW_SCHEMA,
+    BULK_COLLECTION_IMPORT_REVIEW_VERSION,
+    BulkCollectionImportReviewError,
+    bulk_collection_import_review_decisions_to_document,
+    parse_bulk_collection_import_review_decisions,
+    serialize_bulk_collection_import_review_decisions,
+)
+
 
 REVIEW_DECISION_SCHEMA = "smwc-bulk-collection-review-decisions"
 REVIEW_DECISION_VERSION = 1
@@ -634,6 +654,177 @@ class BulkCollectionImportReviewSpecificationTest(
                 "test_valid_decisions_preserve_review_order_and_choices",
             },
         )
+
+
+def _freeze_test_value(value):
+    if isinstance(value, list):
+        return tuple(_freeze_test_value(item) for item in value)
+    if isinstance(value, dict):
+        return {
+            key: _freeze_test_value(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _merge_value_decision_from_document(document):
+    if document is None:
+        return None
+    return BulkCollectionImportMergeValueDecision(
+        field=document["field"],
+        action=document["action"],
+        existing_value=_freeze_test_value(
+            document["existing_value"]
+        ),
+        imported_value=_freeze_test_value(
+            document["imported_value"]
+        ),
+    )
+
+
+def _merge_plan_from_document(document):
+    return BulkCollectionImportMergePlan(
+        schema=document["schema"],
+        version=document["version"],
+        import_id=document["import_id"],
+        summary=dict(document["summary"]),
+        items=tuple(
+            BulkCollectionImportMergeItem(
+                entry_key=item["entry_key"],
+                action=item["action"],
+                collection_keys=tuple(
+                    item["collection_keys"]
+                ),
+                title_decision=(
+                    _merge_value_decision_from_document(
+                        item["title_decision"]
+                    )
+                ),
+                source_reference_additions=tuple(
+                    BulkCollectionImportSourceReference(
+                        source=reference["source"],
+                        external_id=reference["external_id"],
+                    )
+                    for reference
+                    in item["source_reference_additions"]
+                ),
+                attribute_decisions=tuple(
+                    _merge_value_decision_from_document(
+                        decision
+                    )
+                    for decision in item["attribute_decisions"]
+                ),
+                warnings=tuple(item["warnings"]),
+            )
+            for item in document["items"]
+        ),
+        groups=tuple(
+            BulkCollectionImportMergeGroup(
+                group_key=group["group_key"],
+                title=group["title"],
+                entry_keys=tuple(group["entry_keys"]),
+            )
+            for group in document["groups"]
+        ),
+    )
+
+
+class BulkCollectionImportReviewImplementationTest(
+    BulkCollectionImportReviewContractMixin,
+    unittest.TestCase,
+):
+    """Run the review contract against production code."""
+
+    def parse_merge_plan(self, document):
+        return _merge_plan_from_document(document)
+
+    def parse_review_decisions(
+        self,
+        document,
+        merge_plan,
+        source_sha256,
+    ):
+        return parse_bulk_collection_import_review_decisions(
+            document,
+            merge_plan,
+            source_sha256,
+        )
+
+    def review_to_document(self, decisions):
+        return bulk_collection_import_review_decisions_to_document(
+            decisions
+        )
+
+    def serialize_review(self, decisions):
+        return serialize_bulk_collection_import_review_decisions(
+            decisions
+        )
+
+    def assert_review_error(
+        self,
+        document,
+        merge_plan,
+        source_sha256=SOURCE_SHA256,
+    ):
+        with self.assertRaises(BulkCollectionImportReviewError):
+            parse_bulk_collection_import_review_decisions(
+                document,
+                merge_plan,
+                source_sha256,
+            )
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_REVIEW_SCHEMA,
+            REVIEW_DECISION_SCHEMA,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_REVIEW_VERSION,
+            REVIEW_DECISION_VERSION,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_REVIEW_ACTIONS,
+            REVIEW_ACTIONS,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_REVIEW_CONFLICT_CHOICES,
+            CONFLICT_CHOICES,
+        )
+
+    def test_uppercase_or_malformed_hash_is_rejected(self):
+        merge_plan = self.parse_merge_plan(
+            deepcopy(MERGE_DOCUMENT)
+        )
+
+        for value in (
+            SOURCE_SHA256.upper(),
+            "not-a-hash",
+            "a" * 63,
+            "a" * 65,
+        ):
+            document = deepcopy(VALID_DECISION_DOCUMENT)
+            document["source_sha256"] = value
+
+            with self.subTest(value=value):
+                self.assert_review_error(
+                    document,
+                    merge_plan,
+                )
+
+    def test_metadata_create_new_is_not_a_conflict_resolution(self):
+        merge_plan = self.parse_merge_plan(
+            deepcopy(MERGE_DOCUMENT)
+        )
+        document = deepcopy(VALID_DECISION_DOCUMENT)
+        document["decisions"][0] = {
+            "entry_key": "metadata-review",
+            "action": "create_new",
+            "selected_collection_key": None,
+            "title_choice": None,
+            "attribute_choices": [],
+        }
+
+        self.assert_review_error(document, merge_plan)
 
 
 if __name__ == "__main__":
