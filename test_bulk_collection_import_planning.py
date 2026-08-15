@@ -9,6 +9,24 @@ from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from bulk_collection_import import (
+    bulk_collection_import_to_document,
+)
+from bulk_collection_import_identity import (
+    bulk_collection_identity_plan_to_document,
+)
+from bulk_collection_import_merge import (
+    bulk_collection_import_merge_plan_to_document,
+)
+from bulk_collection_import_planning import (
+    BULK_COLLECTION_IMPORT_PLANNING_STAGES,
+    BulkCollectionImportPlanningError,
+    plan_bulk_collection_import_file,
+)
+from bulk_collection_import_preview import (
+    bulk_collection_import_preview_to_document,
+)
+
 
 PLANNING_STAGES = ("load", "identity", "preview", "merge")
 
@@ -70,7 +88,7 @@ COLLECTION_IDENTITIES = (
         "collection_key": "collection-hybrid",
         "title": "Hybrid Match",
         "aliases": [],
-        "authors": ["Author One"],
+        "attributes": {"authors": ["Author One"]},
         "source_references": [
             {"source": "smwc", "external_id": "500"}
         ],
@@ -79,21 +97,21 @@ COLLECTION_IDENTITIES = (
         "collection_key": "collection-review-a",
         "title": "Shared Name",
         "aliases": [],
-        "authors": ["Shared Author"],
+        "attributes": {"authors": ["Shared Author"]},
         "source_references": [],
     },
     {
         "collection_key": "collection-review-b",
         "title": "Shared Name",
         "aliases": [],
-        "authors": ["Shared Author"],
+        "attributes": {"authors": ["Shared Author"]},
         "source_references": [],
     },
     {
         "collection_key": "collection-unrelated",
         "title": "Unrelated",
         "aliases": [],
-        "authors": ["Someone Else"],
+        "attributes": {"authors": ["Someone Else"]},
         "source_references": [
             {"source": "smwc", "external_id": "999"}
         ],
@@ -483,6 +501,105 @@ class BulkCollectionImportPlanningSpecificationTest(
                 "test_valid_file_builds_complete_read_only_session",
             },
         )
+
+
+class BulkCollectionImportPlanningImplementationTest(
+    BulkCollectionImportPlanningContractMixin,
+    unittest.TestCase,
+):
+    """Run the orchestration contract against production code."""
+
+    def plan_import_file(
+        self,
+        path,
+        collection_identities,
+        collection_records,
+    ):
+        return plan_bulk_collection_import_file(
+            path,
+            collection_identities,
+            collection_records,
+        )
+
+    def import_to_document(self, import_document):
+        return bulk_collection_import_to_document(import_document)
+
+    def identity_to_document(self, identity_plan):
+        return bulk_collection_identity_plan_to_document(
+            identity_plan
+        )
+
+    def preview_to_document(self, preview_plan):
+        return bulk_collection_import_preview_to_document(
+            preview_plan
+        )
+
+    def merge_to_document(self, merge_plan):
+        return bulk_collection_import_merge_plan_to_document(
+            merge_plan
+        )
+
+    def assert_planning_error(
+        self,
+        expected_stage,
+        path,
+        collection_identities,
+        collection_records,
+    ):
+        with self.assertRaises(
+            BulkCollectionImportPlanningError
+        ) as context:
+            plan_bulk_collection_import_file(
+                path,
+                collection_identities,
+                collection_records,
+            )
+        self.assertEqual(
+            context.exception.stage,
+            expected_stage,
+        )
+        self.assertIsNotNone(context.exception.__cause__)
+
+    def test_production_stage_names_match_specification(self):
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PLANNING_STAGES,
+            PLANNING_STAGES,
+        )
+
+    def test_unrelated_records_are_not_required_by_merge_planner(self):
+        with TemporaryDirectory() as directory:
+            path, _ = self._write_import(directory)
+            records = [
+                deepcopy(COLLECTION_RECORDS[0]),
+                {
+                    "collection_key": "unrelated-minimal",
+                    "this": "record is deliberately not merge-shaped",
+                },
+            ]
+
+            session = plan_bulk_collection_import_file(
+                path,
+                deepcopy(COLLECTION_IDENTITIES),
+                records,
+            )
+
+            self.assertEqual(
+                session.merge_plan.items[0].collection_keys,
+                ("collection-hybrid",),
+            )
+
+    def test_duplicate_matched_records_fail_in_merge_stage(self):
+        with TemporaryDirectory() as directory:
+            path, _ = self._write_import(directory)
+            matched = deepcopy(COLLECTION_RECORDS[0])
+            records = [matched, deepcopy(matched)]
+
+            self.assert_planning_error(
+                "merge",
+                path,
+                deepcopy(COLLECTION_IDENTITIES),
+                records,
+            )
 
 
 if __name__ == "__main__":
