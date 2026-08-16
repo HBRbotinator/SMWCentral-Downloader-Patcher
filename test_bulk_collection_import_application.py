@@ -7,6 +7,17 @@ import json
 import unittest
 from copy import deepcopy
 
+from bulk_collection_import_application import (
+    BULK_COLLECTION_IMPORT_APPLICATION_ACTIONS,
+    BULK_COLLECTION_IMPORT_APPLICATION_SCHEMA,
+    BULK_COLLECTION_IMPORT_APPLICATION_VERSION,
+    BulkCollectionImportApplicationError,
+    build_bulk_collection_import_application_plan,
+    bulk_collection_import_application_plan_to_document,
+    bulk_collection_import_shared_record_sha256,
+    serialize_bulk_collection_import_application_plan,
+)
+
 APPLICATION_PLAN_SCHEMA = "smwc-bulk-collection-application-plan"
 APPLICATION_PLAN_VERSION = 1
 APPLICATION_ACTIONS = (
@@ -431,6 +442,95 @@ class BulkCollectionImportApplicationSpecificationTest(unittest.TestCase):
     def test_plan_is_not_itself_a_write_api(self):
         for action in ("save", "persist", "delete", "overwrite"):
             self.assertNotIn(action, APPLICATION_ACTIONS)
+
+
+class BulkCollectionImportApplicationImplementationTest(
+    BulkCollectionImportApplicationContractMixin,
+    unittest.TestCase,
+):
+    """Run the application-plan contract against production code."""
+
+    def build_application_plan(
+        self,
+        resolution_document,
+        new_collection_keys,
+        collection_records,
+    ):
+        return build_bulk_collection_import_application_plan(
+            resolution_document,
+            new_collection_keys,
+            collection_records,
+        )
+
+    def application_to_document(self, plan):
+        return bulk_collection_import_application_plan_to_document(
+            plan
+        )
+
+    def serialize_application(self, plan):
+        return serialize_bulk_collection_import_application_plan(
+            plan
+        )
+
+    def assert_application_error(
+        self,
+        resolution_document,
+        new_collection_keys,
+        collection_records,
+    ):
+        with self.assertRaises(BulkCollectionImportApplicationError):
+            build_bulk_collection_import_application_plan(
+                resolution_document,
+                new_collection_keys,
+                collection_records,
+            )
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_APPLICATION_SCHEMA,
+            APPLICATION_PLAN_SCHEMA,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_APPLICATION_VERSION,
+            APPLICATION_PLAN_VERSION,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_APPLICATION_ACTIONS,
+            APPLICATION_ACTIONS,
+        )
+
+    def test_production_shared_fingerprint_matches_contract(self):
+        for record in COLLECTION_RECORDS:
+            with self.subTest(
+                collection_key=record["collection_key"]
+            ):
+                self.assertEqual(
+                    bulk_collection_import_shared_record_sha256(
+                        record
+                    ),
+                    shared_record_sha256(record),
+                )
+
+    def test_user_state_changes_do_not_change_production_fingerprint(self):
+        record = deepcopy(COLLECTION_RECORDS[0])
+        changed = deepcopy(record)
+        changed["user_state"]["completed"] = False
+        changed["user_state"]["notes"] = "Changed"
+
+        self.assertEqual(
+            bulk_collection_import_shared_record_sha256(record),
+            bulk_collection_import_shared_record_sha256(changed),
+        )
+
+    def test_nonfinite_shared_state_is_rejected(self):
+        records = list(deepcopy(COLLECTION_RECORDS))
+        records[0]["attributes"]["score"] = float("nan")
+
+        self.assert_application_error(
+            deepcopy(RESOLUTION_DOCUMENT),
+            deepcopy(NEW_COLLECTION_KEYS),
+            tuple(records),
+        )
 
 
 if __name__ == "__main__":
