@@ -6,6 +6,16 @@ import json
 import unittest
 from copy import deepcopy
 
+from bulk_collection_import_persistence import (
+    BULK_COLLECTION_IMPORT_PERSISTENCE_RESULT_SCHEMA,
+    BULK_COLLECTION_IMPORT_PERSISTENCE_RESULT_VERSION,
+    BULK_COLLECTION_IMPORT_PERSISTENCE_OUTCOMES,
+    BulkCollectionImportPersistenceError,
+    bulk_collection_import_persistence_result_to_document,
+    execute_bulk_collection_import_application_plan,
+    serialize_bulk_collection_import_persistence_result,
+)
+
 
 PERSISTENCE_RESULT_SCHEMA = "smwc-bulk-collection-persistence-result"
 PERSISTENCE_RESULT_VERSION = 1
@@ -315,6 +325,240 @@ class BulkCollectionImportPersistenceSpecificationTest(unittest.TestCase):
         serialized = json.dumps(APPLICATION_PLAN)
         for forbidden in ("database_path", "sqlite", "json_path", "planner", "wheel"):
             self.assertNotIn(forbidden, serialized)
+
+
+class _InMemoryPersistenceStore:
+    def __init__(self, records, fingerprints):
+        self.records = deepcopy(records)
+        self.fingerprints = dict(fingerprints)
+        self.commit_count = 0
+        self.rollback_count = 0
+        self.total_write_count = 0
+        self.write_counts = {
+            key: 0
+            for key in self.records
+        }
+        self.fail_on_write_number = None
+
+    def record_exists(self, collection_key):
+        return collection_key in self.records
+
+    def shared_sha256(self, collection_key):
+        if collection_key not in self.records:
+            return None
+        return self.fingerprints.get(collection_key)
+
+    def begin_transaction(self):
+        return _InMemoryPersistenceTransaction(self)
+
+
+class _InMemoryPersistenceTransaction:
+    def __init__(self, store):
+        self.store = store
+        self.records = deepcopy(store.records)
+        self.write_counts = dict(store.write_counts)
+        self.write_number = 0
+        self.finished = False
+
+    def _before_write(self, collection_key):
+        self.write_number += 1
+        self.store.total_write_count += 1
+        if (
+            self.store.fail_on_write_number is not None
+            and self.write_number
+            == self.store.fail_on_write_number
+        ):
+            raise RuntimeError("injected staged write failure")
+        self.write_counts.setdefault(collection_key, 0)
+        self.write_counts[collection_key] += 1
+
+    def create_record(
+        self,
+        *,
+        collection_key,
+        title,
+        source_references,
+        attributes,
+        user_state,
+    ):
+        self._before_write(collection_key)
+        if collection_key in self.records:
+            raise RuntimeError("create collision")
+        self.records[collection_key] = {
+            "collection_key": collection_key,
+            "title": title,
+            "source_references": deepcopy(source_references),
+            "attributes": deepcopy(attributes),
+            "user_state": deepcopy(user_state),
+        }
+
+    def update_record(
+        self,
+        *,
+        collection_key,
+        title_value,
+        source_reference_additions,
+        attribute_changes,
+    ):
+        self._before_write(collection_key)
+        record = self.records[collection_key]
+
+        if title_value is not None:
+            record["title"] = title_value
+
+        existing_references = {
+            (value["source"], value["external_id"])
+            for value in record["source_references"]
+        }
+        for reference in source_reference_additions:
+            key = (
+                reference["source"],
+                reference["external_id"],
+            )
+            if key not in existing_references:
+                record["source_references"].append(
+                    deepcopy(reference)
+                )
+                existing_references.add(key)
+
+        for change in attribute_changes:
+            record["attributes"][change["field"]] = deepcopy(
+                change["value"]
+            )
+
+    def commit(self):
+        if self.finished:
+            raise RuntimeError("transaction already finished")
+        self.store.records = self.records
+        self.store.write_counts = self.write_counts
+        self.store.commit_count += 1
+        self.finished = True
+
+    def rollback(self):
+        if self.finished:
+            return
+        self.store.rollback_count += 1
+        self.finished = True
+
+
+class BulkCollectionImportPersistenceImplementationTest(
+    BulkCollectionImportPersistenceContractMixin,
+    unittest.TestCase,
+):
+    """Run the persistence contract against production code."""
+
+    def execute_application_plan(self, application_plan, store):
+        return execute_bulk_collection_import_application_plan(
+            application_plan,
+            store,
+        )
+
+    def make_store(self, records, fingerprints):
+        return _InMemoryPersistenceStore(
+            records,
+            fingerprints,
+        )
+
+    def result_to_document(self, result):
+        return bulk_collection_import_persistence_result_to_document(
+            result
+        )
+
+    def serialize_result(self, result):
+        return serialize_bulk_collection_import_persistence_result(
+            result
+        )
+
+    def assert_persistence_error(self, application_plan, store):
+        with self.assertRaises(BulkCollectionImportPersistenceError):
+            execute_bulk_collection_import_application_plan(
+                application_plan,
+                store,
+            )
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PERSISTENCE_RESULT_SCHEMA,
+            PERSISTENCE_RESULT_SCHEMA,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PERSISTENCE_RESULT_VERSION,
+            PERSISTENCE_RESULT_VERSION,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_PERSISTENCE_OUTCOMES,
+            PERSISTENCE_OUTCOMES,
+        )
+
+    def test_preflight_does_not_open_transaction_on_stale_state(self):
+        store = self._store()
+        store.fingerprints["collection-source-update"] = "f" * 64
+        transaction_calls = []
+        original = store.begin_transaction
+
+        def tracked_begin_transaction():
+            transaction_calls.append(True)
+            return original()
+
+        store.begin_transaction = tracked_begin_transaction
+
+        self.assert_persistence_error(
+            deepcopy(APPLICATION_PLAN),
+            store,
+        )
+        self.assertEqual(transaction_calls, [])
+
+    def test_success_commits_exactly_create_and_update_writes(self):
+        store = self._store()
+
+        self.execute_application_plan(
+            deepcopy(APPLICATION_PLAN),
+            store,
+        )
+
+        self.assertEqual(store.total_write_count, 3)
+        self.assertEqual(
+            store.write_counts["collection-source-update"],
+            1,
+        )
+        self.assertEqual(
+            store.write_counts["collection-metadata-update"],
+            1,
+        )
+        self.assertEqual(
+            store.write_counts["collection-unchanged"],
+            0,
+        )
+
+    def test_duplicate_source_addition_is_idempotent_in_store_adapter(self):
+        store = self._store()
+        store.records["collection-source-update"][
+            "source_references"
+        ].append(
+            {
+                "source": "kaizoff",
+                "external_id": "source-update",
+            }
+        )
+
+        self.execute_application_plan(
+            deepcopy(APPLICATION_PLAN),
+            store,
+        )
+
+        references = store.records["collection-source-update"][
+            "source_references"
+        ]
+        matches = [
+            value
+            for value in references
+            if (
+                value["source"],
+                value["external_id"],
+            )
+            == ("kaizoff", "source-update")
+        ]
+        self.assertEqual(len(matches), 1)
 
 
 if __name__ == "__main__":
