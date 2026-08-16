@@ -5,6 +5,16 @@ from __future__ import annotations
 import json
 import unittest
 
+from bulk_collection_import_resolution import (
+    BULK_COLLECTION_IMPORT_RESOLUTION_ACTIONS,
+    BULK_COLLECTION_IMPORT_RESOLUTION_SCHEMA,
+    BULK_COLLECTION_IMPORT_RESOLUTION_VERSION,
+    BulkCollectionImportResolutionError,
+    build_bulk_collection_import_resolution_plan,
+    bulk_collection_import_resolution_plan_to_document,
+    serialize_bulk_collection_import_resolution_plan,
+)
+
 
 RESOLUTION_PLAN_SCHEMA = "smwc-bulk-collection-resolution-plan"
 RESOLUTION_PLAN_VERSION = 1
@@ -642,6 +652,112 @@ class BulkCollectionImportResolutionSpecificationTest(unittest.TestCase):
             "collection_position",
         ):
             self.assertNotIn(forbidden, serialized)
+
+
+class BulkCollectionImportResolutionImplementationTest(
+    BulkCollectionImportResolutionContractMixin,
+    unittest.TestCase,
+):
+    """Run the resolution contract against production code."""
+
+    def build_resolution_plan(
+        self,
+        import_entries,
+        merge_items,
+        review_decisions,
+        collection_records,
+        groups,
+        import_id,
+        source_sha256,
+    ):
+        return build_bulk_collection_import_resolution_plan(
+            import_entries,
+            merge_items,
+            review_decisions,
+            collection_records,
+            groups,
+            import_id,
+            source_sha256,
+        )
+
+    def resolution_to_document(self, plan):
+        return bulk_collection_import_resolution_plan_to_document(
+            plan
+        )
+
+    def serialize_resolution(self, plan):
+        return serialize_bulk_collection_import_resolution_plan(
+            plan
+        )
+
+    def assert_resolution_error(self, **kwargs):
+        with self.assertRaises(BulkCollectionImportResolutionError):
+            build_bulk_collection_import_resolution_plan(**kwargs)
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_RESOLUTION_SCHEMA,
+            RESOLUTION_PLAN_SCHEMA,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_RESOLUTION_VERSION,
+            RESOLUTION_PLAN_VERSION,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_RESOLUTION_ACTIONS,
+            RESOLUTION_ACTIONS,
+        )
+
+    def test_source_identity_additions_survive_safe_update(self):
+        plan = self._build()
+        item = plan.items[0]
+
+        self.assertEqual(
+            tuple(
+                (reference.source, reference.external_id)
+                for reference in item.source_reference_additions
+            ),
+            (("kaizoff", "safe-update"),),
+        )
+
+    def test_selected_record_missing_attribute_becomes_safe_update(self):
+        records = list(COLLECTION_RECORDS)
+        records[-1] = {
+            **records[-1],
+            "attributes": {"authors": ["Author Five"]},
+        }
+
+        plan = self._build(collection_records=tuple(records))
+        item = next(
+            value
+            for value in plan.items
+            if value.entry_key == "ambiguous-select"
+        )
+
+        self.assertEqual(item.action, "update_record")
+        self.assertEqual(
+            tuple(
+                (change.field, change.value)
+                for change in item.attribute_changes
+            ),
+            (("exit_count", 15),),
+        )
+
+    def test_nonfinite_shared_metadata_is_rejected(self):
+        entries = dict(IMPORT_ENTRIES)
+        entry = dict(entries["safe-create"])
+        entry["attributes"] = {"rating": float("nan")}
+        entries["safe-create"] = entry
+
+        self.assert_resolution_error(
+            import_entries=entries,
+            merge_items=MERGE_ITEMS,
+            review_decisions=REVIEW_DECISIONS,
+            collection_records=COLLECTION_RECORDS,
+            groups=GROUPS,
+            import_id="resolution-suite",
+            source_sha256=SOURCE_SHA256,
+        )
 
 
 if __name__ == "__main__":
