@@ -6,6 +6,22 @@ import json
 import unittest
 from copy import deepcopy
 
+import tempfile
+from pathlib import Path
+
+from bulk_collection_import_collection_adapter import (
+    COLLECTION_IMPORT_EXTENSION_KEY as PRODUCTION_EXTENSION_KEY,
+    COLLECTION_IMPORT_EXTENSION_KEYS as PRODUCTION_EXTENSION_KEYS,
+    COLLECTION_IMPORT_EXTENSION_VERSION as PRODUCTION_EXTENSION_VERSION,
+    CORE_SHARED_ATTRIBUTE_KEYS as PRODUCTION_CORE_SHARED_ATTRIBUTE_KEYS,
+    BulkCollectionImportCollectionProjectionError,
+    bulk_collection_import_collection_identities_to_documents,
+    bulk_collection_import_collection_records_to_documents,
+    project_bulk_collection_import_collection,
+    project_bulk_collection_import_hack_data_manager,
+)
+from hack_data_manager import HackDataManager
+
 
 COLLECTION_IMPORT_EXTENSION_KEY = "bulk_collection_import"
 COLLECTION_IMPORT_EXTENSION_VERSION = 1
@@ -487,6 +503,121 @@ class BulkCollectionImportCollectionProjectionSpecificationTest(
             EXPECTED_RECORD_SNAPSHOTS[0]["user_state"],
             {},
         )
+
+
+class BulkCollectionImportCollectionProjectionImplementationTest(
+    BulkCollectionImportCollectionProjectionContractMixin,
+    unittest.TestCase,
+):
+    """Run the v5.1 Collection projection contract against production."""
+
+    def project_collection(self, collection):
+        return project_bulk_collection_import_collection(
+            collection
+        )
+
+    def identities_to_documents(self, projection):
+        return (
+            bulk_collection_import_collection_identities_to_documents(
+                projection
+            )
+        )
+
+    def records_to_documents(self, projection):
+        return (
+            bulk_collection_import_collection_records_to_documents(
+                projection
+            )
+        )
+
+    def assert_projection_error(self, collection):
+        with self.assertRaises(
+            BulkCollectionImportCollectionProjectionError
+        ):
+            project_bulk_collection_import_collection(collection)
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            PRODUCTION_EXTENSION_KEY,
+            COLLECTION_IMPORT_EXTENSION_KEY,
+        )
+        self.assertEqual(
+            PRODUCTION_EXTENSION_VERSION,
+            COLLECTION_IMPORT_EXTENSION_VERSION,
+        )
+        self.assertEqual(
+            PRODUCTION_EXTENSION_KEYS,
+            COLLECTION_IMPORT_EXTENSION_KEYS,
+        )
+        self.assertEqual(
+            PRODUCTION_CORE_SHARED_ATTRIBUTE_KEYS,
+            CORE_SHARED_ATTRIBUTE_KEYS,
+        )
+
+    def test_live_hack_data_manager_projects_its_data_read_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "processed.json"
+            path.write_text(
+                json.dumps(RAW_COLLECTION, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            manager = HackDataManager(str(path))
+            before = deepcopy(manager.data)
+
+            projection = (
+                project_bulk_collection_import_hack_data_manager(
+                    manager
+                )
+            )
+
+            self.assertEqual(
+                tuple(
+                    identity.collection_key
+                    for identity in projection.identities
+                ),
+                tuple(RAW_COLLECTION),
+            )
+            self.assertEqual(manager.data, before)
+
+    def test_wrong_manager_type_is_rejected(self):
+        with self.assertRaises(TypeError):
+            project_bulk_collection_import_hack_data_manager(
+                object()
+            )
+
+    def test_extension_cannot_smuggle_user_owned_fields(self):
+        for field in (
+            "notes",
+            "personal_rating",
+            "time_to_beat",
+            "file_path",
+            "save_sync_metadata",
+        ):
+            collection = deepcopy(RAW_COLLECTION)
+            collection["usr_0"][
+                COLLECTION_IMPORT_EXTENSION_KEY
+            ] = {
+                "version": 1,
+                "aliases": [],
+                "source_references": [],
+                "attributes": {field: "unsafe"},
+            }
+
+            with self.subTest(field=field):
+                self.assert_projection_error(collection)
+
+    def test_nonfinite_extension_metadata_is_rejected(self):
+        collection = deepcopy(RAW_COLLECTION)
+        collection["usr_0"][
+            COLLECTION_IMPORT_EXTENSION_KEY
+        ] = {
+            "version": 1,
+            "aliases": [],
+            "source_references": [],
+            "attributes": {"score": float("nan")},
+        }
+
+        self.assert_projection_error(collection)
 
 
 if __name__ == "__main__":
