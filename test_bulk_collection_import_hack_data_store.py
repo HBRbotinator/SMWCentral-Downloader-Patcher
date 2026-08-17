@@ -8,6 +8,21 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from bulk_collection_import_application import (
+    bulk_collection_import_shared_record_sha256,
+)
+from bulk_collection_import_collection_adapter import (
+    bulk_collection_import_collection_records_to_documents,
+    project_bulk_collection_import_collection,
+)
+from bulk_collection_import_hack_data_store import (
+    BULK_IMPORT_EXTENSION_KEY as PRODUCTION_EXTENSION_KEY,
+    BULK_IMPORT_EXTENSION_VERSION as PRODUCTION_EXTENSION_VERSION,
+    BULK_IMPORT_TEMP_SUFFIX as PRODUCTION_TEMP_SUFFIX,
+    BulkCollectionImportHackDataStore,
+)
+from hack_data_manager import HackDataManager
+
 
 BULK_IMPORT_EXTENSION_KEY = "bulk_collection_import"
 BULK_IMPORT_EXTENSION_VERSION = 1
@@ -543,6 +558,108 @@ class BulkCollectionImportHackDataStoreSpecificationTest(
                 "release_date": "date",
             },
         )
+
+
+class BulkCollectionImportHackDataStoreImplementationTest(
+    BulkCollectionImportHackDataStoreContractMixin,
+    unittest.TestCase,
+):
+    """Run the Commit 110 contract against the real production adapter."""
+
+    def make_manager(self, path):
+        return HackDataManager(str(path))
+
+    def make_store(self, manager):
+        return BulkCollectionImportHackDataStore(manager)
+
+    def shared_sha256(self, record):
+        projection = project_bulk_collection_import_collection(
+            {"12345": record}
+        )
+        document = (
+            bulk_collection_import_collection_records_to_documents(
+                projection
+            )[0]
+        )
+        return bulk_collection_import_shared_record_sha256(document)
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            PRODUCTION_EXTENSION_KEY,
+            BULK_IMPORT_EXTENSION_KEY,
+        )
+        self.assertEqual(
+            PRODUCTION_EXTENSION_VERSION,
+            BULK_IMPORT_EXTENSION_VERSION,
+        )
+        self.assertEqual(
+            PRODUCTION_TEMP_SUFFIX,
+            BULK_IMPORT_TEMP_SUFFIX,
+        )
+
+    def test_commit_rejects_manager_change_after_transaction_begin(self):
+        _, path, manager, store = self._make()
+        before_bytes = path.read_bytes()
+
+        transaction = store.begin_transaction()
+        manager.data["usr_0"]["notes"] = "Concurrent edit"
+
+        with self.assertRaises(Exception):
+            transaction.commit()
+
+        self.assertEqual(path.read_bytes(), before_bytes)
+        self.assertEqual(
+            manager.data["usr_0"]["notes"],
+            "Concurrent edit",
+        )
+
+    def test_commit_rejects_external_disk_change_after_begin(self):
+        _, path, manager, store = self._make()
+        transaction = store.begin_transaction()
+
+        external = copy.deepcopy(INITIAL_COLLECTION)
+        external["usr_0"]["notes"] = "External disk edit"
+        self._write_collection(path, external)
+
+        with self.assertRaises(Exception):
+            transaction.commit()
+
+        self.assertEqual(
+            json.loads(path.read_text(encoding="utf-8"))["usr_0"][
+                "notes"
+            ],
+            "External disk edit",
+        )
+        self.assertEqual(
+            manager.data["usr_0"]["notes"],
+            "Unsaved note",
+        )
+
+    def test_existing_backup_is_restored_when_commit_fails(self):
+        root, path, _, store = self._make()
+        backup = root / "processed.json.backup"
+        backup.write_text(
+            "previous-backup",
+            encoding="utf-8",
+        )
+
+        transaction = store.begin_transaction()
+        transaction.update_record(
+            collection_key="12345",
+            title_value="Never Persist",
+            source_reference_additions=[],
+            attribute_changes=[],
+        )
+        transaction.fail_before_replace = True
+
+        with self.assertRaises(Exception):
+            transaction.commit()
+
+        self.assertEqual(
+            backup.read_text(encoding="utf-8"),
+            "previous-backup",
+        )
+        self.assertTrue(path.exists())
 
 
 if __name__ == "__main__":
