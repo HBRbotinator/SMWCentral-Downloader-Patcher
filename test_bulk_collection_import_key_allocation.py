@@ -7,6 +7,16 @@ import re
 import unittest
 from copy import deepcopy
 
+from bulk_collection_import_key_allocation import (
+    COLLECTION_IMPORT_LOCAL_KEY_HEX_LENGTH as PRODUCTION_LOCAL_KEY_HEX_LENGTH,
+    COLLECTION_IMPORT_LOCAL_KEY_PREFIX as PRODUCTION_LOCAL_KEY_PREFIX,
+    BulkCollectionImportKeyAllocationError,
+    allocate_bulk_collection_import_keys,
+    build_v5_1_bulk_collection_import_application_plan,
+    bulk_collection_import_key_assignments_to_document,
+    serialize_bulk_collection_import_key_assignments,
+)
+
 
 COLLECTION_IMPORT_LOCAL_KEY_PREFIX = "usr_import_"
 COLLECTION_IMPORT_LOCAL_KEY_HEX_LENGTH = 16
@@ -499,6 +509,165 @@ class BulkCollectionImportKeyAllocationSpecificationTest(
                 }
             ],
         )
+
+
+APPLICATION_COLLECTION_RECORDS = (
+    {
+        "collection_key": "11111",
+        "title": "Existing Update",
+        "source_references": [
+            {"source": "smwc", "external_id": "11111"}
+        ],
+        "attributes": {},
+        "user_state": {"notes": "ignored by generic planner"},
+    },
+    {
+        "collection_key": "usr_0",
+        "title": "Existing No Change",
+        "source_references": [],
+        "attributes": {},
+        "user_state": {"completed": True},
+    },
+)
+
+
+class BulkCollectionImportKeyAllocationImplementationTest(
+    BulkCollectionImportKeyAllocationContractMixin,
+    unittest.TestCase,
+):
+    """Run the Commit 108 allocation contract against production."""
+
+    def allocate_keys(
+        self,
+        resolution_document,
+        existing_collection_keys,
+    ):
+        return allocate_bulk_collection_import_keys(
+            resolution_document,
+            existing_collection_keys,
+        )
+
+    def assignments_to_document(self, assignments):
+        return bulk_collection_import_key_assignments_to_document(
+            assignments
+        )
+
+    def serialize_assignments(self, assignments):
+        return serialize_bulk_collection_import_key_assignments(
+            assignments
+        )
+
+    def assert_allocation_error(
+        self,
+        resolution_document,
+        existing_collection_keys,
+    ):
+        with self.assertRaises(BulkCollectionImportKeyAllocationError):
+            allocate_bulk_collection_import_keys(
+                resolution_document,
+                existing_collection_keys,
+            )
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            PRODUCTION_LOCAL_KEY_PREFIX,
+            COLLECTION_IMPORT_LOCAL_KEY_PREFIX,
+        )
+        self.assertEqual(
+            PRODUCTION_LOCAL_KEY_HEX_LENGTH,
+            COLLECTION_IMPORT_LOCAL_KEY_HEX_LENGTH,
+        )
+
+    def test_provider_reference_order_does_not_change_local_hash(self):
+        document = deepcopy(RESOLUTION_DOCUMENT)
+        item = document["items"][2]
+        item["source_reference_additions"].append(
+            {
+                "source": "catalogue-mirror",
+                "external_id": "mirror-42",
+            }
+        )
+        first = allocate_bulk_collection_import_keys(
+            document,
+            EXISTING_COLLECTION_KEYS,
+        )["kaizoff-only"]
+
+        item["source_reference_additions"].reverse()
+        second = allocate_bulk_collection_import_keys(
+            document,
+            EXISTING_COLLECTION_KEYS,
+        )["kaizoff-only"]
+
+        self.assertEqual(first, second)
+
+    def test_application_helper_feeds_allocator_into_generic_planner(self):
+        plan = build_v5_1_bulk_collection_import_application_plan(
+            deepcopy(RESOLUTION_DOCUMENT),
+            deepcopy(APPLICATION_COLLECTION_RECORDS),
+        )
+
+        creates = {
+            operation.entry_key: operation.collection_key
+            for operation in plan.operations
+            if operation.action == "create_record"
+        }
+
+        self.assertEqual(
+            creates["kaizoff-smwc-mirror"],
+            "12345",
+        )
+        self.assertEqual(
+            creates["smwc-direct"],
+            "67890",
+        )
+        self.assertRegex(
+            creates["kaizoff-only"],
+            r"^usr_import_[0-9a-f]{16}$",
+        )
+        self.assertRegex(
+            creates["source-less"],
+            r"^usr_import_[0-9a-f]{16}$",
+        )
+
+    def test_application_helper_preserves_existing_operation_targets(self):
+        plan = build_v5_1_bulk_collection_import_application_plan(
+            deepcopy(RESOLUTION_DOCUMENT),
+            deepcopy(APPLICATION_COLLECTION_RECORDS),
+        )
+
+        existing = {
+            operation.entry_key: operation.collection_key
+            for operation in plan.operations
+            if operation.action in ("update_record", "no_change")
+        }
+
+        self.assertEqual(
+            existing,
+            {
+                "existing-update": "11111",
+                "existing-no-change": "usr_0",
+            },
+        )
+
+    def test_application_helper_rejects_existing_smwc_collision(self):
+        records = list(deepcopy(APPLICATION_COLLECTION_RECORDS))
+        records.append(
+            {
+                "collection_key": "12345",
+                "title": "Already Exists",
+                "source_references": [
+                    {"source": "smwc", "external_id": "12345"}
+                ],
+                "attributes": {},
+                "user_state": {},
+            }
+        )
+
+        with self.assertRaises(BulkCollectionImportKeyAllocationError):
+            build_v5_1_bulk_collection_import_application_plan(
+                deepcopy(RESOLUTION_DOCUMENT),
+                tuple(records),
+            )
 
 
 if __name__ == "__main__":
