@@ -6,6 +6,21 @@ import json
 import unittest
 from copy import deepcopy
 
+import tempfile
+from pathlib import Path
+
+from bulk_collection_import_workflow_preview import (
+    WORKFLOW_PREVIEW_SCHEMA as PRODUCTION_WORKFLOW_PREVIEW_SCHEMA,
+    WORKFLOW_PREVIEW_VERSION as PRODUCTION_WORKFLOW_PREVIEW_VERSION,
+    WORKFLOW_ROW_OUTCOMES as PRODUCTION_WORKFLOW_ROW_OUTCOMES,
+    BulkCollectionImportWorkflowPreviewError,
+    build_bulk_collection_import_workflow_preview,
+    bulk_collection_import_workflow_preview_to_document,
+    plan_v5_1_bulk_collection_import_workflow_preview,
+    serialize_bulk_collection_import_workflow_preview,
+)
+from hack_data_manager import HackDataManager
+
 
 WORKFLOW_PREVIEW_SCHEMA = "smwc-bulk-collection-workflow-preview"
 WORKFLOW_PREVIEW_VERSION = 1
@@ -615,6 +630,159 @@ class BulkCollectionImportWorkflowPreviewSpecificationTest(
 
         self.assertEqual(metadata["outcome"], "match_existing")
         self.assertEqual(merge["action"], "review_required")
+
+
+class BulkCollectionImportWorkflowPreviewImplementationTest(
+    BulkCollectionImportWorkflowPreviewContractMixin,
+    unittest.TestCase,
+):
+    """Run the Commit 112 contract against the production workflow model."""
+
+    def build_preview(
+        self,
+        planning_session_document,
+        collection_snapshot,
+    ):
+        return build_bulk_collection_import_workflow_preview(
+            planning_session_document,
+            collection_snapshot,
+        )
+
+    def preview_to_document(self, preview):
+        return bulk_collection_import_workflow_preview_to_document(
+            preview
+        )
+
+    def serialize_preview(self, preview):
+        return serialize_bulk_collection_import_workflow_preview(
+            preview
+        )
+
+    def assert_preview_error(
+        self,
+        planning_session_document,
+        collection_snapshot,
+    ):
+        with self.assertRaises(BulkCollectionImportWorkflowPreviewError):
+            build_bulk_collection_import_workflow_preview(
+                planning_session_document,
+                collection_snapshot,
+            )
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            PRODUCTION_WORKFLOW_PREVIEW_SCHEMA,
+            WORKFLOW_PREVIEW_SCHEMA,
+        )
+        self.assertEqual(
+            PRODUCTION_WORKFLOW_PREVIEW_VERSION,
+            WORKFLOW_PREVIEW_VERSION,
+        )
+        self.assertEqual(
+            PRODUCTION_WORKFLOW_ROW_OUTCOMES,
+            WORKFLOW_ROW_OUTCOMES,
+        )
+
+    def test_real_file_path_plans_against_live_hack_data_manager(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            processed = root / "processed.json"
+            processed.write_text(
+                json.dumps(
+                    {
+                        "100": {
+                            "title": "Matched Hack",
+                            "current_difficulty": "Intermediate",
+                            "authors": ["Author One"],
+                            "exits": 10,
+                            "date": "",
+                            "completed": True,
+                            "personal_rating": 5,
+                            "notes": "must not appear",
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            import_path = root / "bulk-list.json"
+            import_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "smwc-bulk-collection-import",
+                        "version": 1,
+                        "import_id": "real-file-preview",
+                        "title": "Real File Preview",
+                        "entries": [
+                            {
+                                "entry_key": "matched",
+                                "title": "Matched Hack",
+                                "source_references": [
+                                    {
+                                        "source": "smwc",
+                                        "external_id": "100",
+                                    }
+                                ],
+                                "attributes": {
+                                    "authors": ["Author One"],
+                                    "exit_count": 10,
+                                },
+                            },
+                            {
+                                "entry_key": "new",
+                                "title": "New Hack",
+                                "source_references": [
+                                    {
+                                        "source": "smwc",
+                                        "external_id": "200",
+                                    }
+                                ],
+                                "attributes": {
+                                    "authors": ["Author Two"],
+                                    "exit_count": 20,
+                                },
+                            },
+                        ],
+                        "groups": [
+                            {
+                                "group_key": "all",
+                                "title": "All",
+                                "entry_keys": ["matched", "new"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            manager = HackDataManager(str(processed))
+            before = deepcopy(manager.data)
+
+            preview = plan_v5_1_bulk_collection_import_workflow_preview(
+                str(import_path),
+                manager,
+            )
+
+            self.assertEqual(preview.import_id, "real-file-preview")
+            self.assertEqual(
+                tuple(row.outcome for row in preview.rows),
+                ("match_existing", "add_new"),
+            )
+            self.assertEqual(manager.data, before)
+            self.assertNotIn(
+                "must not appear",
+                serialize_bulk_collection_import_workflow_preview(
+                    preview
+                ),
+            )
+
+    def test_real_file_path_rejects_wrong_manager_type(self):
+        with self.assertRaises(TypeError):
+            plan_v5_1_bulk_collection_import_workflow_preview(
+                "unused.json",
+                object(),
+            )
 
 
 if __name__ == "__main__":
