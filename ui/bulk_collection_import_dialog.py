@@ -1,11 +1,23 @@
-"""Read-only Tk preview dialog for bulk Collection imports."""
+"""Interactive review dialog for bulk Collection imports.
+
+This dialog can collect and validate review decisions, but it never resolves,
+applies, or persists Collection changes.
+"""
 
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Any
 
+from bulk_collection_import_review_form import (
+    REVIEW_KIND_AMBIGUOUS_IDENTITY,
+    REVIEW_KIND_HARD_IDENTITY_CONFLICT,
+    REVIEW_KIND_METADATA,
+    BulkCollectionImportReviewFormError,
+    build_bulk_collection_import_review_document,
+    build_bulk_collection_import_review_form,
+)
 from bulk_collection_import_workflow_preview import (
     BulkCollectionImportWorkflowPreview,
     BulkCollectionImportWorkflowRow,
@@ -18,12 +30,31 @@ _STATUS_LABELS = {
     "review_required": "Review",
 }
 
+_ACTION_LABELS = {
+    "select_existing": "Select Existing",
+    "create_new": "Create New",
+    "resolve_metadata": "Resolve Metadata",
+    "skip": "Skip",
+}
+
+_CHOICE_LABELS = {
+    "keep_existing": "Keep Existing",
+    "use_imported": "Use Imported",
+}
+
+_LABEL_TO_ACTION = {
+    label: action for action, label in _ACTION_LABELS.items()
+}
+_LABEL_TO_CHOICE = {
+    label: choice for choice, label in _CHOICE_LABELS.items()
+}
+
 
 class BulkCollectionImportDialog:
-    """Modal preview of one planned bulk Collection import."""
+    """Modal preview and explicit review-decision editor."""
 
-    MIN_WIDTH = 980
-    MIN_HEIGHT = 620
+    MIN_WIDTH = 1080
+    MIN_HEIGHT = 700
 
     def __init__(
         self,
@@ -31,6 +62,7 @@ class BulkCollectionImportDialog:
         preview: BulkCollectionImportWorkflowPreview,
         logger=None,
         on_close=None,
+        on_review_ready=None,
     ):
         if not isinstance(
             preview,
@@ -41,24 +73,61 @@ class BulkCollectionImportDialog:
             )
         if on_close is not None and not callable(on_close):
             raise TypeError("on_close must be callable or None")
+        if on_review_ready is not None and not callable(on_review_ready):
+            raise TypeError("on_review_ready must be callable or None")
 
         self.parent = parent
         self.preview = preview
         self.logger = logger
         self.on_close = on_close
+        self.on_review_ready = on_review_ready
+
+        self.review_form = build_bulk_collection_import_review_form(
+            preview
+        )
+        self.review_items_by_key = {
+            item.entry_key: item
+            for item in self.review_form.items
+        }
 
         self.window = None
         self.tree = None
         self.detail_var = None
+        self.review_frame = None
+        self.review_status_var = None
+        self.validate_button = None
         self._closed = False
+
         self._rows_by_key = {
             row.entry_key: row
             for row in preview.rows
         }
         self._group_titles = self._build_group_titles(preview)
 
+        # Plain-Python state mirrors the Tk controls and is intentionally
+        # initialized with no decisions.
+        self._selections = {}
+        self._action_vars = {}
+        self._candidate_vars = {}
+        self._conflict_vars = {}
+
+        self.validated_review_document = None
+
+    @property
+    def selections(self):
+        """Return detached current review selections."""
+
+        result = {}
+        for entry_key, selection in self._selections.items():
+            copied = dict(selection)
+            choices = copied.get("choices")
+            if choices is not None:
+                copied["choices"] = dict(choices)
+            result[entry_key] = copied
+        return result
+
     def show(self):
-        """Create and show the review-only modal dialog."""
+        """Create and show the modal review dialog."""
 
         if self.window is not None:
             try:
@@ -71,7 +140,7 @@ class BulkCollectionImportDialog:
 
         self.window = tk.Toplevel(self.parent)
         self.window.withdraw()
-        self.window.title("Bulk Collection Import Preview")
+        self.window.title("Bulk Collection Import Review")
         self.window.minsize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.window.geometry(
             f"{self.MIN_WIDTH}x{self.MIN_HEIGHT}"
@@ -86,6 +155,7 @@ class BulkCollectionImportDialog:
         self._build_header(container)
         self._build_table(container)
         self._build_detail(container)
+        self._build_review_panel(container)
         self._build_footer(container)
         self._populate_rows()
 
@@ -95,7 +165,7 @@ class BulkCollectionImportDialog:
         return self.window
 
     def close(self):
-        """Close the preview without changing Collection data."""
+        """Close without applying Collection changes."""
 
         if self._closed:
             return
@@ -113,6 +183,106 @@ class BulkCollectionImportDialog:
 
         if self.on_close is not None:
             self.on_close()
+
+    def set_review_action(
+        self,
+        entry_key: str,
+        action: str,
+        selected_collection_key: str | None = None,
+    ):
+        """Set one explicit identity/row action in plain review state."""
+
+        item = self._require_review_item(entry_key)
+        if action not in item.allowed_actions:
+            raise BulkCollectionImportReviewFormError(
+                f"Action {action!r} is not allowed for {entry_key}."
+            )
+
+        if action == "select_existing":
+            if selected_collection_key is None:
+                raise BulkCollectionImportReviewFormError(
+                    "Select Existing requires a Collection candidate."
+                )
+            candidate_keys = {
+                candidate.collection_key
+                for candidate in item.candidates
+            }
+            if selected_collection_key not in candidate_keys:
+                raise BulkCollectionImportReviewFormError(
+                    "Select Existing must use a displayed candidate."
+                )
+            selection = {
+                "action": action,
+                "selected_collection_key": selected_collection_key,
+            }
+        elif action == "resolve_metadata":
+            selection = {
+                "action": action,
+                "choices": {},
+            }
+        else:
+            selection = {"action": action}
+
+        self._selections[entry_key] = selection
+        self._invalidate_validation()
+
+    def set_metadata_choice(
+        self,
+        entry_key: str,
+        field: str,
+        choice: str,
+    ):
+        """Set one explicit Keep Existing / Use Imported field choice."""
+
+        item = self._require_review_item(entry_key)
+        if item.review_kind != REVIEW_KIND_METADATA:
+            raise BulkCollectionImportReviewFormError(
+                "Metadata choices are allowed only for metadata review."
+            )
+        conflict_fields = {
+            conflict.field for conflict in item.conflicts
+        }
+        if field not in conflict_fields:
+            raise BulkCollectionImportReviewFormError(
+                f"Unknown metadata conflict field: {field}"
+            )
+        if choice not in ("keep_existing", "use_imported"):
+            raise BulkCollectionImportReviewFormError(
+                "Metadata choice must be keep_existing or use_imported."
+            )
+
+        selection = self._selections.get(entry_key)
+        if (
+            selection is None
+            or selection.get("action") != "resolve_metadata"
+        ):
+            raise BulkCollectionImportReviewFormError(
+                "Choose Resolve Metadata before setting field choices."
+            )
+
+        selection["choices"][field] = choice
+        self._invalidate_validation()
+
+    def clear_review_selection(self, entry_key: str):
+        """Return one review row to the deliberately-unselected state."""
+
+        self._require_review_item(entry_key)
+        self._selections.pop(entry_key, None)
+        self._invalidate_validation()
+
+    def build_validated_review_document(self):
+        """Validate every explicit decision without resolving or applying it."""
+
+        document = build_bulk_collection_import_review_document(
+            self.review_form,
+            self.selections,
+        )
+        self.validated_review_document = document
+
+        if self.on_review_ready is not None:
+            self.on_review_ready(document)
+
+        return document
 
     def _build_header(self, parent):
         title = ttk.Label(
@@ -138,10 +308,10 @@ class BulkCollectionImportDialog:
         notice = ttk.Label(
             parent,
             text=(
-                "Review-only preview — no Collection changes "
-                "will be made from this dialog."
+                "Review decisions can be validated here, but no "
+                "Collection changes are applied from this dialog."
             ),
-            wraplength=920,
+            wraplength=1000,
         )
         notice.pack(anchor="w", pady=(4, 12))
 
@@ -165,8 +335,8 @@ class BulkCollectionImportDialog:
         headings = {
             "group": ("Group", 150, "w", False),
             "status": ("Status", 90, "center", False),
-            "title": ("Hack", 360, "w", True),
-            "target": ("Collection target", 260, "w", True),
+            "title": ("Hack", 380, "w", True),
+            "target": ("Collection target", 280, "w", True),
         }
         for column, values in headings.items():
             label, width, anchor, stretch = values
@@ -223,7 +393,30 @@ class BulkCollectionImportDialog:
             textvariable=self.detail_var,
             justify="left",
             anchor="w",
-            wraplength=900,
+            wraplength=1000,
+        ).pack(fill="x")
+
+    def _build_review_panel(self, parent):
+        self.review_frame = ttk.LabelFrame(
+            parent,
+            text="Review decision",
+            padding=10,
+        )
+        self.review_frame.pack(fill="x", pady=(12, 0))
+
+        self.review_status_var = tk.StringVar(
+            value=(
+                "Select a Review row to make an explicit decision."
+                if self.review_form.items
+                else "No review decisions are required."
+            )
+        )
+        ttk.Label(
+            self.review_frame,
+            textvariable=self.review_status_var,
+            anchor="w",
+            justify="left",
+            wraplength=1000,
         ).pack(fill="x")
 
     def _build_footer(self, parent):
@@ -233,8 +426,8 @@ class BulkCollectionImportDialog:
         ttk.Label(
             footer,
             text=(
-                "No changes are applied until a later review "
-                "and confirmation workflow is completed."
+                "Validation only — resolution and Collection writes "
+                "remain disabled."
             ),
         ).pack(side="left")
 
@@ -243,6 +436,17 @@ class BulkCollectionImportDialog:
             text="Close",
             command=self.close,
         ).pack(side="right")
+
+        if self.review_form.items:
+            self.validate_button = ttk.Button(
+                footer,
+                text="Validate Review",
+                command=self._validate_review_from_ui,
+            )
+            self.validate_button.pack(
+                side="right",
+                padx=(0, 10),
+            )
 
     def _populate_rows(self):
         if self.tree is None:
@@ -266,6 +470,7 @@ class BulkCollectionImportDialog:
             self.tree.focus(first)
             self.tree.see(first)
             self._show_row_details(self._rows_by_key[first])
+            self._render_review_controls(first)
 
     def _selection_changed(self, _event=None):
         if self.tree is None:
@@ -275,14 +480,316 @@ class BulkCollectionImportDialog:
         if not selection:
             return
 
-        row = self._rows_by_key.get(selection[0])
+        entry_key = selection[0]
+        row = self._rows_by_key.get(entry_key)
         if row is not None:
             self._show_row_details(row)
+        self._render_review_controls(entry_key)
 
-    def _show_row_details(self, row):
-        if self.detail_var is None:
+    def _render_review_controls(self, entry_key):
+        if self.review_frame is None:
             return
-        self.detail_var.set(self._detail_text(row))
+
+        for child in self.review_frame.winfo_children()[1:]:
+            child.destroy()
+
+        item = self.review_items_by_key.get(entry_key)
+        if item is None:
+            self.review_status_var.set(
+                "This row does not require a review decision."
+            )
+            return
+
+        self.review_status_var.set(
+            self._review_instruction(item)
+        )
+
+        action_var = tk.StringVar(value="")
+        self._action_vars[entry_key] = action_var
+
+        action_frame = ttk.Frame(self.review_frame)
+        action_frame.pack(fill="x", pady=(8, 0))
+
+        ttk.Label(
+            action_frame,
+            text="Decision:",
+        ).pack(side="left")
+
+        action_combo = ttk.Combobox(
+            action_frame,
+            textvariable=action_var,
+            state="readonly",
+            values=[
+                _ACTION_LABELS[action]
+                for action in item.allowed_actions
+            ],
+            width=24,
+        )
+        action_combo.pack(side="left", padx=(8, 0))
+        action_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event, key=entry_key: (
+                self._action_changed_from_ui(key)
+            ),
+        )
+
+        current = self._selections.get(entry_key)
+        if current is not None:
+            action_var.set(
+                _ACTION_LABELS[current["action"]]
+            )
+
+        self._render_action_specific_controls(item)
+
+    def _action_changed_from_ui(self, entry_key):
+        item = self._require_review_item(entry_key)
+        action_var = self._action_vars.get(entry_key)
+        label = action_var.get() if action_var is not None else ""
+        action = _LABEL_TO_ACTION.get(label)
+
+        self.clear_review_selection(entry_key)
+        if action is None:
+            self._render_review_controls(entry_key)
+            return
+
+        if action == "select_existing":
+            # No candidate is silently selected.
+            self._selections[entry_key] = {
+                "action": action,
+            }
+            self._invalidate_validation()
+        else:
+            self.set_review_action(entry_key, action)
+
+        self._render_review_controls(entry_key)
+
+    def _render_action_specific_controls(self, item):
+        selection = self._selections.get(item.entry_key)
+        if selection is None:
+            return
+
+        action = selection.get("action")
+        if action == "select_existing":
+            self._render_candidate_control(item)
+        elif action == "resolve_metadata":
+            self._render_metadata_controls(item)
+
+    def _render_candidate_control(self, item):
+        frame = ttk.Frame(self.review_frame)
+        frame.pack(fill="x", pady=(8, 0))
+
+        ttk.Label(
+            frame,
+            text="Existing Collection entry:",
+        ).pack(side="left")
+
+        candidate_var = tk.StringVar(value="")
+        self._candidate_vars[item.entry_key] = candidate_var
+        values = [
+            self._candidate_label(candidate)
+            for candidate in item.candidates
+        ]
+        combo = ttk.Combobox(
+            frame,
+            textvariable=candidate_var,
+            state="readonly",
+            values=values,
+            width=55,
+        )
+        combo.pack(side="left", padx=(8, 0))
+        combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event, key=item.entry_key: (
+                self._candidate_changed_from_ui(key)
+            ),
+        )
+
+        selected_key = self._selections[item.entry_key].get(
+            "selected_collection_key"
+        )
+        if selected_key:
+            candidate = next(
+                candidate
+                for candidate in item.candidates
+                if candidate.collection_key == selected_key
+            )
+            candidate_var.set(self._candidate_label(candidate))
+
+    def _candidate_changed_from_ui(self, entry_key):
+        item = self._require_review_item(entry_key)
+        variable = self._candidate_vars.get(entry_key)
+        label = variable.get() if variable is not None else ""
+
+        candidate = next(
+            (
+                candidate
+                for candidate in item.candidates
+                if self._candidate_label(candidate) == label
+            ),
+            None,
+        )
+        if candidate is None:
+            return
+
+        self.set_review_action(
+            entry_key,
+            "select_existing",
+            candidate.collection_key,
+        )
+
+    def _render_metadata_controls(self, item):
+        current_choices = self._selections[
+            item.entry_key
+        ].get("choices", {})
+
+        self._conflict_vars[item.entry_key] = {}
+        for conflict in item.conflicts:
+            frame = ttk.Frame(self.review_frame)
+            frame.pack(fill="x", pady=(8, 0))
+
+            ttk.Label(
+                frame,
+                text=(
+                    f"{conflict.field}: "
+                    f"{self._display_value(conflict.existing_value)} "
+                    "→ "
+                    f"{self._display_value(conflict.imported_value)}"
+                ),
+                width=70,
+                anchor="w",
+            ).pack(side="left")
+
+            variable = tk.StringVar(value="")
+            self._conflict_vars[item.entry_key][
+                conflict.field
+            ] = variable
+
+            combo = ttk.Combobox(
+                frame,
+                textvariable=variable,
+                state="readonly",
+                values=[
+                    _CHOICE_LABELS["keep_existing"],
+                    _CHOICE_LABELS["use_imported"],
+                ],
+                width=18,
+            )
+            combo.pack(side="left", padx=(8, 0))
+            combo.bind(
+                "<<ComboboxSelected>>",
+                lambda _event,
+                key=item.entry_key,
+                field=conflict.field: (
+                    self._metadata_choice_changed_from_ui(
+                        key,
+                        field,
+                    )
+                ),
+            )
+
+            existing_choice = current_choices.get(
+                conflict.field
+            )
+            if existing_choice:
+                variable.set(_CHOICE_LABELS[existing_choice])
+
+    def _metadata_choice_changed_from_ui(
+        self,
+        entry_key,
+        field,
+    ):
+        variable = self._conflict_vars.get(
+            entry_key,
+            {},
+        ).get(field)
+        label = variable.get() if variable is not None else ""
+        choice = _LABEL_TO_CHOICE.get(label)
+        if choice is None:
+            return
+
+        self.set_metadata_choice(
+            entry_key,
+            field,
+            choice,
+        )
+
+    def _validate_review_from_ui(self):
+        try:
+            document = self.build_validated_review_document()
+        except BulkCollectionImportReviewFormError as error:
+            self.validated_review_document = None
+            if self.review_status_var is not None:
+                self.review_status_var.set(
+                    "Review is incomplete: " + str(error)
+                )
+            messagebox.showerror(
+                "Bulk Collection Import Review",
+                (
+                    "Every Review row must have a valid explicit "
+                    "decision before continuing.\n\n"
+                    f"{error}"
+                ),
+                parent=self.window,
+            )
+            return
+
+        if self.review_status_var is not None:
+            self.review_status_var.set(
+                "Review decisions validated. No Collection "
+                "changes have been applied."
+            )
+        messagebox.showinfo(
+            "Bulk Collection Import Review",
+            (
+                "Review decisions are complete and valid.\n\n"
+                "No Collection changes have been applied yet."
+            ),
+            parent=self.window,
+        )
+        return document
+
+    def _invalidate_validation(self):
+        self.validated_review_document = None
+
+    def _require_review_item(self, entry_key):
+        item = self.review_items_by_key.get(entry_key)
+        if item is None:
+            raise BulkCollectionImportReviewFormError(
+                f"Entry does not require review: {entry_key}"
+            )
+        return item
+
+    @staticmethod
+    def _review_instruction(item):
+        if item.review_kind == REVIEW_KIND_AMBIGUOUS_IDENTITY:
+            return (
+                "Choose an existing candidate, create a distinct "
+                "new Collection record, or skip this entry."
+            )
+        if item.review_kind == REVIEW_KIND_HARD_IDENTITY_CONFLICT:
+            return (
+                "This identity conflict is unsafe to resolve "
+                "automatically or by choosing a side. Skip is the "
+                "only allowed action."
+            )
+        if item.review_kind == REVIEW_KIND_METADATA:
+            return (
+                "Resolve every conflicting shared field explicitly, "
+                "or skip this entry."
+            )
+        return "Choose an explicit review decision."
+
+    @staticmethod
+    def _candidate_label(candidate):
+        authors = (
+            " — " + ", ".join(candidate.authors)
+            if candidate.authors
+            else ""
+        )
+        return (
+            f"{candidate.collection_key}: "
+            f"{candidate.title}{authors}"
+        )
 
     @staticmethod
     def _build_group_titles(preview):
@@ -419,6 +926,10 @@ class BulkCollectionImportDialog:
                 for key, item in value.items()
             )
         return str(value)
+
+    def _show_row_details(self, row):
+        if self.detail_var is not None:
+            self.detail_var.set(self._detail_text(row))
 
     def _center(self):
         if self.window is None:

@@ -1,4 +1,4 @@
-"""Read-only bulk Collection import Tk dialog tests."""
+"""Interactive bulk Collection import review dialog tests."""
 
 from __future__ import annotations
 
@@ -6,7 +6,11 @@ import importlib.util
 import unittest
 from pathlib import Path
 from types import MappingProxyType
+from unittest.mock import Mock
 
+from bulk_collection_import_review_form import (
+    BulkCollectionImportReviewFormError,
+)
 from bulk_collection_import_workflow_preview import (
     BulkCollectionImportWorkflowCandidate,
     BulkCollectionImportWorkflowConflict,
@@ -92,7 +96,35 @@ def _preview():
                 BulkCollectionImportWorkflowCandidate(
                     collection_key="usr_2",
                     title="Ambiguous Hack",
-                    authors=("Author Two",),
+                    authors=("Author Three",),
+                ),
+            ),
+            requires_review=True,
+        ),
+        BulkCollectionImportWorkflowRow(
+            entry_key="hard",
+            title="Hard Identity Conflict",
+            outcome="review_required",
+            merge_action="review_required",
+            resolution_status="conflict",
+            collection_keys=("500", "501"),
+            proposed_source_references=(),
+            warnings=(
+                "identity_review_required",
+                "identity_conflict",
+                "source_identity_conflict",
+            ),
+            conflicts=(),
+            candidates=(
+                BulkCollectionImportWorkflowCandidate(
+                    collection_key="500",
+                    title="First Identity",
+                    authors=("Author Four",),
+                ),
+                BulkCollectionImportWorkflowCandidate(
+                    collection_key="501",
+                    title="Second Identity",
+                    authors=("Author Five",),
                 ),
             ),
             requires_review=True,
@@ -108,6 +140,11 @@ def _preview():
             warnings=("metadata_conflict",),
             conflicts=(
                 BulkCollectionImportWorkflowConflict(
+                    field="title",
+                    existing_value="Old Title",
+                    imported_value="Metadata Conflict",
+                ),
+                BulkCollectionImportWorkflowConflict(
                     field="exit_count",
                     existing_value=14,
                     imported_value=15,
@@ -116,8 +153,8 @@ def _preview():
             candidates=(
                 BulkCollectionImportWorkflowCandidate(
                     collection_key="300",
-                    title="Metadata Conflict",
-                    authors=("Author Three",),
+                    title="Old Title",
+                    authors=("Author Six",),
                 ),
             ),
             requires_review=True,
@@ -129,16 +166,16 @@ def _preview():
         version=1,
         source_name="bulk-list.json",
         byte_count=2048,
-        source_sha256="d" * 64,
-        import_id="dialog-suite",
+        source_sha256="f" * 64,
+        import_id="dialog-review-suite",
         title="Example Bulk List",
         summary=MappingProxyType(
             {
-                "total": 4,
+                "total": 5,
                 "create_record": 1,
                 "update_record": 1,
                 "no_change": 0,
-                "review_required": 2,
+                "review_required": 3,
             }
         ),
         rows=rows,
@@ -146,12 +183,7 @@ def _preview():
             BulkCollectionImportWorkflowGroup(
                 group_key="queue",
                 title="Queue",
-                entry_keys=(
-                    "matched",
-                    "new",
-                    "ambiguous",
-                    "metadata",
-                ),
+                entry_keys=tuple(row.entry_key for row in rows),
             ),
         ),
     )
@@ -162,13 +194,252 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             BulkCollectionImportDialog(None, object())
 
-    def test_constructor_rejects_non_callable_close_callback(self):
+    def test_constructor_rejects_non_callable_callbacks(self):
         with self.assertRaises(TypeError):
             BulkCollectionImportDialog(
                 None,
                 _preview(),
                 on_close="not callable",
             )
+
+        with self.assertRaises(TypeError):
+            BulkCollectionImportDialog(
+                None,
+                _preview(),
+                on_review_ready="not callable",
+            )
+
+    def test_constructor_builds_review_form_without_defaults(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+
+        self.assertEqual(
+            tuple(item.entry_key for item in dialog.review_form.items),
+            ("ambiguous", "hard", "metadata"),
+        )
+        self.assertEqual(dialog.selections, {})
+        self.assertIsNone(dialog.validated_review_document)
+
+    def test_safe_rows_cannot_receive_review_actions(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            dialog.set_review_action("matched", "skip")
+
+    def test_ambiguous_select_existing_requires_candidate(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            dialog.set_review_action(
+                "ambiguous",
+                "select_existing",
+            )
+
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            dialog.set_review_action(
+                "ambiguous",
+                "select_existing",
+                "not-a-candidate",
+            )
+
+        dialog.set_review_action(
+            "ambiguous",
+            "select_existing",
+            "usr_2",
+        )
+
+        self.assertEqual(
+            dialog.selections["ambiguous"],
+            {
+                "action": "select_existing",
+                "selected_collection_key": "usr_2",
+            },
+        )
+
+    def test_ambiguous_create_new_and_skip_are_explicit(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+
+        dialog.set_review_action("ambiguous", "create_new")
+        self.assertEqual(
+            dialog.selections["ambiguous"],
+            {"action": "create_new"},
+        )
+
+        dialog.set_review_action("ambiguous", "skip")
+        self.assertEqual(
+            dialog.selections["ambiguous"],
+            {"action": "skip"},
+        )
+
+    def test_hard_conflict_is_skip_only(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            dialog.set_review_action("hard", "create_new")
+
+        dialog.set_review_action("hard", "skip")
+        self.assertEqual(
+            dialog.selections["hard"],
+            {"action": "skip"},
+        )
+
+    def test_metadata_requires_resolve_action_before_choices(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            dialog.set_metadata_choice(
+                "metadata",
+                "title",
+                "use_imported",
+            )
+
+        dialog.set_review_action(
+            "metadata",
+            "resolve_metadata",
+        )
+        dialog.set_metadata_choice(
+            "metadata",
+            "title",
+            "use_imported",
+        )
+
+        self.assertEqual(
+            dialog.selections["metadata"],
+            {
+                "action": "resolve_metadata",
+                "choices": {
+                    "title": "use_imported",
+                },
+            },
+        )
+
+    def test_metadata_rejects_unknown_field_or_choice(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.set_review_action(
+            "metadata",
+            "resolve_metadata",
+        )
+
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            dialog.set_metadata_choice(
+                "metadata",
+                "authors",
+                "use_imported",
+            )
+
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            dialog.set_metadata_choice(
+                "metadata",
+                "title",
+                "merge_both",
+            )
+
+    def test_validation_requires_every_review_row_and_field(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.set_review_action("ambiguous", "skip")
+        dialog.set_review_action("hard", "skip")
+        dialog.set_review_action(
+            "metadata",
+            "resolve_metadata",
+        )
+        dialog.set_metadata_choice(
+            "metadata",
+            "title",
+            "use_imported",
+        )
+
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            dialog.build_validated_review_document()
+
+        self.assertIsNone(dialog.validated_review_document)
+
+    def test_complete_review_builds_existing_review_document(self):
+        callback = Mock()
+        dialog = BulkCollectionImportDialog(
+            None,
+            _preview(),
+            on_review_ready=callback,
+        )
+        dialog.set_review_action(
+            "ambiguous",
+            "select_existing",
+            "usr_1",
+        )
+        dialog.set_review_action("hard", "skip")
+        dialog.set_review_action(
+            "metadata",
+            "resolve_metadata",
+        )
+        dialog.set_metadata_choice(
+            "metadata",
+            "title",
+            "use_imported",
+        )
+        dialog.set_metadata_choice(
+            "metadata",
+            "exit_count",
+            "keep_existing",
+        )
+
+        document = dialog.build_validated_review_document()
+
+        self.assertEqual(
+            document["schema"],
+            "smwc-bulk-collection-review-decisions",
+        )
+        self.assertEqual(document["version"], 1)
+        self.assertEqual(
+            tuple(
+                decision["entry_key"]
+                for decision in document["decisions"]
+            ),
+            ("ambiguous", "hard", "metadata"),
+        )
+        self.assertIs(
+            dialog.validated_review_document,
+            document,
+        )
+        callback.assert_called_once_with(document)
+
+    def test_new_edit_invalidates_previous_validation(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.set_review_action("ambiguous", "skip")
+        dialog.set_review_action("hard", "skip")
+        dialog.set_review_action("metadata", "skip")
+
+        dialog.build_validated_review_document()
+        self.assertIsNotNone(dialog.validated_review_document)
+
+        dialog.set_review_action("ambiguous", "create_new")
+
+        self.assertIsNone(dialog.validated_review_document)
+
+    def test_clear_returns_row_to_unselected_state(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.set_review_action("ambiguous", "skip")
+
+        dialog.clear_review_selection("ambiguous")
+
+        self.assertNotIn("ambiguous", dialog.selections)
+
+    def test_selections_projection_is_detached(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.set_review_action(
+            "metadata",
+            "resolve_metadata",
+        )
+        dialog.set_metadata_choice(
+            "metadata",
+            "title",
+            "keep_existing",
+        )
+
+        projected = dialog.selections
+        projected["metadata"]["choices"]["title"] = "use_imported"
+
+        self.assertEqual(
+            dialog.selections["metadata"]["choices"]["title"],
+            "keep_existing",
+        )
 
     def test_group_lookup_preserves_preview_membership(self):
         dialog = BulkCollectionImportDialog(None, _preview())
@@ -179,11 +450,12 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
                 "matched": "Queue",
                 "new": "Queue",
                 "ambiguous": "Queue",
+                "hard": "Queue",
                 "metadata": "Queue",
             },
         )
 
-    def test_row_values_distinguish_add_match_and_review(self):
+    def test_row_values_still_distinguish_add_match_and_review(self):
         preview = _preview()
 
         self.assertEqual(
@@ -218,80 +490,25 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
             ),
         )
 
-    def test_match_with_metadata_conflict_displays_as_review(self):
-        row = _preview().rows[3]
-
-        self.assertEqual(
-            BulkCollectionImportDialog._status_label(row),
-            "Review",
-        )
-        self.assertEqual(row.outcome, "match_existing")
-
-    def test_detail_text_exposes_safe_candidate_and_source_data(self):
-        row = _preview().rows[0]
-        text = BulkCollectionImportDialog._detail_text(row)
-
-        self.assertIn("Collection target(s): 100", text)
-        self.assertIn("100: Matched Hack — Author One", text)
-        self.assertIn("kaizoff:mirror-100", text)
-
-    def test_detail_text_exposes_metadata_conflict(self):
-        text = BulkCollectionImportDialog._detail_text(
-            _preview().rows[3]
-        )
-
-        self.assertIn("Conflicts:", text)
-        self.assertIn("exit_count: 14 → 15", text)
-        self.assertIn("metadata_conflict", text)
-
-    def test_ambiguous_detail_lists_candidates_and_flags(self):
-        text = BulkCollectionImportDialog._detail_text(
-            _preview().rows[2]
-        )
-
-        self.assertIn("usr_1: Ambiguous Hack", text)
-        self.assertIn("usr_2: Ambiguous Hack", text)
-        self.assertIn("identity_review_required", text)
-        self.assertIn("identity_ambiguous", text)
-
-    def test_summary_uses_merge_actions_not_identity_outcomes(self):
-        text = BulkCollectionImportDialog._summary_text(_preview())
-
-        self.assertEqual(
-            text,
-            "4 entries · 1 add · 1 update · "
-            "0 unchanged · 2 review",
-        )
-
-    def test_source_summary_is_short_and_bound_to_selected_file(self):
-        text = BulkCollectionImportDialog._source_summary(_preview())
-
-        self.assertIn("bulk-list.json", text)
-        self.assertIn("2.0 KiB", text)
-        self.assertIn("dddddddddddd…", text)
-        self.assertNotIn("d" * 64, text)
-
-    def test_dialog_source_builds_modal_scrollable_preview(self):
+    def test_dialog_source_exposes_review_controls_and_validation_only(self):
         source = Path(
             "ui/bulk_collection_import_dialog.py"
         ).read_text(encoding="utf-8")
 
         for required in (
-            "tk.Toplevel(self.parent)",
-            "self.window.transient(self.parent)",
-            "self.window.grab_set()",
-            "ttk.Treeview(",
-            'orient="vertical"',
-            'orient="horizontal"',
-            '"Bulk Collection Import Preview"',
-            "Review-only preview",
-            'text="Close"',
-            "self.window.withdraw()",
-            "self.window.deiconify()",
+            '"Select Existing"',
+            '"Create New"',
+            '"Resolve Metadata"',
+            '"Skip"',
+            '"Keep Existing"',
+            '"Use Imported"',
+            'text="Validate Review"',
+            "build_bulk_collection_import_review_document(",
+            "No Collection changes have been applied",
         ):
             self.assertIn(required, source)
 
-    def test_dialog_has_no_write_or_review_decision_controls(self):
+    def test_dialog_has_no_resolution_application_or_persistence(self):
         source = Path(
             "ui/bulk_collection_import_dialog.py"
         ).read_text(encoding="utf-8")
@@ -299,21 +516,16 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
         for forbidden in (
             'text="Apply',
             'text="Save',
-            'text="Import',
-            'text="Use Selected',
-            "filedialog",
-            "messagebox",
-            "execute_bulk_collection_import_application_plan",
-            "build_bulk_collection_import_application_plan",
+            "resolve_bulk_collection_import",
+            "build_v5_1_bulk_collection_import_application_plan",
+            "allocate_bulk_collection_import_keys",
+            "execute_bulk_collection_import",
+            "BulkCollectionImportHackDataStore",
             "save_data(",
             "force_save(",
             "update_hack(",
             "add_user_hack(",
-            "review_decision",
-            "create_new",
-            "select_existing",
-            "use_imported",
-            "keep_existing",
+            "planner_store",
         ):
             self.assertNotIn(forbidden, source)
 
