@@ -7,6 +7,23 @@ import unittest
 from copy import deepcopy
 from types import MappingProxyType
 
+from bulk_collection_import_review_form import (
+    CONFLICT_CHOICES as PRODUCTION_CONFLICT_CHOICES,
+    REVIEW_DECISION_SCHEMA as PRODUCTION_REVIEW_DECISION_SCHEMA,
+    REVIEW_DECISION_VERSION as PRODUCTION_REVIEW_DECISION_VERSION,
+    REVIEW_FORM_SCHEMA as PRODUCTION_REVIEW_FORM_SCHEMA,
+    REVIEW_FORM_VERSION as PRODUCTION_REVIEW_FORM_VERSION,
+    REVIEW_KIND_AMBIGUOUS_IDENTITY as PRODUCTION_AMBIGUOUS_KIND,
+    REVIEW_KIND_HARD_IDENTITY_CONFLICT as PRODUCTION_HARD_KIND,
+    REVIEW_KIND_METADATA as PRODUCTION_METADATA_KIND,
+    REVIEW_SELECTION_ACTIONS as PRODUCTION_SELECTION_ACTIONS,
+    BulkCollectionImportReviewFormError,
+    build_bulk_collection_import_review_document,
+    build_bulk_collection_import_review_form,
+    bulk_collection_import_review_form_to_document,
+    serialize_bulk_collection_import_review_document,
+)
+
 from bulk_collection_import_workflow_preview import (
     BulkCollectionImportWorkflowCandidate,
     BulkCollectionImportWorkflowConflict,
@@ -669,6 +686,130 @@ class BulkCollectionImportReviewFormSpecificationTest(
         self.assertNotIn("apply", REVIEW_SELECTION_ACTIONS)
         self.assertNotIn("save", REVIEW_SELECTION_ACTIONS)
         self.assertNotIn("planner", REVIEW_SELECTION_ACTIONS)
+
+
+class BulkCollectionImportReviewFormImplementationTest(
+    BulkCollectionImportReviewFormContractMixin,
+    unittest.TestCase,
+):
+    """Run Commit 116 review-form requirements against production."""
+
+    def build_form(self, preview):
+        return build_bulk_collection_import_review_form(preview)
+
+    def form_to_document(self, form):
+        return bulk_collection_import_review_form_to_document(form)
+
+    def build_review_document(self, form, selections):
+        return build_bulk_collection_import_review_document(
+            form,
+            selections,
+        )
+
+    def serialize_review_document(self, document):
+        return serialize_bulk_collection_import_review_document(
+            document
+        )
+
+    def assert_form_error(self, preview):
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            build_bulk_collection_import_review_form(preview)
+
+    def assert_selection_error(self, form, selections):
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            build_bulk_collection_import_review_document(
+                form,
+                selections,
+            )
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            PRODUCTION_REVIEW_FORM_SCHEMA,
+            REVIEW_FORM_SCHEMA,
+        )
+        self.assertEqual(
+            PRODUCTION_REVIEW_FORM_VERSION,
+            REVIEW_FORM_VERSION,
+        )
+        self.assertEqual(
+            PRODUCTION_AMBIGUOUS_KIND,
+            REVIEW_KIND_AMBIGUOUS_IDENTITY,
+        )
+        self.assertEqual(
+            PRODUCTION_HARD_KIND,
+            REVIEW_KIND_HARD_IDENTITY_CONFLICT,
+        )
+        self.assertEqual(
+            PRODUCTION_METADATA_KIND,
+            REVIEW_KIND_METADATA,
+        )
+        self.assertEqual(
+            PRODUCTION_SELECTION_ACTIONS,
+            REVIEW_SELECTION_ACTIONS,
+        )
+        self.assertEqual(
+            PRODUCTION_CONFLICT_CHOICES,
+            CONFLICT_CHOICES,
+        )
+        self.assertEqual(
+            PRODUCTION_REVIEW_DECISION_SCHEMA,
+            REVIEW_DECISION_SCHEMA,
+        )
+        self.assertEqual(
+            PRODUCTION_REVIEW_DECISION_VERSION,
+            REVIEW_DECISION_VERSION,
+        )
+
+    def test_duplicate_metadata_conflict_fields_fail_closed(self):
+        preview = _preview()
+        rows = list(preview.rows)
+        metadata = rows[3]
+        duplicate = metadata.conflicts + (
+            BulkCollectionImportWorkflowConflict(
+                field="exit_count",
+                existing_value=14,
+                imported_value=16,
+            ),
+        )
+        rows[3] = BulkCollectionImportWorkflowRow(
+            entry_key=metadata.entry_key,
+            title=metadata.title,
+            outcome=metadata.outcome,
+            merge_action=metadata.merge_action,
+            resolution_status=metadata.resolution_status,
+            collection_keys=metadata.collection_keys,
+            proposed_source_references=(
+                metadata.proposed_source_references
+            ),
+            warnings=metadata.warnings,
+            conflicts=duplicate,
+            candidates=metadata.candidates,
+            requires_review=True,
+        )
+        malformed = BulkCollectionImportWorkflowPreview(
+            schema=preview.schema,
+            version=preview.version,
+            source_name=preview.source_name,
+            byte_count=preview.byte_count,
+            source_sha256=preview.source_sha256,
+            import_id=preview.import_id,
+            title=preview.title,
+            summary=preview.summary,
+            rows=tuple(rows),
+            groups=preview.groups,
+        )
+
+        with self.assertRaises(BulkCollectionImportReviewFormError):
+            build_bulk_collection_import_review_form(malformed)
+
+    def test_form_documents_do_not_expose_nonreview_rows(self):
+        document = bulk_collection_import_review_form_to_document(
+            build_bulk_collection_import_review_form(_preview())
+        )
+        serialized = json.dumps(document)
+
+        self.assertNotIn("safe-add", serialized)
+        self.assertNotIn("unchanged", serialized)
 
 
 if __name__ == "__main__":
