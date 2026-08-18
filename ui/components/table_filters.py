@@ -6,10 +6,17 @@ from utils import resource_path, get_hack_types
 class TableFilters:
     """Handles filter UI and state for the collection table"""
 
-    def __init__(self, apply_callback, wheel_callback=None, config_callback=None):
+    def __init__(
+        self,
+        apply_callback,
+        wheel_callback=None,
+        config_callback=None,
+        bulk_import_callback=None,
+    ):
         self.apply_callback = apply_callback
         self.wheel_callback = wheel_callback
         self.config_callback = config_callback # Callback for column config
+        self.bulk_import_callback = bulk_import_callback
         self.data_manager = None  # Will be set when create_filter_ui is called
         self.filters = {}
         self.entries = {}
@@ -224,6 +231,14 @@ class TableFilters:
 
         ttk.Button(button_container, text="Add Hack",
                   command=self.show_add_hack_dialog).pack(side="left", padx=(0, 10))
+
+        if self.bulk_import_callback:
+            ttk.Button(
+                button_container,
+                text="Bulk Import Preview",
+                command=self.bulk_import_callback,
+            ).pack(side="left", padx=(0, 10))
+
         # Open the Collection-owned Wheel when a callback is provided.
         if self.wheel_callback:
             ttk.Button(

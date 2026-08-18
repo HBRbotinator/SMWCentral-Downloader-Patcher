@@ -42,6 +42,7 @@ class CollectionPage:
         self.data_manager = HackDataManager(logger=logger)
         self.collection_wheel_model = CollectionWheelModel()
         self.collection_wheel_dialog = None
+        self.bulk_collection_import_dialog = None
 
         # v3.1 NEW: Pagination state
         self.current_page = 1
@@ -115,7 +116,11 @@ class CollectionPage:
             self.COLUMNS = ordered_columns
 
         # Initialize components - USE HackCollectionInlineEditor instead of InlineEditor
-        self.filters = TableFilters(self._apply_filters, self._open_collection_wheel)
+        self.filters = TableFilters(
+            self._apply_filters,
+            self._open_collection_wheel,
+            bulk_import_callback=self._open_bulk_collection_import_preview,
+        )
         self.date_editor = HackCollectionInlineEditor(None, self.data_manager, self, logger)
         self.notes_editor = HackCollectionInlineEditor(None, self.data_manager, self, logger)
         self.time_editor = HackCollectionInlineEditor(None, self.data_manager, self, logger)  # v3.1 NEW
@@ -232,6 +237,10 @@ class CollectionPage:
         if self.collection_wheel_dialog:
             self.collection_wheel_dialog.close()
             self.collection_wheel_dialog = None
+
+        if self.bulk_collection_import_dialog:
+            self.bulk_collection_import_dialog.close()
+            self.bulk_collection_import_dialog = None
 
         # Force save any pending changes
         self.data_manager.force_save()
@@ -454,6 +463,63 @@ class CollectionPage:
     def _apply_filters(self):
         """Apply filters and refresh table"""
         self._refresh_table()
+
+    def _open_bulk_collection_import_preview(self):
+        """Choose and preview one local bulk Collection import JSON file."""
+
+        from platform_utils import pick_file
+        from bulk_collection_import_workflow_preview import (
+            plan_v5_1_bulk_collection_import_workflow_preview,
+        )
+        from ui.bulk_collection_import_dialog import (
+            BulkCollectionImportDialog,
+        )
+
+        selected_path = pick_file(
+            title="Select Bulk Collection Import JSON",
+            filetypes=[
+                ("JSON files", "*.json"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not selected_path:
+            return
+
+        try:
+            preview = (
+                plan_v5_1_bulk_collection_import_workflow_preview(
+                    selected_path,
+                    self.data_manager,
+                )
+            )
+        except Exception as error:
+            self._log(
+                f"Bulk Collection import preview failed: {error}",
+                "Error",
+            )
+            messagebox.showerror(
+                "Bulk Collection Import",
+                (
+                    "The selected file could not be prepared for "
+                    "preview.\n\n"
+                    f"{error}"
+                ),
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+
+        self.bulk_collection_import_dialog = (
+            BulkCollectionImportDialog(
+                self.frame.winfo_toplevel(),
+                preview,
+                logger=self.logger,
+                on_close=self._on_bulk_collection_import_closed,
+            )
+        )
+        self.bulk_collection_import_dialog.show()
+
+    def _on_bulk_collection_import_closed(self):
+        self.bulk_collection_import_dialog = None
 
     def _open_collection_wheel(self):
         """Open one Wheel dialog for the full Collection."""
