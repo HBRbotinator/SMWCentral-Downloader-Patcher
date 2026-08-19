@@ -10,6 +10,9 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any
 
+from bulk_collection_import_resolution import (
+    BulkCollectionImportResolutionPlan,
+)
 from bulk_collection_import_review_form import (
     REVIEW_KIND_AMBIGUOUS_IDENTITY,
     REVIEW_KIND_HARD_IDENTITY_CONFLICT,
@@ -112,6 +115,8 @@ class BulkCollectionImportDialog:
         self._conflict_vars = {}
 
         self.validated_review_document = None
+        self.resolution_plan = None
+        self.resolution_var = None
 
     @property
     def selections(self):
@@ -156,6 +161,7 @@ class BulkCollectionImportDialog:
         self._build_table(container)
         self._build_detail(container)
         self._build_review_panel(container)
+        self._build_resolution_panel(container)
         self._build_footer(container)
         self._populate_rows()
 
@@ -277,10 +283,25 @@ class BulkCollectionImportDialog:
             self.review_form,
             self.selections,
         )
-        self.validated_review_document = document
 
+        resolution_plan = None
         if self.on_review_ready is not None:
-            self.on_review_ready(document)
+            resolution_plan = self.on_review_ready(document)
+            if (
+                resolution_plan is not None
+                and not isinstance(
+                    resolution_plan,
+                    BulkCollectionImportResolutionPlan,
+                )
+            ):
+                raise TypeError(
+                    "on_review_ready must return "
+                    "BulkCollectionImportResolutionPlan or None"
+                )
+
+        self.validated_review_document = document
+        self.resolution_plan = resolution_plan
+        self._show_resolution_plan(resolution_plan)
 
         return document
 
@@ -414,6 +435,28 @@ class BulkCollectionImportDialog:
         ttk.Label(
             self.review_frame,
             textvariable=self.review_status_var,
+            anchor="w",
+            justify="left",
+            wraplength=1000,
+        ).pack(fill="x")
+
+    def _build_resolution_panel(self, parent):
+        frame = ttk.LabelFrame(
+            parent,
+            text="Post-review resolution preview",
+            padding=10,
+        )
+        frame.pack(fill="x", pady=(12, 0))
+
+        self.resolution_var = tk.StringVar(
+            value=(
+                "Validate the review to replan the selected file "
+                "against the current Collection."
+            )
+        )
+        ttk.Label(
+            frame,
+            textvariable=self.resolution_var,
             anchor="w",
             justify="left",
             wraplength=1000,
@@ -718,6 +761,7 @@ class BulkCollectionImportDialog:
             document = self.build_validated_review_document()
         except BulkCollectionImportReviewFormError as error:
             self.validated_review_document = None
+            self.resolution_plan = None
             if self.review_status_var is not None:
                 self.review_status_var.set(
                     "Review is incomplete: " + str(error)
@@ -732,6 +776,29 @@ class BulkCollectionImportDialog:
                 parent=self.window,
             )
             return
+        except Exception as error:
+            self.validated_review_document = None
+            self.resolution_plan = None
+            if self.resolution_var is not None:
+                self.resolution_var.set(
+                    "Resolution preview failed: " + str(error)
+                )
+            if self.logger:
+                self.logger.log(
+                    f"Bulk Collection import resolution failed: {error}",
+                    "Error",
+                )
+            messagebox.showerror(
+                "Bulk Collection Import Review",
+                (
+                    "The review was valid, but the import could not "
+                    "be resolved against the current Collection.\n\n"
+                    f"{error}\n\n"
+                    "No Collection changes were applied."
+                ),
+                parent=self.window,
+            )
+            return
 
         if self.review_status_var is not None:
             self.review_status_var.set(
@@ -742,7 +809,8 @@ class BulkCollectionImportDialog:
             "Bulk Collection Import Review",
             (
                 "Review decisions are complete and valid.\n\n"
-                "No Collection changes have been applied yet."
+                "The post-review resolution preview is ready. "
+                "No Collection changes have been applied."
             ),
             parent=self.window,
         )
@@ -750,6 +818,49 @@ class BulkCollectionImportDialog:
 
     def _invalidate_validation(self):
         self.validated_review_document = None
+        self.resolution_plan = None
+        if self.resolution_var is not None:
+            self.resolution_var.set(
+                "Review changed. Validate again to refresh the "
+                "post-review resolution preview."
+            )
+
+    def _show_resolution_plan(self, plan):
+        if self.resolution_var is None:
+            return
+        if plan is None:
+            self.resolution_var.set(
+                "Review decisions validated. No resolution callback "
+                "is connected."
+            )
+            return
+
+        self.resolution_var.set(
+            self._resolution_summary_text(plan)
+        )
+
+    @staticmethod
+    def _resolution_summary_text(plan):
+        summary = plan.summary
+        text = (
+            f"{summary['total']} entries · "
+            f"{summary['create_record']} add · "
+            f"{summary['update_record']} update · "
+            f"{summary['no_change']} unchanged · "
+            f"{summary['skip']} skip · "
+            f"{summary['review_required']} further review"
+        )
+        if summary["review_required"]:
+            text += (
+                "\nFurther review is required before an "
+                "application plan can be prepared."
+            )
+        else:
+            text += (
+                "\nAll post-review actions are resolved. "
+                "Application remains disabled."
+            )
+        return text
 
     def _require_review_item(self, entry_key):
         item = self.review_items_by_key.get(entry_key)

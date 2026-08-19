@@ -514,9 +514,32 @@ class CollectionPage:
                 preview,
                 logger=self.logger,
                 on_close=self._on_bulk_collection_import_closed,
+                on_review_ready=lambda review_document: (
+                    self._resolve_bulk_collection_import_review(
+                        selected_path,
+                        review_document,
+                    )
+                ),
             )
         )
         self.bulk_collection_import_dialog.show()
+
+    def _resolve_bulk_collection_import_review(
+        self,
+        selected_path,
+        review_document,
+    ):
+        """Build a fresh read-only resolution plan for validated review."""
+
+        from bulk_collection_import_workflow_resolution import (
+            resolve_v5_1_bulk_collection_import_review,
+        )
+
+        return resolve_v5_1_bulk_collection_import_review(
+            selected_path,
+            self.data_manager,
+            review_document,
+        )
 
     def _on_bulk_collection_import_closed(self):
         self.bulk_collection_import_dialog = None

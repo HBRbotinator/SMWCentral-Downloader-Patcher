@@ -8,6 +8,11 @@ from pathlib import Path
 from types import MappingProxyType
 from unittest.mock import Mock
 
+from bulk_collection_import_resolution import (
+    BulkCollectionImportResolutionGroup,
+    BulkCollectionImportResolutionItem,
+    BulkCollectionImportResolutionPlan,
+)
 from bulk_collection_import_review_form import (
     BulkCollectionImportReviewFormError,
 )
@@ -189,6 +194,95 @@ def _preview():
     )
 
 
+
+
+def _resolution_plan(*, further_review=0):
+    actions = [
+        BulkCollectionImportResolutionItem(
+            entry_key="matched",
+            action="update_record",
+            collection_key="100",
+            title_value=None,
+            source_reference_additions=(),
+            attributes=MappingProxyType({}),
+            attribute_changes=(),
+            conflicts=(),
+            warnings=(),
+        ),
+        BulkCollectionImportResolutionItem(
+            entry_key="new",
+            action="create_record",
+            collection_key=None,
+            title_value="New Hack",
+            source_reference_additions=(),
+            attributes=MappingProxyType({}),
+            attribute_changes=(),
+            conflicts=(),
+            warnings=(),
+        ),
+        BulkCollectionImportResolutionItem(
+            entry_key="ambiguous",
+            action=(
+                "review_required"
+                if further_review
+                else "no_change"
+            ),
+            collection_key="usr_1",
+            title_value=None,
+            source_reference_additions=(),
+            attributes=MappingProxyType({}),
+            attribute_changes=(),
+            conflicts=(),
+            warnings=(),
+        ),
+        BulkCollectionImportResolutionItem(
+            entry_key="hard",
+            action="skip",
+            collection_key=None,
+            title_value=None,
+            source_reference_additions=(),
+            attributes=MappingProxyType({}),
+            attribute_changes=(),
+            conflicts=(),
+            warnings=("source_identity_conflict",),
+        ),
+        BulkCollectionImportResolutionItem(
+            entry_key="metadata",
+            action="update_record",
+            collection_key="300",
+            title_value=None,
+            source_reference_additions=(),
+            attributes=MappingProxyType({}),
+            attribute_changes=(),
+            conflicts=(),
+            warnings=(),
+        ),
+    ]
+    summary = {
+        "total": 5,
+        "create_record": 1,
+        "update_record": 2,
+        "no_change": 0 if further_review else 1,
+        "review_required": 1 if further_review else 0,
+        "skip": 1,
+    }
+    return BulkCollectionImportResolutionPlan(
+        schema="smwc-bulk-collection-resolution-plan",
+        version=1,
+        import_id="dialog-review-suite",
+        source_sha256="f" * 64,
+        summary=MappingProxyType(summary),
+        items=tuple(actions),
+        groups=(
+            BulkCollectionImportResolutionGroup(
+                group_key="queue",
+                title="Queue",
+                entry_keys=tuple(item.entry_key for item in actions),
+            ),
+        ),
+    )
+
+
 class BulkCollectionImportDialogContractTest(unittest.TestCase):
     def test_constructor_requires_real_workflow_preview(self):
         with self.assertRaises(TypeError):
@@ -353,7 +447,7 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
         self.assertIsNone(dialog.validated_review_document)
 
     def test_complete_review_builds_existing_review_document(self):
-        callback = Mock()
+        callback = Mock(return_value=_resolution_plan())
         dialog = BulkCollectionImportDialog(
             None,
             _preview(),
@@ -398,6 +492,7 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
             dialog.validated_review_document,
             document,
         )
+        self.assertIs(dialog.resolution_plan, callback.return_value)
         callback.assert_called_once_with(document)
 
     def test_new_edit_invalidates_previous_validation(self):
@@ -412,6 +507,7 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
         dialog.set_review_action("ambiguous", "create_new")
 
         self.assertIsNone(dialog.validated_review_document)
+        self.assertIsNone(dialog.resolution_plan)
 
     def test_clear_returns_row_to_unselected_state(self):
         dialog = BulkCollectionImportDialog(None, _preview())
@@ -505,6 +601,8 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
             'text="Validate Review"',
             "build_bulk_collection_import_review_document(",
             "No Collection changes have been applied",
+            "Post-review resolution preview",
+            "_resolution_summary_text",
         ):
             self.assertIn(required, source)
 
@@ -543,6 +641,48 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
             "time_to_beat",
         ):
             self.assertNotIn(forbidden, source)
+
+
+    def test_resolution_summary_exposes_post_review_actions(self):
+        text = BulkCollectionImportDialog._resolution_summary_text(
+            _resolution_plan()
+        )
+
+        self.assertEqual(
+            text,
+            "5 entries · 1 add · 2 update · 1 unchanged · "
+            "1 skip · 0 further review\n"
+            "All post-review actions are resolved. "
+            "Application remains disabled.",
+        )
+
+    def test_resolution_summary_calls_out_further_review(self):
+        text = BulkCollectionImportDialog._resolution_summary_text(
+            _resolution_plan(further_review=1)
+        )
+
+        self.assertIn("1 further review", text)
+        self.assertIn(
+            "Further review is required",
+            text,
+        )
+
+    def test_resolution_callback_wrong_type_fails_closed(self):
+        dialog = BulkCollectionImportDialog(
+            None,
+            _preview(),
+            on_review_ready=lambda _document: object(),
+        )
+        dialog.set_review_action("ambiguous", "skip")
+        dialog.set_review_action("hard", "skip")
+        dialog.set_review_action("metadata", "skip")
+
+        with self.assertRaises(TypeError):
+            dialog.build_validated_review_document()
+
+        self.assertIsNone(dialog.validated_review_document)
+        self.assertIsNone(dialog.resolution_plan)
+
 
 
 if __name__ == "__main__":

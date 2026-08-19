@@ -30,6 +30,7 @@ def _load_collection_methods():
     )
     wanted = {
         "_open_bulk_collection_import_preview",
+        "_resolve_bulk_collection_import_review",
         "_on_bulk_collection_import_closed",
     }
     methods = [
@@ -78,11 +79,13 @@ class _FakeDialog:
         preview,
         logger=None,
         on_close=None,
+        on_review_ready=None,
     ):
         self.parent = parent
         self.preview = preview
         self.logger = logger
         self.on_close = on_close
+        self.on_review_ready = on_review_ready
         self.show_count = 0
         self.close_count = 0
         self.__class__.instances.append(self)
@@ -106,6 +109,9 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
         namespace, self.messagebox = _load_collection_methods()
         _PageHarness._open_bulk_collection_import_preview = namespace[
             "_open_bulk_collection_import_preview"
+        ]
+        _PageHarness._resolve_bulk_collection_import_review = namespace[
+            "_resolve_bulk_collection_import_review"
         ]
         _PageHarness._on_bulk_collection_import_closed = namespace[
             "_on_bulk_collection_import_closed"
@@ -135,12 +141,20 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
         )
         workflow.plan_v5_1_bulk_collection_import_workflow_preview = planner
 
+        resolution = types.ModuleType(
+            "bulk_collection_import_workflow_resolution"
+        )
+        resolution.resolve_v5_1_bulk_collection_import_review = Mock(
+            return_value="resolution-plan"
+        )
+
         dialog = types.ModuleType("ui.bulk_collection_import_dialog")
         dialog.BulkCollectionImportDialog = _FakeDialog
 
         return {
             "platform_utils": platform,
             "bulk_collection_import_workflow_preview": workflow,
+            "bulk_collection_import_workflow_resolution": resolution,
             "ui.bulk_collection_import_dialog": dialog,
         }
 
@@ -188,6 +202,14 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
         with patch.dict(sys.modules, modules):
             page._open_bulk_collection_import_preview()
 
+            review_document = {"review": "document"}
+            self.assertEqual(
+                page.bulk_collection_import_dialog.on_review_ready(
+                    review_document
+                ),
+                "resolution-plan",
+            )
+
         modules["platform_utils"].pick_file.assert_called_once_with(
             title="Select Bulk Collection Import JSON",
             filetypes=[
@@ -208,8 +230,17 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
         self.assertIs(dialog.parent, page.frame.top)
         self.assertIs(dialog.preview, preview)
         self.assertIs(dialog.logger, page.logger)
+        self.assertTrue(callable(dialog.on_review_ready))
         self.assertEqual(dialog.show_count, 1)
         self.assertIs(page.bulk_collection_import_dialog, dialog)
+
+        modules[
+            "bulk_collection_import_workflow_resolution"
+        ].resolve_v5_1_bulk_collection_import_review.assert_called_once_with(
+            "C:/imports/list.json",
+            page.data_manager,
+            review_document,
+        )
 
     def test_invalid_import_shows_error_without_opening_dialog(self):
         page = self._page()
@@ -261,7 +292,7 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
             source,
         )
 
-    def test_collection_ui_wiring_has_no_apply_or_persistence_path(self):
+    def test_collection_ui_resolution_wiring_has_no_apply_or_persistence_path(self):
         tree = ast.parse(_collection_page_source())
         collection_class = next(
             node
