@@ -13,6 +13,12 @@ from typing import Any
 from bulk_collection_import_resolution import (
     BulkCollectionImportResolutionPlan,
 )
+from bulk_collection_import_second_review import (
+    BulkCollectionImportSecondReviewError,
+    build_bulk_collection_import_second_review_document,
+    build_bulk_collection_import_second_review_form,
+    refine_bulk_collection_import_resolution_plan,
+)
 from bulk_collection_import_review_form import (
     REVIEW_KIND_AMBIGUOUS_IDENTITY,
     REVIEW_KIND_HARD_IDENTITY_CONFLICT,
@@ -118,12 +124,35 @@ class BulkCollectionImportDialog:
         self.resolution_plan = None
         self.resolution_var = None
 
+        self.second_review_form = None
+        self.second_review_items_by_key = {}
+        self.validated_second_review_document = None
+        self.second_review_frame = None
+        self.second_review_status_var = None
+        self.second_validate_button = None
+        self._second_selections = {}
+        self._second_action_vars = {}
+        self._second_conflict_vars = {}
+
     @property
     def selections(self):
         """Return detached current review selections."""
 
         result = {}
         for entry_key, selection in self._selections.items():
+            copied = dict(selection)
+            choices = copied.get("choices")
+            if choices is not None:
+                copied["choices"] = dict(choices)
+            result[entry_key] = copied
+        return result
+
+    @property
+    def second_review_selections(self):
+        """Return detached current second-round selections."""
+
+        result = {}
+        for entry_key, selection in self._second_selections.items():
             copied = dict(selection)
             choices = copied.get("choices")
             if choices is not None:
@@ -162,6 +191,7 @@ class BulkCollectionImportDialog:
         self._build_detail(container)
         self._build_review_panel(container)
         self._build_resolution_panel(container)
+        self._build_second_review_panel(container)
         self._build_footer(container)
         self._populate_rows()
 
@@ -303,6 +333,99 @@ class BulkCollectionImportDialog:
         self.resolution_plan = resolution_plan
         self._show_resolution_plan(resolution_plan)
 
+        return document
+
+    def set_second_review_action(
+        self,
+        entry_key: str,
+        action: str,
+    ):
+        """Set one explicit follow-up metadata action."""
+
+        item = self._require_second_review_item(entry_key)
+        if action not in item.allowed_actions:
+            raise BulkCollectionImportSecondReviewError(
+                f"Action {action!r} is not allowed for {entry_key}."
+            )
+
+        if action == "resolve_metadata":
+            selection = {
+                "action": action,
+                "choices": {},
+            }
+        else:
+            selection = {"action": action}
+
+        self._second_selections[entry_key] = selection
+        self._invalidate_second_review_validation()
+
+    def set_second_metadata_choice(
+        self,
+        entry_key: str,
+        field: str,
+        choice: str,
+    ):
+        """Set one explicit follow-up metadata field choice."""
+
+        item = self._require_second_review_item(entry_key)
+        conflict_fields = {
+            conflict.field
+            for conflict in item.conflicts
+        }
+        if field not in conflict_fields:
+            raise BulkCollectionImportSecondReviewError(
+                f"Unknown second-round conflict field: {field}"
+            )
+        if choice not in ("keep_existing", "use_imported"):
+            raise BulkCollectionImportSecondReviewError(
+                "Second-round metadata choice must be "
+                "keep_existing or use_imported."
+            )
+
+        selection = self._second_selections.get(entry_key)
+        if (
+            selection is None
+            or selection.get("action") != "resolve_metadata"
+        ):
+            raise BulkCollectionImportSecondReviewError(
+                "Choose Resolve Metadata before setting "
+                "follow-up field choices."
+            )
+
+        selection["choices"][field] = choice
+        self._invalidate_second_review_validation()
+
+    def clear_second_review_selection(self, entry_key: str):
+        """Return one follow-up row to an unselected state."""
+
+        self._require_second_review_item(entry_key)
+        self._second_selections.pop(entry_key, None)
+        self._invalidate_second_review_validation()
+
+    def build_validated_second_review_document(self):
+        """Validate follow-up choices and refine the read-only plan."""
+
+        if self.second_review_form is None:
+            raise BulkCollectionImportSecondReviewError(
+                "No second-round review is currently required."
+            )
+        if self.resolution_plan is None:
+            raise BulkCollectionImportSecondReviewError(
+                "No resolution plan is available for second review."
+            )
+
+        document = build_bulk_collection_import_second_review_document(
+            self.second_review_form,
+            self.second_review_selections,
+        )
+        refined = refine_bulk_collection_import_resolution_plan(
+            self.resolution_plan,
+            document,
+        )
+
+        self.validated_second_review_document = document
+        self.resolution_plan = refined
+        self._show_resolution_plan(refined)
         return document
 
     def _build_header(self, parent):
@@ -462,6 +585,27 @@ class BulkCollectionImportDialog:
             wraplength=1000,
         ).pack(fill="x")
 
+    def _build_second_review_panel(self, parent):
+        self.second_review_frame = ttk.LabelFrame(
+            parent,
+            text="Follow-up metadata review",
+            padding=10,
+        )
+        self.second_review_frame.pack(fill="x", pady=(12, 0))
+
+        self.second_review_status_var = tk.StringVar(
+            value=(
+                "No follow-up review is currently required."
+            )
+        )
+        ttk.Label(
+            self.second_review_frame,
+            textvariable=self.second_review_status_var,
+            anchor="w",
+            justify="left",
+            wraplength=1000,
+        ).pack(fill="x")
+
     def _build_footer(self, parent):
         footer = ttk.Frame(parent)
         footer.pack(fill="x", pady=(12, 0))
@@ -491,6 +635,17 @@ class BulkCollectionImportDialog:
                 padx=(0, 10),
             )
 
+        self.second_validate_button = ttk.Button(
+            footer,
+            text="Validate Follow-up Review",
+            command=self._validate_second_review_from_ui,
+            state="disabled",
+        )
+        self.second_validate_button.pack(
+            side="right",
+            padx=(0, 10),
+        )
+
     def _populate_rows(self):
         if self.tree is None:
             return
@@ -514,6 +669,7 @@ class BulkCollectionImportDialog:
             self.tree.see(first)
             self._show_row_details(self._rows_by_key[first])
             self._render_review_controls(first)
+            self._render_second_review_controls(first)
 
     def _selection_changed(self, _event=None):
         if self.tree is None:
@@ -528,6 +684,7 @@ class BulkCollectionImportDialog:
         if row is not None:
             self._show_row_details(row)
         self._render_review_controls(entry_key)
+        self._render_second_review_controls(entry_key)
 
     def _render_review_controls(self, entry_key):
         if self.review_frame is None:
@@ -756,6 +913,215 @@ class BulkCollectionImportDialog:
             choice,
         )
 
+    def _render_second_review_controls(self, entry_key):
+        if self.second_review_frame is None:
+            return
+
+        for child in self.second_review_frame.winfo_children()[1:]:
+            child.destroy()
+
+        item = self.second_review_items_by_key.get(entry_key)
+        if item is None:
+            if self.second_review_form is None:
+                self.second_review_status_var.set(
+                    "No follow-up review is currently required."
+                )
+            else:
+                self.second_review_status_var.set(
+                    "Select a row marked for follow-up metadata review."
+                )
+            return
+
+        self.second_review_status_var.set(
+            self._second_review_context_text(item)
+        )
+
+        action_var = tk.StringVar(value="")
+        self._second_action_vars[entry_key] = action_var
+
+        action_frame = ttk.Frame(self.second_review_frame)
+        action_frame.pack(fill="x", pady=(8, 0))
+        ttk.Label(
+            action_frame,
+            text="Follow-up decision:",
+        ).pack(side="left")
+
+        combo = ttk.Combobox(
+            action_frame,
+            textvariable=action_var,
+            state="readonly",
+            values=["Resolve Metadata", "Skip"],
+            width=24,
+        )
+        combo.pack(side="left", padx=(8, 0))
+        combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event, key=entry_key: (
+                self._second_action_changed_from_ui(key)
+            ),
+        )
+
+        current = self._second_selections.get(entry_key)
+        if current is not None:
+            action_var.set(
+                "Resolve Metadata"
+                if current["action"] == "resolve_metadata"
+                else "Skip"
+            )
+
+        if (
+            current is not None
+            and current["action"] == "resolve_metadata"
+        ):
+            self._render_second_metadata_controls(item)
+
+    def _second_action_changed_from_ui(self, entry_key):
+        variable = self._second_action_vars.get(entry_key)
+        label = variable.get() if variable is not None else ""
+
+        self.clear_second_review_selection(entry_key)
+        if label == "Resolve Metadata":
+            self.set_second_review_action(
+                entry_key,
+                "resolve_metadata",
+            )
+        elif label == "Skip":
+            self.set_second_review_action(
+                entry_key,
+                "skip",
+            )
+        else:
+            return
+
+        self._render_second_review_controls(entry_key)
+
+    def _render_second_metadata_controls(self, item):
+        current_choices = self._second_selections[
+            item.entry_key
+        ].get("choices", {})
+
+        self._second_conflict_vars[item.entry_key] = {}
+        for conflict in item.conflicts:
+            frame = ttk.Frame(self.second_review_frame)
+            frame.pack(fill="x", pady=(8, 0))
+
+            ttk.Label(
+                frame,
+                text=(
+                    f"{conflict.field}: "
+                    f"{self._display_value(conflict.existing_value)} "
+                    "→ "
+                    f"{self._display_value(conflict.imported_value)}"
+                ),
+                width=70,
+                anchor="w",
+            ).pack(side="left")
+
+            variable = tk.StringVar(value="")
+            self._second_conflict_vars[item.entry_key][
+                conflict.field
+            ] = variable
+
+            combo = ttk.Combobox(
+                frame,
+                textvariable=variable,
+                state="readonly",
+                values=[
+                    "Keep Existing",
+                    "Use Imported",
+                ],
+                width=18,
+            )
+            combo.pack(side="left", padx=(8, 0))
+            combo.bind(
+                "<<ComboboxSelected>>",
+                lambda _event,
+                key=item.entry_key,
+                field=conflict.field: (
+                    self._second_metadata_changed_from_ui(
+                        key,
+                        field,
+                    )
+                ),
+            )
+
+            existing = current_choices.get(conflict.field)
+            if existing == "keep_existing":
+                variable.set("Keep Existing")
+            elif existing == "use_imported":
+                variable.set("Use Imported")
+
+    def _second_metadata_changed_from_ui(
+        self,
+        entry_key,
+        field,
+    ):
+        variable = self._second_conflict_vars.get(
+            entry_key,
+            {},
+        ).get(field)
+        label = variable.get() if variable is not None else ""
+        if label == "Keep Existing":
+            choice = "keep_existing"
+        elif label == "Use Imported":
+            choice = "use_imported"
+        else:
+            return
+
+        self.set_second_metadata_choice(
+            entry_key,
+            field,
+            choice,
+        )
+
+    def _validate_second_review_from_ui(self):
+        try:
+            document = self.build_validated_second_review_document()
+        except BulkCollectionImportSecondReviewError as error:
+            self.validated_second_review_document = None
+            if self.second_review_status_var is not None:
+                self.second_review_status_var.set(
+                    "Follow-up review is incomplete: " + str(error)
+                )
+            messagebox.showerror(
+                "Bulk Collection Import Follow-up Review",
+                (
+                    "Every newly exposed metadata conflict must "
+                    "have an explicit choice.\n\n"
+                    f"{error}"
+                ),
+                parent=self.window,
+            )
+            return
+        except Exception as error:
+            self.validated_second_review_document = None
+            if self.logger:
+                self.logger.log(
+                    f"Bulk Collection follow-up review failed: {error}",
+                    "Error",
+                )
+            messagebox.showerror(
+                "Bulk Collection Import Follow-up Review",
+                (
+                    "The follow-up review could not be refined.\n\n"
+                    f"{error}\n\n"
+                    "No Collection changes were applied."
+                ),
+                parent=self.window,
+            )
+            return
+
+        messagebox.showinfo(
+            "Bulk Collection Import Follow-up Review",
+            (
+                "Follow-up metadata decisions are complete.\n\n"
+                "The read-only resolution preview has been refined. "
+                "No Collection changes have been applied."
+            ),
+            parent=self.window,
+        )
+        return document
+
     def _validate_review_from_ui(self):
         try:
             document = self.build_validated_review_document()
@@ -819,25 +1185,78 @@ class BulkCollectionImportDialog:
     def _invalidate_validation(self):
         self.validated_review_document = None
         self.resolution_plan = None
+        self._clear_second_review_state()
         if self.resolution_var is not None:
             self.resolution_var.set(
                 "Review changed. Validate again to refresh the "
                 "post-review resolution preview."
             )
 
-    def _show_resolution_plan(self, plan):
-        if self.resolution_var is None:
-            return
-        if plan is None:
-            self.resolution_var.set(
-                "Review decisions validated. No resolution callback "
-                "is connected."
+    def _invalidate_second_review_validation(self):
+        self.validated_second_review_document = None
+        if self.second_review_status_var is not None:
+            self.second_review_status_var.set(
+                "Follow-up review changed. Validate again to "
+                "refine the read-only resolution preview."
             )
+
+    def _clear_second_review_state(self):
+        self.second_review_form = None
+        self.second_review_items_by_key = {}
+        self.validated_second_review_document = None
+        self._second_selections = {}
+        self._second_action_vars = {}
+        self._second_conflict_vars = {}
+
+        if self.second_validate_button is not None:
+            self.second_validate_button.config(state="disabled")
+        if self.second_review_status_var is not None:
+            self.second_review_status_var.set(
+                "No follow-up review is currently required."
+            )
+
+    def _show_resolution_plan(self, plan):
+        if plan is None:
+            self._clear_second_review_state()
+            if self.resolution_var is not None:
+                self.resolution_var.set(
+                    "Review decisions validated. No resolution callback "
+                    "is connected."
+                )
             return
 
-        self.resolution_var.set(
-            self._resolution_summary_text(plan)
-        )
+        self._prepare_second_review(plan)
+        if self.resolution_var is not None:
+            self.resolution_var.set(
+                self._resolution_summary_text(plan)
+            )
+
+    def _prepare_second_review(self, plan):
+        if not plan.summary["review_required"]:
+            self._clear_second_review_state()
+            return
+
+        form = build_bulk_collection_import_second_review_form(plan)
+        self.second_review_form = form
+        self.second_review_items_by_key = {
+            item.entry_key: item
+            for item in form.items
+        }
+        self.validated_second_review_document = None
+        self._second_selections = {}
+
+        if self.second_validate_button is not None:
+            self.second_validate_button.config(state="normal")
+        if self.second_review_status_var is not None:
+            self.second_review_status_var.set(
+                "Further review is required. Select a blocked row "
+                "and resolve its newly exposed metadata conflicts."
+            )
+
+        if self.tree is not None:
+            selection = self.tree.selection()
+            if selection:
+                self._render_second_review_controls(selection[0])
 
     @staticmethod
     def _resolution_summary_text(plan):
@@ -861,6 +1280,51 @@ class BulkCollectionImportDialog:
                 "Application remains disabled."
             )
         return text
+
+    def _require_second_review_item(self, entry_key):
+        item = self.second_review_items_by_key.get(entry_key)
+        if item is None:
+            raise BulkCollectionImportSecondReviewError(
+                f"Entry does not require follow-up review: {entry_key}"
+            )
+        return item
+
+    @classmethod
+    def _second_review_context_text(cls, item):
+        lines = [
+            (
+                "Selected Collection target: "
+                f"{item.collection_key}"
+            ),
+            (
+                "Resolve every newly exposed metadata conflict "
+                "explicitly, or skip this entry."
+            ),
+        ]
+
+        if item.source_reference_additions:
+            links = ", ".join(
+                f"{value.source}:{value.external_id}"
+                for value in item.source_reference_additions
+            )
+            lines.append(
+                "Safe source link(s) preserved if resolved: " + links
+            )
+
+        if item.attribute_changes:
+            changes = "; ".join(
+                (
+                    f"{change.field}="
+                    f"{cls._display_value(change.value)}"
+                )
+                for change in item.attribute_changes
+            )
+            lines.append(
+                "Safe metadata change(s) preserved if resolved: "
+                + changes
+            )
+
+        return "\n".join(lines)
 
     def _require_review_item(self, entry_key):
         item = self.review_items_by_key.get(entry_key)

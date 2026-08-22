@@ -9,9 +9,15 @@ from types import MappingProxyType
 from unittest.mock import Mock
 
 from bulk_collection_import_resolution import (
+    BulkCollectionImportResolutionAttributeChange,
+    BulkCollectionImportResolutionConflict,
     BulkCollectionImportResolutionGroup,
     BulkCollectionImportResolutionItem,
     BulkCollectionImportResolutionPlan,
+    BulkCollectionImportResolutionSourceReference,
+)
+from bulk_collection_import_second_review import (
+    BulkCollectionImportSecondReviewError,
 )
 from bulk_collection_import_review_form import (
     BulkCollectionImportReviewFormError,
@@ -229,11 +235,48 @@ def _resolution_plan(*, further_review=0):
             ),
             collection_key="usr_1",
             title_value=None,
-            source_reference_additions=(),
+            source_reference_additions=(
+                (
+                    BulkCollectionImportResolutionSourceReference(
+                        source="kaizoff",
+                        external_id="ko-ambiguous",
+                    ),
+                )
+                if further_review
+                else ()
+            ),
             attributes=MappingProxyType({}),
-            attribute_changes=(),
-            conflicts=(),
-            warnings=(),
+            attribute_changes=(
+                (
+                    BulkCollectionImportResolutionAttributeChange(
+                        field="release_date",
+                        value="2025-04-03",
+                    ),
+                )
+                if further_review
+                else ()
+            ),
+            conflicts=(
+                (
+                    BulkCollectionImportResolutionConflict(
+                        field="title",
+                        existing_value="Existing Ambiguous Hack",
+                        imported_value="Ambiguous Hack",
+                    ),
+                    BulkCollectionImportResolutionConflict(
+                        field="exit_count",
+                        existing_value=14,
+                        imported_value=15,
+                    ),
+                )
+                if further_review
+                else ()
+            ),
+            warnings=(
+                ("metadata_conflict",)
+                if further_review
+                else ()
+            ),
         ),
         BulkCollectionImportResolutionItem(
             entry_key="hard",
@@ -603,6 +646,7 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
             "No Collection changes have been applied",
             "Post-review resolution preview",
             "_resolution_summary_text",
+            "Follow-up metadata review",
         ):
             self.assertIn(required, source)
 
@@ -682,6 +726,209 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
 
         self.assertIsNone(dialog.validated_review_document)
         self.assertIsNone(dialog.resolution_plan)
+
+
+
+    def test_further_review_builds_second_round_form(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+
+        dialog.resolution_plan = _resolution_plan(further_review=1)
+        dialog._show_resolution_plan(dialog.resolution_plan)
+
+        self.assertIsNotNone(dialog.second_review_form)
+        self.assertEqual(
+            tuple(
+                item.entry_key
+                for item in dialog.second_review_form.items
+            ),
+            ("ambiguous",),
+        )
+        self.assertEqual(dialog.second_review_selections, {})
+
+    def test_second_round_rejects_safe_rows(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.resolution_plan = _resolution_plan(further_review=1)
+        dialog._show_resolution_plan(dialog.resolution_plan)
+
+        with self.assertRaises(BulkCollectionImportSecondReviewError):
+            dialog.set_second_review_action("matched", "skip")
+
+    def test_second_round_metadata_choices_are_explicit(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.resolution_plan = _resolution_plan(further_review=1)
+        dialog._show_resolution_plan(dialog.resolution_plan)
+
+        with self.assertRaises(BulkCollectionImportSecondReviewError):
+            dialog.set_second_metadata_choice(
+                "ambiguous",
+                "title",
+                "use_imported",
+            )
+
+        dialog.set_second_review_action(
+            "ambiguous",
+            "resolve_metadata",
+        )
+        dialog.set_second_metadata_choice(
+            "ambiguous",
+            "title",
+            "use_imported",
+        )
+        dialog.set_second_metadata_choice(
+            "ambiguous",
+            "exit_count",
+            "keep_existing",
+        )
+
+        self.assertEqual(
+            dialog.second_review_selections["ambiguous"],
+            {
+                "action": "resolve_metadata",
+                "choices": {
+                    "title": "use_imported",
+                    "exit_count": "keep_existing",
+                },
+            },
+        )
+
+    def test_second_round_validation_refines_resolution_to_zero_review(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.resolution_plan = _resolution_plan(further_review=1)
+        dialog._show_resolution_plan(dialog.resolution_plan)
+
+        dialog.set_second_review_action(
+            "ambiguous",
+            "resolve_metadata",
+        )
+        dialog.set_second_metadata_choice(
+            "ambiguous",
+            "title",
+            "use_imported",
+        )
+        dialog.set_second_metadata_choice(
+            "ambiguous",
+            "exit_count",
+            "keep_existing",
+        )
+
+        document = dialog.build_validated_second_review_document()
+
+        self.assertEqual(
+            document["schema"],
+            "smwc-bulk-collection-second-review-decisions",
+        )
+        self.assertEqual(
+            dialog.resolution_plan.summary["review_required"],
+            0,
+        )
+        self.assertEqual(
+            dialog.resolution_plan.items[2].action,
+            "update_record",
+        )
+        self.assertEqual(
+            dialog.resolution_plan.items[2].title_value,
+            "Ambiguous Hack",
+        )
+        self.assertEqual(
+            tuple(
+                (change.field, change.value)
+                for change
+                in dialog.resolution_plan.items[2].attribute_changes
+            ),
+            (("release_date", "2025-04-03"),),
+        )
+        self.assertIsNone(dialog.second_review_form)
+        self.assertEqual(dialog.second_review_selections, {})
+
+    def test_second_round_skip_discards_pending_changes(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.resolution_plan = _resolution_plan(further_review=1)
+        dialog._show_resolution_plan(dialog.resolution_plan)
+
+        dialog.set_second_review_action("ambiguous", "skip")
+        dialog.build_validated_second_review_document()
+
+        item = dialog.resolution_plan.items[2]
+        self.assertEqual(item.action, "skip")
+        self.assertEqual(item.source_reference_additions, ())
+        self.assertEqual(item.attribute_changes, ())
+        self.assertEqual(item.conflicts, ())
+        self.assertEqual(
+            dialog.resolution_plan.summary["review_required"],
+            0,
+        )
+
+    def test_second_round_projection_is_detached(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.resolution_plan = _resolution_plan(further_review=1)
+        dialog._show_resolution_plan(dialog.resolution_plan)
+        dialog.set_second_review_action(
+            "ambiguous",
+            "resolve_metadata",
+        )
+        dialog.set_second_metadata_choice(
+            "ambiguous",
+            "title",
+            "keep_existing",
+        )
+
+        projected = dialog.second_review_selections
+        projected["ambiguous"]["choices"]["title"] = "use_imported"
+
+        self.assertEqual(
+            dialog.second_review_selections[
+                "ambiguous"
+            ]["choices"]["title"],
+            "keep_existing",
+        )
+
+    def test_first_round_edit_clears_follow_up_state(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.resolution_plan = _resolution_plan(further_review=1)
+        dialog._show_resolution_plan(dialog.resolution_plan)
+        self.assertIsNotNone(dialog.second_review_form)
+
+        dialog._invalidate_validation()
+
+        self.assertIsNone(dialog.resolution_plan)
+        self.assertIsNone(dialog.second_review_form)
+        self.assertEqual(dialog.second_review_selections, {})
+
+    def test_second_round_context_exposes_target_and_safe_pending_work(self):
+        dialog = BulkCollectionImportDialog(None, _preview())
+        dialog.resolution_plan = _resolution_plan(further_review=1)
+        dialog._show_resolution_plan(dialog.resolution_plan)
+        item = dialog.second_review_form.items[0]
+
+        text = dialog._second_review_context_text(item)
+
+        self.assertIn("usr_1", text)
+        self.assertIn("kaizoff:ko-ambiguous", text)
+        self.assertIn("release_date=2025-04-03", text)
+
+    def test_dialog_source_renders_follow_up_controls_without_apply(self):
+        source = Path(
+            "ui/bulk_collection_import_dialog.py"
+        ).read_text(encoding="utf-8")
+
+        for required in (
+            "Follow-up metadata review",
+            'text="Validate Follow-up Review"',
+            "build_bulk_collection_import_second_review_form(",
+            "build_bulk_collection_import_second_review_document(",
+            "refine_bulk_collection_import_resolution_plan(",
+            "No Collection changes have been applied",
+        ):
+            self.assertIn(required, source)
+
+        for forbidden in (
+            'text="Apply',
+            'text="Save',
+            "build_v5_1_bulk_collection_import_application_plan",
+            "allocate_bulk_collection_import_keys",
+            "BulkCollectionImportHackDataStore",
+        ):
+            self.assertNotIn(forbidden, source)
 
 
 
