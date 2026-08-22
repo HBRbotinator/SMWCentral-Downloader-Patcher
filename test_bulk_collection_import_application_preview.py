@@ -8,6 +8,14 @@ import json
 import unittest
 from types import MappingProxyType
 
+from bulk_collection_import_application_preview import (
+    BulkCollectionImportApplicationPreviewError,
+    build_bulk_collection_import_application_preview,
+    build_v5_1_bulk_collection_import_application_preview,
+    bulk_collection_import_application_preview_to_document,
+    serialize_bulk_collection_import_application_preview,
+)
+
 from bulk_collection_import_resolution import (
     BulkCollectionImportResolutionAttributeChange,
     BulkCollectionImportResolutionGroup,
@@ -580,6 +588,112 @@ class BulkCollectionImportApplicationPreviewSpecificationTest(
         self.assertEqual(len(fingerprint), 64)
         self.assertNotIn("completed", canonical)
         self.assertNotIn("notes", canonical)
+
+
+class BulkCollectionImportApplicationPreviewImplementationTest(
+    BulkCollectionImportApplicationPreviewContractMixin,
+    unittest.TestCase,
+):
+    """Run Commit 123 final-preview requirements against production."""
+
+    def build_preview(self, resolution_plan, collection_data):
+        return build_bulk_collection_import_application_preview(
+            resolution_plan,
+            collection_data,
+        )
+
+    def preview_to_document(self, preview):
+        return bulk_collection_import_application_preview_to_document(
+            preview
+        )
+
+    def serialize_preview(self, preview):
+        return serialize_bulk_collection_import_application_preview(
+            preview
+        )
+
+    def assert_preview_error(self, resolution_plan, collection_data):
+        with self.assertRaises(
+            BulkCollectionImportApplicationPreviewError
+        ):
+            build_bulk_collection_import_application_preview(
+                resolution_plan,
+                collection_data,
+            )
+
+    def test_live_hack_data_manager_path_uses_same_projection(self):
+        import tempfile
+        from pathlib import Path
+
+        from hack_data_manager import HackDataManager
+
+        with tempfile.TemporaryDirectory() as temporary:
+            processed = Path(temporary) / "processed.json"
+            processed.write_text(
+                json.dumps(
+                    _collection_data(),
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            manager = HackDataManager(str(processed))
+
+            detached = build_bulk_collection_import_application_preview(
+                _resolution_plan(),
+                manager.data,
+            )
+            live = build_v5_1_bulk_collection_import_application_preview(
+                _resolution_plan(),
+                manager,
+            )
+
+            self.assertEqual(
+                bulk_collection_import_application_preview_to_document(
+                    live
+                ),
+                bulk_collection_import_application_preview_to_document(
+                    detached
+                ),
+            )
+
+    def test_preview_build_does_not_mutate_collection_mapping(self):
+        collection = _collection_data()
+        before = copy.deepcopy(collection)
+
+        build_bulk_collection_import_application_preview(
+            _resolution_plan(),
+            collection,
+        )
+
+        self.assertEqual(collection, before)
+
+    def test_document_projection_returns_detached_operation_lists(self):
+        preview = build_bulk_collection_import_application_preview(
+            _resolution_plan(),
+            _collection_data(),
+        )
+
+        first = bulk_collection_import_application_preview_to_document(
+            preview
+        )
+        first["operations"][0]["source_references"].append(
+            {
+                "source": "unsafe",
+                "external_id": "mutation",
+            }
+        )
+
+        second = bulk_collection_import_application_preview_to_document(
+            preview
+        )
+        self.assertNotIn(
+            {
+                "source": "unsafe",
+                "external_id": "mutation",
+            },
+            second["operations"][0]["source_references"],
+        )
+
 
 
 if __name__ == "__main__":
