@@ -7,6 +7,21 @@ import unittest
 from copy import deepcopy
 from types import MappingProxyType
 
+from bulk_collection_import_second_review import (
+    SECOND_REVIEW_ACTIONS as PRODUCTION_SECOND_REVIEW_ACTIONS,
+    SECOND_REVIEW_CONFLICT_CHOICES as PRODUCTION_CONFLICT_CHOICES,
+    SECOND_REVIEW_DECISION_SCHEMA as PRODUCTION_DECISION_SCHEMA,
+    SECOND_REVIEW_DECISION_VERSION as PRODUCTION_DECISION_VERSION,
+    SECOND_REVIEW_FORM_SCHEMA as PRODUCTION_FORM_SCHEMA,
+    SECOND_REVIEW_FORM_VERSION as PRODUCTION_FORM_VERSION,
+    BulkCollectionImportSecondReviewError,
+    build_bulk_collection_import_second_review_document,
+    build_bulk_collection_import_second_review_form,
+    bulk_collection_import_second_review_form_to_document,
+    refine_bulk_collection_import_resolution_plan,
+    serialize_bulk_collection_import_second_review_document,
+)
+
 from bulk_collection_import_resolution import (
     BulkCollectionImportResolutionAttributeChange,
     BulkCollectionImportResolutionConflict,
@@ -704,6 +719,160 @@ class BulkCollectionImportSecondReviewSpecificationTest(
         self.assertNotIn("create_new", SECOND_REVIEW_ACTIONS)
         self.assertNotIn("apply", SECOND_REVIEW_ACTIONS)
         self.assertNotIn("save", SECOND_REVIEW_ACTIONS)
+
+
+class BulkCollectionImportSecondReviewImplementationTest(
+    BulkCollectionImportSecondReviewContractMixin,
+    unittest.TestCase,
+):
+    """Run the Commit 120 contract against production."""
+
+    def build_form(self, resolution_plan):
+        return build_bulk_collection_import_second_review_form(
+            resolution_plan
+        )
+
+    def form_to_document(self, form):
+        return bulk_collection_import_second_review_form_to_document(
+            form
+        )
+
+    def build_decision_document(self, form, selections):
+        return build_bulk_collection_import_second_review_document(
+            form,
+            selections,
+        )
+
+    def refine_resolution(self, resolution_plan, decisions):
+        return refine_bulk_collection_import_resolution_plan(
+            resolution_plan,
+            decisions,
+        )
+
+    def serialize_decisions(self, document):
+        return serialize_bulk_collection_import_second_review_document(
+            document
+        )
+
+    def assert_form_error(self, resolution_plan):
+        with self.assertRaises(BulkCollectionImportSecondReviewError):
+            build_bulk_collection_import_second_review_form(
+                resolution_plan
+            )
+
+    def assert_selection_error(self, form, selections):
+        with self.assertRaises(BulkCollectionImportSecondReviewError):
+            build_bulk_collection_import_second_review_document(
+                form,
+                selections,
+            )
+
+    def assert_refinement_error(self, resolution_plan, decisions):
+        with self.assertRaises(BulkCollectionImportSecondReviewError):
+            refine_bulk_collection_import_resolution_plan(
+                resolution_plan,
+                decisions,
+            )
+
+    def test_production_constants_match_specification(self):
+        self.assertEqual(
+            PRODUCTION_FORM_SCHEMA,
+            SECOND_REVIEW_FORM_SCHEMA,
+        )
+        self.assertEqual(
+            PRODUCTION_FORM_VERSION,
+            SECOND_REVIEW_FORM_VERSION,
+        )
+        self.assertEqual(
+            PRODUCTION_DECISION_SCHEMA,
+            SECOND_REVIEW_DECISION_SCHEMA,
+        )
+        self.assertEqual(
+            PRODUCTION_DECISION_VERSION,
+            SECOND_REVIEW_DECISION_VERSION,
+        )
+        self.assertEqual(
+            PRODUCTION_SECOND_REVIEW_ACTIONS,
+            SECOND_REVIEW_ACTIONS,
+        )
+        self.assertEqual(
+            PRODUCTION_CONFLICT_CHOICES,
+            SECOND_REVIEW_CONFLICT_CHOICES,
+        )
+
+    def test_all_keep_can_become_no_change_without_safe_pending_work(self):
+        plan = _resolution_plan()
+        items = list(plan.items)
+        row = items[1]
+        items[1] = BulkCollectionImportResolutionItem(
+            entry_key=row.entry_key,
+            action=row.action,
+            collection_key=row.collection_key,
+            title_value=row.title_value,
+            source_reference_additions=(),
+            attributes=row.attributes,
+            attribute_changes=(),
+            conflicts=row.conflicts,
+            warnings=row.warnings,
+        )
+        stripped = BulkCollectionImportResolutionPlan(
+            schema=plan.schema,
+            version=plan.version,
+            import_id=plan.import_id,
+            source_sha256=plan.source_sha256,
+            summary=plan.summary,
+            items=tuple(items),
+            groups=plan.groups,
+        )
+
+        form = build_bulk_collection_import_second_review_form(
+            stripped
+        )
+        decisions = build_bulk_collection_import_second_review_document(
+            form,
+            {
+                "selected": {
+                    "action": "resolve_metadata",
+                    "choices": {
+                        "title": "keep_existing",
+                        "exit_count": "keep_existing",
+                    },
+                }
+            },
+        )
+        refined = refine_bulk_collection_import_resolution_plan(
+            stripped,
+            decisions,
+        )
+
+        self.assertEqual(refined.items[1].action, "no_change")
+        self.assertEqual(
+            dict(refined.summary),
+            {
+                "total": 4,
+                "create_record": 1,
+                "update_record": 1,
+                "no_change": 1,
+                "review_required": 0,
+                "skip": 1,
+            },
+        )
+
+    def test_second_review_document_rejects_changed_target(self):
+        plan = _resolution_plan()
+        form = build_bulk_collection_import_second_review_form(plan)
+        decisions = build_bulk_collection_import_second_review_document(
+            form,
+            {"selected": {"action": "skip"}},
+        )
+        decisions["decisions"][0]["collection_key"] = "usr_other"
+
+        with self.assertRaises(BulkCollectionImportSecondReviewError):
+            refine_bulk_collection_import_resolution_plan(
+                plan,
+                decisions,
+            )
+
 
 
 if __name__ == "__main__":
