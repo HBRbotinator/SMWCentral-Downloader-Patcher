@@ -523,6 +523,7 @@ class CollectionPage:
                 on_application_preview=(
                     self._build_bulk_collection_import_application_preview
                 ),
+                on_apply=self._apply_bulk_collection_import,
             )
         )
         self.bulk_collection_import_dialog.show()
@@ -558,6 +559,51 @@ class CollectionPage:
             resolution_plan,
             self.data_manager,
         )
+
+    def _apply_bulk_collection_import(self, session):
+        """Execute one explicitly confirmed bulk import atomically."""
+
+        from bulk_collection_import_apply import (
+            BulkCollectionImportApplySession,
+            execute_bulk_collection_import_apply_session,
+        )
+        from bulk_collection_import_hack_data_store import (
+            BulkCollectionImportHackDataStore,
+        )
+
+        if not isinstance(
+            session,
+            BulkCollectionImportApplySession,
+        ):
+            raise TypeError(
+                "session must be BulkCollectionImportApplySession"
+            )
+        if session.state != "confirmed":
+            raise RuntimeError(
+                "Bulk Collection import must be explicitly confirmed "
+                "before the Collection store is constructed."
+            )
+
+        store = BulkCollectionImportHackDataStore(self.data_manager)
+        result = execute_bulk_collection_import_apply_session(
+            session,
+            store,
+        )
+
+        # The atomic store already published committed data to the existing
+        # manager. Refresh only the UI from that manager; do not force-save or
+        # reopen a second write path here.
+        try:
+            self.filters.refresh_dropdown_values(self.data_manager)
+            self._refresh_table()
+        except Exception as error:
+            self._log(
+                "Bulk Collection import committed, but Collection UI "
+                f"refresh failed: {error}",
+                "Warning",
+            )
+
+        return result
 
     def _on_bulk_collection_import_closed(self):
         self.bulk_collection_import_dialog = None

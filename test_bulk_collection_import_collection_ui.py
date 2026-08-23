@@ -32,6 +32,7 @@ def _load_collection_methods():
         "_open_bulk_collection_import_preview",
         "_resolve_bulk_collection_import_review",
         "_build_bulk_collection_import_application_preview",
+        "_apply_bulk_collection_import",
         "_on_bulk_collection_import_closed",
     }
     methods = [
@@ -82,6 +83,7 @@ class _FakeDialog:
         on_close=None,
         on_review_ready=None,
         on_application_preview=None,
+        on_apply=None,
     ):
         self.parent = parent
         self.preview = preview
@@ -89,6 +91,7 @@ class _FakeDialog:
         self.on_close = on_close
         self.on_review_ready = on_review_ready
         self.on_application_preview = on_application_preview
+        self.on_apply = on_apply
         self.show_count = 0
         self.close_count = 0
         self.__class__.instances.append(self)
@@ -121,6 +124,9 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
                 "_build_bulk_collection_import_application_preview"
             ]
         )
+        _PageHarness._apply_bulk_collection_import = namespace[
+            "_apply_bulk_collection_import"
+        ]
         _PageHarness._on_bulk_collection_import_closed = namespace[
             "_on_bulk_collection_import_closed"
         ]
@@ -132,6 +138,10 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
         page.data_manager = object()
         page.bulk_collection_import_dialog = None
         page._log = Mock()
+        page.filters = types.SimpleNamespace(
+            refresh_dropdown_values=Mock()
+        )
+        page._refresh_table = Mock()
         return page
 
     def _install_modules(self, *, selected, preview=None, error=None):
@@ -163,6 +173,26 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
             Mock(return_value="application-plan")
         )
 
+        apply_module = types.ModuleType(
+            "bulk_collection_import_apply"
+        )
+
+        class _FakeApplySession:
+            def __init__(self, state="awaiting_confirmation"):
+                self.state = state
+
+        apply_module.BulkCollectionImportApplySession = _FakeApplySession
+        apply_module.execute_bulk_collection_import_apply_session = Mock(
+            return_value="persistence-result"
+        )
+
+        store_module = types.ModuleType(
+            "bulk_collection_import_hack_data_store"
+        )
+        store_module.BulkCollectionImportHackDataStore = Mock(
+            return_value="hack-data-store"
+        )
+
         dialog = types.ModuleType("ui.bulk_collection_import_dialog")
         dialog.BulkCollectionImportDialog = _FakeDialog
 
@@ -171,6 +201,8 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
             "bulk_collection_import_workflow_preview": workflow,
             "bulk_collection_import_workflow_resolution": resolution,
             "bulk_collection_import_application_preview": application,
+            "bulk_collection_import_apply": apply_module,
+            "bulk_collection_import_hack_data_store": store_module,
             "ui.bulk_collection_import_dialog": dialog,
         }
 
@@ -248,6 +280,7 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
         self.assertIs(dialog.logger, page.logger)
         self.assertTrue(callable(dialog.on_review_ready))
         self.assertTrue(callable(dialog.on_application_preview))
+        self.assertTrue(callable(dialog.on_apply))
         self.assertEqual(dialog.show_count, 1)
         self.assertIs(page.bulk_collection_import_dialog, dialog)
 
@@ -287,6 +320,97 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
             "build_v5_1_bulk_collection_import_application_preview(",
             source,
         )
+
+    def test_collection_page_wires_explicit_apply_callback(self):
+        source = _collection_page_source()
+
+        self.assertIn(
+            "on_apply=self._apply_bulk_collection_import",
+            source,
+        )
+        self.assertIn(
+            "BulkCollectionImportHackDataStore(self.data_manager)",
+            source,
+        )
+        self.assertIn(
+            "execute_bulk_collection_import_apply_session(",
+            source,
+        )
+
+    def test_unconfirmed_session_is_rejected_before_store_construction(self):
+        page = self._page()
+        modules = self._install_modules(
+            selected="",
+            preview=object(),
+        )
+        session_type = modules[
+            "bulk_collection_import_apply"
+        ].BulkCollectionImportApplySession
+        session = session_type("awaiting_confirmation")
+
+        with patch.dict(sys.modules, modules):
+            with self.assertRaises(RuntimeError):
+                page._apply_bulk_collection_import(session)
+
+        modules[
+            "bulk_collection_import_hack_data_store"
+        ].BulkCollectionImportHackDataStore.assert_not_called()
+        modules[
+            "bulk_collection_import_apply"
+        ].execute_bulk_collection_import_apply_session.assert_not_called()
+        page._refresh_table.assert_not_called()
+
+    def test_confirmed_apply_constructs_store_executes_once_and_refreshes_ui(self):
+        page = self._page()
+        modules = self._install_modules(
+            selected="",
+            preview=object(),
+        )
+        session_type = modules[
+            "bulk_collection_import_apply"
+        ].BulkCollectionImportApplySession
+        session = session_type("confirmed")
+
+        with patch.dict(sys.modules, modules):
+            result = page._apply_bulk_collection_import(session)
+
+        self.assertEqual(result, "persistence-result")
+        modules[
+            "bulk_collection_import_hack_data_store"
+        ].BulkCollectionImportHackDataStore.assert_called_once_with(
+            page.data_manager
+        )
+        modules[
+            "bulk_collection_import_apply"
+        ].execute_bulk_collection_import_apply_session.assert_called_once_with(
+            session,
+            "hack-data-store",
+        )
+        page.filters.refresh_dropdown_values.assert_called_once_with(
+            page.data_manager
+        )
+        page._refresh_table.assert_called_once()
+
+    def test_apply_ui_refresh_failure_does_not_turn_committed_result_into_failure(self):
+        page = self._page()
+        modules = self._install_modules(
+            selected="",
+            preview=object(),
+        )
+        session_type = modules[
+            "bulk_collection_import_apply"
+        ].BulkCollectionImportApplySession
+        session = session_type("confirmed")
+        page._refresh_table.side_effect = RuntimeError(
+            "render failure"
+        )
+
+        with patch.dict(sys.modules, modules):
+            result = page._apply_bulk_collection_import(session)
+
+        self.assertEqual(result, "persistence-result")
+        page._log.assert_called_once()
+        self.assertEqual(page._log.call_args.args[1], "Warning")
 
     def test_invalid_import_shows_error_without_opening_dialog(self):
         page = self._page()
@@ -338,7 +462,7 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
             source,
         )
 
-    def test_collection_ui_preview_wiring_has_no_apply_or_persistence_path(self):
+    def test_collection_preview_method_has_no_direct_persistence_path(self):
         tree = ast.parse(_collection_page_source())
         collection_class = next(
             node
@@ -365,6 +489,37 @@ class BulkCollectionImportCollectionUiContractTest(unittest.TestCase):
             ".add_user_hack(",
         ):
             self.assertNotIn(forbidden, method_source)
+
+    def test_concrete_store_exists_only_in_explicit_apply_method(self):
+        tree = ast.parse(_collection_page_source())
+        collection_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "CollectionPage"
+        )
+        apply_method = next(
+            node
+            for node in collection_class.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_apply_bulk_collection_import"
+        )
+        source = ast.unparse(apply_method)
+
+        self.assertIn(
+            "session.state != 'confirmed'",
+            source,
+        )
+        self.assertIn(
+            "BulkCollectionImportHackDataStore(self.data_manager)",
+            source,
+        )
+        self.assertIn(
+            "execute_bulk_collection_import_apply_session",
+            source,
+        )
+        self.assertNotIn("force_save", source)
+        self.assertNotIn("reload_data", source)
 
     def test_collection_ui_uses_cross_platform_picker_not_filedialog(self):
         source = _collection_page_source()

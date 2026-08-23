@@ -1,7 +1,7 @@
 """Interactive review dialog for bulk Collection imports.
 
-This dialog collects review decisions and displays read-only resolution and
-application previews, but it never applies or persists Collection changes.
+This dialog keeps review and preview stages read-only, then permits one
+explicitly confirmed Apply attempt through an injected Collection callback.
 """
 
 from __future__ import annotations
@@ -12,6 +12,15 @@ from typing import Any
 
 from bulk_collection_import_application import (
     BulkCollectionImportApplicationPlan,
+)
+from bulk_collection_import_apply import (
+    BulkCollectionImportApplyError,
+    BulkCollectionImportApplySession,
+    confirm_bulk_collection_import_apply_session,
+    create_bulk_collection_import_apply_session,
+)
+from bulk_collection_import_persistence import (
+    BulkCollectionImportPersistenceResult,
 )
 from bulk_collection_import_resolution import (
     BulkCollectionImportResolutionPlan,
@@ -76,6 +85,7 @@ class BulkCollectionImportDialog:
         on_close=None,
         on_review_ready=None,
         on_application_preview=None,
+        on_apply=None,
     ):
         if not isinstance(
             preview,
@@ -95,6 +105,8 @@ class BulkCollectionImportDialog:
             raise TypeError(
                 "on_application_preview must be callable or None"
             )
+        if on_apply is not None and not callable(on_apply):
+            raise TypeError("on_apply must be callable or None")
 
         self.parent = parent
         self.preview = preview
@@ -102,6 +114,7 @@ class BulkCollectionImportDialog:
         self.on_close = on_close
         self.on_review_ready = on_review_ready
         self.on_application_preview = on_application_preview
+        self.on_apply = on_apply
 
         self.review_form = build_bulk_collection_import_review_form(
             preview
@@ -152,6 +165,12 @@ class BulkCollectionImportDialog:
         self.application_tree = None
         self.application_detail_var = None
         self._application_operations_by_key = {}
+
+        self.apply_session = None
+        self.apply_result = None
+        self.apply_status_var = None
+        self.apply_button = None
+        self._apply_terminal = False
 
     @property
     def selections(self):
@@ -486,8 +505,8 @@ class BulkCollectionImportDialog:
         notice = ttk.Label(
             parent,
             text=(
-                "Review decisions can be validated here, but no "
-                "Collection changes are applied from this dialog."
+                "Review and preview remain read-only until Apply Import "
+                "is explicitly confirmed."
             ),
             wraplength=1000,
         )
@@ -709,6 +728,20 @@ class BulkCollectionImportDialog:
             wraplength=1000,
         ).pack(fill="x", pady=(8, 0))
 
+        self.apply_status_var = tk.StringVar(
+            value=(
+                "Apply is unavailable until the final application "
+                "preview is ready."
+            )
+        )
+        ttk.Label(
+            self.application_frame,
+            textvariable=self.apply_status_var,
+            anchor="w",
+            justify="left",
+            wraplength=1000,
+        ).pack(fill="x", pady=(8, 0))
+
     def _build_footer(self, parent):
         footer = ttk.Frame(parent)
         footer.pack(fill="x", pady=(12, 0))
@@ -716,8 +749,8 @@ class BulkCollectionImportDialog:
         ttk.Label(
             footer,
             text=(
-                "Preview only — application execution and Collection writes "
-                "remain disabled."
+                "Collection changes occur only after Apply Import is "
+                "explicitly confirmed."
             ),
         ).pack(side="left")
 
@@ -726,6 +759,17 @@ class BulkCollectionImportDialog:
             text="Close",
             command=self.close,
         ).pack(side="right")
+
+        self.apply_button = ttk.Button(
+            footer,
+            text="Apply Import",
+            command=self._apply_from_ui,
+            state="disabled",
+        )
+        self.apply_button.pack(
+            side="right",
+            padx=(0, 10),
+        )
 
         if self.review_form.items:
             self.validate_button = ttk.Button(
@@ -1427,7 +1471,7 @@ class BulkCollectionImportDialog:
         else:
             text += (
                 "\nAll post-review actions are resolved. "
-                "Application remains disabled."
+                "The final application preview can now be prepared."
             )
         return text
 
@@ -1462,11 +1506,23 @@ class BulkCollectionImportDialog:
             for operation in preview.operations
         }
         self._render_application_preview(preview)
+        self._prepare_apply_session(preview)
         return preview
 
     def _clear_application_preview(self, status=None):
         self.application_preview = None
         self._application_operations_by_key = {}
+
+        if not self._apply_terminal:
+            self.apply_session = None
+            self.apply_result = None
+            if self.apply_button is not None:
+                self.apply_button.config(state="disabled")
+            if self.apply_status_var is not None:
+                self.apply_status_var.set(
+                    "Apply is unavailable until a fresh final "
+                    "application preview is ready."
+                )
 
         if self.application_tree is not None:
             for child in self.application_tree.get_children(""):
@@ -1508,6 +1564,180 @@ class BulkCollectionImportDialog:
                     self._application_operation_detail_text(operation)
                 )
 
+    def _prepare_apply_session(self, preview):
+        if self._apply_terminal:
+            if self.apply_button is not None:
+                self.apply_button.config(state="disabled")
+            if self.apply_status_var is not None:
+                self.apply_status_var.set(
+                    "This dialog already attempted Apply. Close it and "
+                    "open a fresh import preview for another attempt."
+                )
+            return None
+
+        session = create_bulk_collection_import_apply_session(preview)
+        self.apply_session = session
+        self.apply_result = None
+
+        if self.apply_status_var is not None:
+            self.apply_status_var.set(
+                "Ready for explicit confirmation.\n"
+                "Application plan SHA-256:\n"
+                f"{session.application_plan_sha256}"
+            )
+
+        if self.apply_button is not None:
+            self.apply_button.config(
+                state=(
+                    "normal"
+                    if self.on_apply is not None
+                    else "disabled"
+                )
+            )
+        return session
+
+    def _apply_from_ui(self):
+        session = self.apply_session
+        if (
+            self._apply_terminal
+            or session is None
+            or session.state != "awaiting_confirmation"
+        ):
+            return None
+
+        if self.on_apply is None:
+            if self.apply_status_var is not None:
+                self.apply_status_var.set(
+                    "No Collection Apply callback is connected."
+                )
+            return None
+
+        fingerprint = session.application_plan_sha256
+        summary = self.application_preview.summary
+        confirmed = messagebox.askyesno(
+            "Apply Bulk Collection Import",
+            (
+                "This will write the final reviewed bulk import to "
+                "your Collection.\n\n"
+                f"Create: {summary['create_record']}\n"
+                f"Update: {summary['update_record']}\n"
+                f"No Change: {summary['no_change']}\n"
+                f"Skip: {summary['skip']}\n\n"
+                "Confirm the exact displayed application plan:\n"
+                f"{fingerprint}\n\n"
+                "Apply these Collection changes now?"
+            ),
+            parent=self.window,
+        )
+        if not confirmed:
+            if self.apply_status_var is not None:
+                self.apply_status_var.set(
+                    "Apply cancelled. No Collection store was accessed.\n"
+                    "Application plan SHA-256:\n"
+                    f"{fingerprint}"
+                )
+            return None
+
+        try:
+            confirm_bulk_collection_import_apply_session(
+                session,
+                fingerprint,
+            )
+        except BulkCollectionImportApplyError as error:
+            if self.apply_status_var is not None:
+                self.apply_status_var.set(
+                    "Apply confirmation failed. No Collection write "
+                    "was attempted."
+                )
+            messagebox.showerror(
+                "Bulk Collection Import Apply",
+                str(error),
+                parent=self.window,
+            )
+            return None
+
+        if self.apply_button is not None:
+            self.apply_button.config(state="disabled")
+        if self.validate_button is not None:
+            self.validate_button.config(state="disabled")
+        if self.second_validate_button is not None:
+            self.second_validate_button.config(state="disabled")
+        if self.apply_status_var is not None:
+            self.apply_status_var.set(
+                "Applying the explicitly confirmed plan..."
+            )
+
+        try:
+            result = self.on_apply(session)
+            if not isinstance(
+                result,
+                BulkCollectionImportPersistenceResult,
+            ):
+                raise TypeError(
+                    "on_apply must return "
+                    "BulkCollectionImportPersistenceResult"
+                )
+            if session.state != "succeeded":
+                raise TypeError(
+                    "on_apply returned without completing the "
+                    "confirmed Apply session."
+                )
+        except Exception as error:
+            self._apply_terminal = True
+            self.apply_result = None
+            if self.apply_status_var is not None:
+                self.apply_status_var.set(
+                    "Apply failed. This attempt is terminal; close this "
+                    "dialog and build a fresh preview before retrying."
+                )
+            if self.logger:
+                self.logger.log(
+                    f"Bulk Collection import Apply failed: {error}",
+                    "Error",
+                )
+            messagebox.showerror(
+                "Bulk Collection Import Apply",
+                (
+                    "The confirmed Apply attempt failed.\n\n"
+                    f"{error}\n\n"
+                    "No automatic retry will occur. Close this dialog "
+                    "and build a fresh application preview before "
+                    "another attempt."
+                ),
+                parent=self.window,
+            )
+            return None
+
+        self._apply_terminal = True
+        self.apply_result = result
+        if self.apply_status_var is not None:
+            self.apply_status_var.set(
+                self._apply_result_summary_text(result)
+                + "\nApply succeeded. This dialog cannot apply again."
+            )
+
+        messagebox.showinfo(
+            "Bulk Collection Import Applied",
+            (
+                self._apply_result_summary_text(result)
+                + "\n\nThe Collection import was committed atomically. "
+                "This dialog cannot apply the plan a second time."
+            ),
+            parent=self.window,
+        )
+        return result
+
+    @staticmethod
+    def _apply_result_summary_text(result):
+        summary = result.summary
+        return (
+            f"{summary['total']} outcomes · "
+            f"{summary['created']} created · "
+            f"{summary['updated']} updated · "
+            f"{summary['unchanged']} unchanged · "
+            f"{summary['skipped']} skipped"
+        )
+
     def _application_selection_changed(self, _event=None):
         if self.application_tree is None:
             return
@@ -1532,7 +1762,7 @@ class BulkCollectionImportDialog:
             f"{summary['no_change']} unchanged · "
             f"{summary['skip']} skip\n"
             "Final Collection keys and freshness fingerprints are ready. "
-            "Application remains disabled."
+            "Review them before explicitly applying the import."
         )
 
     @classmethod

@@ -6,7 +6,15 @@ import importlib.util
 import unittest
 from pathlib import Path
 from types import MappingProxyType
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+from bulk_collection_import_apply import (
+    execute_bulk_collection_import_apply_session,
+)
+from bulk_collection_import_persistence import (
+    BulkCollectionImportPersistenceItem,
+    BulkCollectionImportPersistenceResult,
+)
 
 from bulk_collection_import_application import (
     BulkCollectionImportApplicationAttributeChange,
@@ -472,6 +480,101 @@ def _resolution_plan(*, further_review=0):
     )
 
 
+
+
+class _DialogApplyStore:
+    def __init__(self, plan):
+        self.plan = plan
+        self.begin_count = 0
+        self.transaction = _DialogApplyTransaction()
+
+    def record_exists(self, collection_key):
+        return False
+
+    def shared_sha256(self, collection_key):
+        operation = next(
+            operation
+            for operation in self.plan.operations
+            if operation.collection_key == collection_key
+        )
+        return operation.expected_shared_sha256
+
+    def begin_transaction(self):
+        self.begin_count += 1
+        return self.transaction
+
+
+class _DialogApplyTransaction:
+    def __init__(self):
+        self.created = []
+        self.updated = []
+        self.commit_count = 0
+        self.rollback_count = 0
+
+    def create_record(self, **kwargs):
+        self.created.append(kwargs)
+
+    def update_record(self, **kwargs):
+        self.updated.append(kwargs)
+
+    def commit(self):
+        self.commit_count += 1
+
+    def rollback(self):
+        self.rollback_count += 1
+
+
+def _apply_result():
+    items = (
+        BulkCollectionImportPersistenceItem(
+            entry_key="matched",
+            outcome="updated",
+            collection_key="100",
+            warnings=(),
+        ),
+        BulkCollectionImportPersistenceItem(
+            entry_key="new",
+            outcome="created",
+            collection_key="usr_import_0123456789abcdef",
+            warnings=(),
+        ),
+        BulkCollectionImportPersistenceItem(
+            entry_key="ambiguous",
+            outcome="unchanged",
+            collection_key="usr_1",
+            warnings=(),
+        ),
+        BulkCollectionImportPersistenceItem(
+            entry_key="hard",
+            outcome="skipped",
+            collection_key=None,
+            warnings=("source_identity_conflict",),
+        ),
+        BulkCollectionImportPersistenceItem(
+            entry_key="metadata",
+            outcome="updated",
+            collection_key="300",
+            warnings=(),
+        ),
+    )
+    return BulkCollectionImportPersistenceResult(
+        schema="smwc-bulk-collection-persistence-result",
+        version=1,
+        import_id="dialog-review-suite",
+        source_sha256="f" * 64,
+        summary=MappingProxyType(
+            {
+                "total": 5,
+                "created": 1,
+                "updated": 2,
+                "unchanged": 1,
+                "skipped": 1,
+            }
+        ),
+        items=items,
+    )
+
+
 class BulkCollectionImportDialogContractTest(unittest.TestCase):
     def test_constructor_requires_real_workflow_preview(self):
         with self.assertRaises(TypeError):
@@ -497,6 +600,13 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
                 None,
                 _preview(),
                 on_application_preview="not callable",
+            )
+
+        with self.assertRaises(TypeError):
+            BulkCollectionImportDialog(
+                None,
+                _preview(),
+                on_apply="not callable",
             )
 
     def test_constructor_builds_review_form_without_defaults(self):
@@ -803,13 +913,12 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
         ):
             self.assertIn(required, source)
 
-    def test_dialog_has_no_resolution_application_or_persistence(self):
+    def test_dialog_has_no_direct_persistence_implementation(self):
         source = Path(
             "ui/bulk_collection_import_dialog.py"
         ).read_text(encoding="utf-8")
 
         for forbidden in (
-            'text="Apply',
             'text="Save',
             "resolve_bulk_collection_import",
             "build_v5_1_bulk_collection_import_application_plan",
@@ -850,7 +959,7 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
             "5 entries · 1 add · 2 update · 1 unchanged · "
             "1 skip · 0 further review\n"
             "All post-review actions are resolved. "
-            "Application remains disabled.",
+            "The final application preview can now be prepared.",
         )
 
     def test_resolution_summary_calls_out_further_review(self):
@@ -1075,7 +1184,6 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
             self.assertIn(required, source)
 
         for forbidden in (
-            'text="Apply',
             'text="Save',
             "build_v5_1_bulk_collection_import_application_plan",
             "allocate_bulk_collection_import_keys",
@@ -1105,6 +1213,16 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
             dialog.application_preview.operations[1].collection_key,
             "usr_import_0123456789abcdef",
         )
+        self.assertIsNotNone(dialog.apply_session)
+        self.assertEqual(
+            dialog.apply_session.state,
+            "awaiting_confirmation",
+        )
+        self.assertEqual(
+            len(dialog.apply_session.application_plan_sha256),
+            64,
+        )
+        self.assertIsNone(dialog.apply_result)
 
     def test_further_review_delays_application_preview_until_refined(self):
         application_callback = Mock(return_value=_application_plan())
@@ -1146,7 +1264,7 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
             ),
             "5 operations · 1 create · 2 update · 1 unchanged · "
             "1 skip\nFinal Collection keys and freshness fingerprints "
-            "are ready. Application remains disabled.",
+            "are ready. Review them before explicitly applying the import.",
         )
 
     def test_application_rows_show_final_key_and_short_fingerprint(self):
@@ -1195,6 +1313,8 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
         dialog._invalidate_validation()
 
         self.assertIsNone(dialog.application_preview)
+        self.assertIsNone(dialog.apply_session)
+        self.assertIsNone(dialog.apply_result)
 
     def test_review_free_import_can_prepare_resolution_without_fake_choices(self):
         resolution_callback = Mock(return_value=_resolution_plan())
@@ -1214,27 +1334,133 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
         application_callback.assert_called_once_with(result)
         self.assertIsNotNone(dialog.application_preview)
 
-    def test_dialog_source_renders_application_preview_without_apply(self):
+    def test_apply_cancel_keeps_session_inert_and_does_not_call_callback(self):
+        callback = Mock()
+        dialog = BulkCollectionImportDialog(
+            None,
+            _preview(),
+            on_application_preview=lambda _plan: _application_plan(),
+            on_apply=callback,
+        )
+        dialog._show_resolution_plan(_resolution_plan())
+
+        with patch(
+            "tkinter.messagebox.askyesno",
+            return_value=False,
+        ):
+            result = dialog._apply_from_ui()
+
+        self.assertIsNone(result)
+        callback.assert_not_called()
+        self.assertEqual(
+            dialog.apply_session.state,
+            "awaiting_confirmation",
+        )
+        self.assertFalse(dialog._apply_terminal)
+        self.assertIsNone(dialog.apply_result)
+
+    def test_explicit_apply_confirms_before_callback_and_succeeds_once(self):
+        plan = _application_plan()
+        store = _DialogApplyStore(plan)
+        callback_states = []
+
+        def on_apply(session):
+            callback_states.append(session.state)
+            return execute_bulk_collection_import_apply_session(
+                session,
+                store,
+            )
+
+        dialog = BulkCollectionImportDialog(
+            None,
+            _preview(),
+            on_application_preview=lambda _plan: plan,
+            on_apply=on_apply,
+        )
+        dialog._show_resolution_plan(_resolution_plan())
+        fingerprint = dialog.apply_session.application_plan_sha256
+
+        with patch(
+            "tkinter.messagebox.askyesno",
+            return_value=True,
+        ), patch("tkinter.messagebox.showinfo"):
+            result = dialog._apply_from_ui()
+
+        self.assertEqual(callback_states, ["confirmed"])
+        self.assertIs(result, dialog.apply_result)
+        self.assertEqual(dialog.apply_session.state, "succeeded")
+        self.assertTrue(dialog._apply_terminal)
+        self.assertEqual(store.begin_count, 1)
+        self.assertEqual(
+            len(fingerprint),
+            64,
+        )
+
+        with patch("tkinter.messagebox.askyesno") as ask_again:
+            second = dialog._apply_from_ui()
+
+        self.assertIsNone(second)
+        ask_again.assert_not_called()
+        self.assertEqual(store.begin_count, 1)
+
+    def test_failed_apply_is_terminal_and_never_auto_retries(self):
+        callback = Mock(side_effect=RuntimeError("write failed"))
+        dialog = BulkCollectionImportDialog(
+            None,
+            _preview(),
+            on_application_preview=lambda _plan: _application_plan(),
+            on_apply=callback,
+        )
+        dialog._show_resolution_plan(_resolution_plan())
+
+        with patch(
+            "tkinter.messagebox.askyesno",
+            return_value=True,
+        ), patch("tkinter.messagebox.showerror"):
+            result = dialog._apply_from_ui()
+
+        self.assertIsNone(result)
+        self.assertTrue(dialog._apply_terminal)
+        self.assertIsNone(dialog.apply_result)
+        callback.assert_called_once()
+
+        with patch("tkinter.messagebox.askyesno") as ask_again:
+            dialog._apply_from_ui()
+
+        ask_again.assert_not_called()
+        callback.assert_called_once()
+
+    def test_apply_result_summary_uses_persistence_outcomes(self):
+        self.assertEqual(
+            BulkCollectionImportDialog._apply_result_summary_text(
+                _apply_result()
+            ),
+            "5 outcomes · 1 created · 2 updated · "
+            "1 unchanged · 1 skipped",
+        )
+
+    def test_dialog_source_requires_explicit_confirmation_before_apply(self):
         source = Path(
             "ui/bulk_collection_import_dialog.py"
         ).read_text(encoding="utf-8")
 
         for required in (
-            "Final application preview",
-            "on_application_preview",
-            "BulkCollectionImportApplicationPlan",
-            "Final Collection key",
-            "Expected shared-state SHA-256",
-            "Application remains disabled",
-            "prepare_no_review_resolution",
+            'text="Apply Import"',
+            "messagebox.askyesno(",
+            "Application plan SHA-256",
+            "confirm_bulk_collection_import_apply_session(",
+            "session.state != \"awaiting_confirmation\"",
+            "This dialog cannot apply the plan a second time.",
+            "No automatic retry will occur.",
         ):
             self.assertIn(required, source)
 
         for forbidden in (
-            'text="Apply',
-            'text="Save',
-            "execute_bulk_collection_import_application_plan",
             "BulkCollectionImportHackDataStore",
+            "execute_bulk_collection_import_application_plan",
+            "execute_bulk_collection_import_apply_session",
+            ".save_data(",
+            ".force_save(",
         ):
             self.assertNotIn(forbidden, source)
 
