@@ -1,0 +1,83 @@
+{
+  "schema": "smwc-bulk-collection-import",
+  "version": 1,
+  "import_id": "example-hybrid",
+  "title": "Hybrid Source Import",
+  "entries": [
+    {
+      "entry_key": "hybrid-smwc-kaizoff",
+      "title": "Hybrid Example",
+      "source_references": [
+        {
+          "source": "smwc",
+          "external_id": "54321"
+        },
+        {
+          "source": "kaizoff",
+          "external_id": "hybrid-example"
+        }
+      ],
+      "attributes": {
+        "authors": [
+          "Hybrid Author"
+        ],
+        "difficulty": "Kaizo: Intermediate",
+        "exit_count": 16,
+        "release_date": "2026-07-10",
+        "tags": [
+          "short",
+          "vanilla"
+        ],
+        "source_note": "Example custom shared metadata"
+      }
+    },
+    {
+      "entry_key": "kaizoff-only",
+      "title": "External Source Example",
+      "source_references": [
+        {
+          "source": "kaizoff",
+          "external_id": "external-source-example"
+        }
+      ],
+      "attributes": {
+        "authors": [
+          "External Author"
+        ],
+        "difficulty": "Kaizo: Beginner",
+        "exit_count": 8,
+        "release_date": "2026-06-20"
+      }
+    },
+    {
+      "entry_key": "source-less-local",
+      "title": "Source-less Example",
+      "source_references": [],
+      "attributes": {
+        "authors": [
+          "Local Author"
+        ],
+        "difficulty": "Standard: Hard",
+        "exit_count": 10,
+        "release_date": ""
+      }
+    }
+  ],
+  "groups": [
+    {
+      "group_key": "linked",
+      "title": "Linked Sources",
+      "entry_keys": [
+        "hybrid-smwc-kaizoff",
+        "kaizoff-only"
+      ]
+    },
+    {
+      "group_key": "local",
+      "title": "Source-less",
+      "entry_keys": [
+        "source-less-local"
+      ]
+    }
+  ]
+}
