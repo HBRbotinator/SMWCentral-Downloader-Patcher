@@ -6,6 +6,7 @@ import copy
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from bulk_collection_import_application import (
@@ -660,6 +661,176 @@ class BulkCollectionImportHackDataStoreImplementationTest(
             "previous-backup",
         )
         self.assertTrue(path.exists())
+
+
+    def test_success_log_failure_does_not_turn_commit_into_failure(self):
+        root, path, manager, store = self._make()
+        original_bytes = path.read_bytes()
+
+        class FailingLogger:
+            def log(self, _message, _level):
+                raise RuntimeError("logger unavailable")
+
+        manager.logger = FailingLogger()
+
+        transaction = store.begin_transaction()
+        transaction.update_record(
+            collection_key="12345",
+            title_value=None,
+            source_reference_additions=[],
+            attribute_changes=[
+                {"field": "exit_count", "value": 77},
+            ],
+        )
+
+        # The atomic replace is already the commit point. Logging after it
+        # cannot make the operation appear failed.
+        transaction.commit()
+
+        self.assertEqual(manager.data["12345"]["exits"], 77)
+        self.assertFalse(manager.unsaved_changes)
+        self.assertEqual(
+            json.loads(path.read_text(encoding="utf-8"))["12345"][
+                "exits"
+            ],
+            77,
+        )
+        self.assertEqual(
+            (root / "processed.json.backup").read_bytes(),
+            original_bytes,
+        )
+
+        # Finished transactions remain inert even though success logging
+        # failed.
+        transaction.rollback()
+        self.assertEqual(manager.data["12345"]["exits"], 77)
+
+    def test_partial_backup_copy_failure_restores_previous_backup(self):
+        root, path, manager, store = self._make()
+        original_bytes = path.read_bytes()
+        original_data = copy.deepcopy(manager.data)
+        backup = root / "processed.json.backup"
+        backup.write_text(
+            "previous-backup",
+            encoding="utf-8",
+        )
+
+        transaction = store.begin_transaction()
+        transaction.update_record(
+            collection_key="12345",
+            title_value="Never Persist",
+            source_reference_additions=[],
+            attribute_changes=[],
+        )
+
+        def partial_copy_then_fail(_source, destination):
+            Path(destination).write_text(
+                "partial-new-backup",
+                encoding="utf-8",
+            )
+            raise OSError("copy failed after destination changed")
+
+        with patch(
+            "bulk_collection_import_hack_data_store.shutil.copy2",
+            side_effect=partial_copy_then_fail,
+        ):
+            with self.assertRaises(OSError):
+                transaction.commit()
+
+        self.assertEqual(path.read_bytes(), original_bytes)
+        self.assertEqual(manager.data, original_data)
+        self.assertEqual(
+            backup.read_text(encoding="utf-8"),
+            "previous-backup",
+        )
+        self.assertFalse(
+            (root / f"processed.json{BULK_IMPORT_TEMP_SUFFIX}").exists()
+        )
+
+    def test_manager_change_during_temp_staging_is_preserved(self):
+        _, path, manager, store = self._make()
+        original_disk = path.read_bytes()
+
+        transaction = store.begin_transaction()
+        transaction.update_record(
+            collection_key="12345",
+            title_value="Import Update",
+            source_reference_additions=[],
+            attribute_changes=[],
+        )
+
+        original_write = transaction._write_staged_temp
+
+        def write_then_edit_manager():
+            original_write()
+            manager.data["usr_0"]["notes"] = "Concurrent UI edit"
+            manager.unsaved_changes = True
+
+        transaction._write_staged_temp = write_then_edit_manager
+
+        with self.assertRaises(Exception):
+            transaction.commit()
+
+        self.assertEqual(path.read_bytes(), original_disk)
+        self.assertEqual(
+            manager.data["usr_0"]["notes"],
+            "Concurrent UI edit",
+        )
+        self.assertTrue(manager.unsaved_changes)
+
+        # Generic executor rollback after the failure must not erase the
+        # concurrent edit either.
+        transaction.rollback()
+        self.assertEqual(
+            manager.data["usr_0"]["notes"],
+            "Concurrent UI edit",
+        )
+
+    def test_disk_change_during_temp_staging_is_preserved(self):
+        root, path, manager, store = self._make()
+        original_manager = copy.deepcopy(manager.data)
+
+        transaction = store.begin_transaction()
+        transaction.update_record(
+            collection_key="12345",
+            title_value="Import Update",
+            source_reference_additions=[],
+            attribute_changes=[],
+        )
+
+        external = copy.deepcopy(INITIAL_COLLECTION)
+        external["usr_0"]["notes"] = "Concurrent disk edit"
+        original_write = transaction._write_staged_temp
+
+        def write_then_edit_disk():
+            original_write()
+            self._write_collection(path, external)
+
+        transaction._write_staged_temp = write_then_edit_disk
+
+        with self.assertRaises(Exception):
+            transaction.commit()
+
+        persisted = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            persisted["usr_0"]["notes"],
+            "Concurrent disk edit",
+        )
+        self.assertEqual(manager.data, original_manager)
+        self.assertFalse(
+            (root / "processed.json.backup").exists()
+        )
+        self.assertFalse(
+            (root / f"processed.json{BULK_IMPORT_TEMP_SUFFIX}").exists()
+        )
+
+        transaction.rollback()
+        self.assertEqual(
+            json.loads(path.read_text(encoding="utf-8"))["usr_0"][
+                "notes"
+            ],
+            "Concurrent disk edit",
+        )
 
 
 if __name__ == "__main__":

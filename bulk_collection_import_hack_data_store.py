@@ -56,6 +56,12 @@ class BulkCollectionImportHackDataStoreError(RuntimeError):
     """Raised when the concrete v5.1 Collection store cannot proceed safely."""
 
 
+class _BulkCollectionImportStaleStateError(
+    BulkCollectionImportHackDataStoreError
+):
+    """Raised when manager/disk state changes during one transaction."""
+
+
 class BulkCollectionImportHackDataStore:
     """Expose HackDataManager through the Commit 105 store contract."""
 
@@ -241,12 +247,20 @@ class BulkCollectionImportHackDataTransaction:
         )
         backup_changed = False
 
-        preflight_passed = False
+        # Prepare the exact manager publication before any disk replacement.
+        # Everything after os.replace() must be non-failing bookkeeping so a
+        # committed file can never be reported as a failed transaction.
+        published_data = copy.deepcopy(self._staged_data)
+
         try:
             self._assert_live_state_unchanged_since_begin()
-            preflight_passed = True
             self._cancel_pending_timer()
             self._write_staged_temp()
+
+            # Recheck after temp-file serialization. This closes the larger
+            # stale-state window where a delayed save, UI edit, or external
+            # writer could otherwise change live state while staging.
+            self._assert_live_state_unchanged_since_begin()
 
             if self.fail_before_replace:
                 raise BulkCollectionImportHackDataStoreError(
@@ -254,23 +268,30 @@ class BulkCollectionImportHackDataTransaction:
                 )
 
             if self._path.exists():
-                shutil.copy2(self._path, self._backup_path)
+                # Arm restoration before copy2 starts: copy2 can truncate or
+                # partially create the destination before raising.
                 backup_changed = True
+                shutil.copy2(self._path, self._backup_path)
 
+            # Recheck once more after backup creation and immediately before
+            # replacing the live Collection file.
+            self._assert_live_state_unchanged_since_begin()
             os.replace(self._temp_path, self._path)
 
-            self.manager.data = copy.deepcopy(self._staged_data)
-            self.manager.unsaved_changes = False
-            self.manager._save_timer = None
+        except _BulkCollectionImportStaleStateError:
+            self._remove_temp_file()
+            if backup_changed:
+                self._restore_previous_backup(
+                    previous_backup_exists,
+                    previous_backup_bytes,
+                )
+
+            # The changed manager/disk state belongs to another actor. Never
+            # overwrite it during defensive rollback.
+            self._restore_pending_timer_if_needed()
             self._finished = True
-            self.manager._log(
-                (
-                    "💾 Bulk Collection import committed "
-                    f"{len(self.manager.data)} records atomically to "
-                    f"{self.manager.json_path}"
-                ),
-                "Information",
-            )
+            raise
+
         except Exception:
             self._remove_temp_file()
             if backup_changed:
@@ -278,14 +299,17 @@ class BulkCollectionImportHackDataTransaction:
                     previous_backup_exists,
                     previous_backup_bytes,
                 )
-            if preflight_passed:
-                self._restore_manager_after_failed_commit()
-            else:
-                # A concurrent manager/disk change is external to this
-                # transaction. Mark the transaction finished so a caller's
-                # defensive rollback cannot overwrite that newer state.
-                self._finished = True
+            self._restore_manager_after_failed_commit()
             raise
+
+        # os.replace() is the commit point. The prepared publication below is
+        # deliberately limited to assignments plus best-effort logging.
+        self.manager.data = published_data
+        self.manager.unsaved_changes = False
+        self.manager._save_timer = None
+        self._timer_cancelled = False
+        self._finished = True
+        self._log_success_best_effort()
 
     def rollback(self):
         if self._finished:
@@ -299,20 +323,20 @@ class BulkCollectionImportHackDataTransaction:
 
     def _assert_live_state_unchanged_since_begin(self):
         if self.manager.data != self._manager_data_at_begin:
-            raise BulkCollectionImportHackDataStoreError(
+            raise _BulkCollectionImportStaleStateError(
                 "HackDataManager changed after the import transaction began."
             )
 
         disk_exists = self._path.exists()
         if disk_exists != self._disk_exists_at_begin:
-            raise BulkCollectionImportHackDataStoreError(
+            raise _BulkCollectionImportStaleStateError(
                 "processed.json changed after the import transaction began."
             )
         if (
             disk_exists
             and self._path.read_bytes() != self._disk_bytes_at_begin
         ):
-            raise BulkCollectionImportHackDataStoreError(
+            raise _BulkCollectionImportStaleStateError(
                 "processed.json changed after the import transaction began."
             )
 
@@ -336,6 +360,22 @@ class BulkCollectionImportHackDataTransaction:
         self.manager.data = copy.deepcopy(self._manager_data_at_begin)
         self.manager.unsaved_changes = self._unsaved_at_begin
         self._restore_pending_timer_if_needed()
+
+    def _log_success_best_effort(self):
+        try:
+            self.manager._log(
+                (
+                    "💾 Bulk Collection import committed "
+                    f"{len(self.manager.data)} records atomically to "
+                    f"{self.manager.json_path}"
+                ),
+                "Information",
+            )
+        except Exception:
+            # Logging is downstream of the atomic os.replace() commit point.
+            # It must never turn a successful Collection write into a false
+            # failure or roll back the already-published manager state.
+            pass
 
     def _write_staged_temp(self):
         self._path.parent.mkdir(parents=True, exist_ok=True)
