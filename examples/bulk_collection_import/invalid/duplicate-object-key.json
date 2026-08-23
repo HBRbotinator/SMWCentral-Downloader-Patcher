@@ -1,0 +1,9 @@
+{
+  "schema": "smwc-bulk-collection-import",
+  "version": 1,
+  "import_id": "duplicate-key",
+  "title": "Duplicate Key",
+  "title": "Duplicate Key Again",
+  "entries": [],
+  "groups": []
+}

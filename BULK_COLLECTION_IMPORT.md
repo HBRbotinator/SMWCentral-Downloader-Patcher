@@ -377,6 +377,28 @@ This demonstrates:
 Against an empty Collection, the hybrid SMWCentral entry uses key `54321`; the
 other two creates receive deterministic `usr_import_...` keys.
 
+## Common validation failures
+
+The importer fails closed rather than guessing when producer input is ambiguous or malformed.
+
+Checked invalid examples live in `examples/bulk_collection_import/invalid/`. They are intentionally invalid and are covered by `test_bulk_collection_import_invalid_examples.py`.
+
+| Producer mistake | Typical error |
+| --- | --- |
+| Broken JSON syntax | `Bulk Collection import file contains malformed JSON.` |
+| Duplicate JSON object key | `Duplicate JSON object key is not allowed: ...` |
+| Unexpected top-level field in the checked fixture | `... fields must match the versioned contract (unexpected: provider).` |
+| User-owned/local state in `attributes` | `Imported attributes may not contain user-owned Collection state: ...` |
+| One source identity attached to two entries | `Source reference belongs to more than one entry: ...` |
+| Imported entry omitted from all groups | `Every imported entry must appear exactly once in ordered groups; missing: ...` |
+| Group references a nonexistent entry | `Ordered group references unknown entry_key: ...` |
+| Invalid source-name syntax | `...source has an invalid identifier format.` |
+| Non-decimal SMWCentral external ID | `SMWCentral external IDs must be decimal.` |
+
+The first eight cases are rejected while the local JSON document is loaded or parsed. The SMWCentral decimal-ID rule is v5.1 Collection-key behavior rather than a generic transport rule, so it is checked when the fully resolved import becomes the final application preview. The import is still blocked before any Apply confirmation or Collection write can occur.
+
+Do not treat the invalid fixture files as templates. They exist only to lock down failure behavior and error wording.
+
 ## Minimal checklist for producers
 
 Before handing a file to SMWC v5.1:

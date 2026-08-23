@@ -1,0 +1,35 @@
+{
+  "schema": "smwc-bulk-collection-import",
+  "version": 1,
+  "import_id": "invalid-fixture",
+  "title": "Invalid Fixture",
+  "entries": [
+    {
+      "entry_key": "first",
+      "title": "First Entry",
+      "source_references": [
+        {
+          "source": "smwc",
+          "external_id": "not-a-number"
+        }
+      ],
+      "attributes": {
+        "authors": [
+          "Example Author"
+        ],
+        "difficulty": "Kaizo: Beginner",
+        "exit_count": 10,
+        "release_date": "2026-08-01"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "group_key": "all",
+      "title": "All",
+      "entry_keys": [
+        "first"
+      ]
+    }
+  ]
+}
