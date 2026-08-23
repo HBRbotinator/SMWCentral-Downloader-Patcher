@@ -7,6 +7,19 @@ import json
 import unittest
 from types import MappingProxyType
 
+from bulk_collection_import_apply import (
+    BULK_COLLECTION_IMPORT_APPLY_CONFIRMATION_SCHEMA,
+    BULK_COLLECTION_IMPORT_APPLY_CONFIRMATION_VERSION,
+    BULK_COLLECTION_IMPORT_APPLY_SESSION_STATES,
+    BULK_COLLECTION_IMPORT_APPLY_TERMINAL_STATES,
+    BulkCollectionImportApplyError,
+    bulk_collection_import_apply_confirmation_to_document,
+    confirm_bulk_collection_import_apply_session,
+    create_bulk_collection_import_apply_session,
+    execute_bulk_collection_import_apply_session,
+    serialize_bulk_collection_import_apply_confirmation,
+)
+
 from bulk_collection_import_application import (
     BulkCollectionImportApplicationAttributeChange,
     BulkCollectionImportApplicationGroup,
@@ -695,6 +708,139 @@ class BulkCollectionImportApplySpecificationTest(unittest.TestCase):
                 "rollback",
             ),
         )
+
+
+class BulkCollectionImportApplyImplementationTest(
+    BulkCollectionImportApplyContractMixin,
+    unittest.TestCase,
+):
+    """Run Commit 126's one-shot Apply contract against production."""
+
+    def create_session(self, application_plan):
+        return create_bulk_collection_import_apply_session(
+            application_plan
+        )
+
+    def session_state(self, session):
+        return session.state
+
+    def session_plan_sha256(self, session):
+        return session.application_plan_sha256
+
+    def confirmation_document(self, session):
+        return bulk_collection_import_apply_confirmation_to_document(
+            session
+        )
+
+    def confirm(self, session, application_plan_sha256):
+        return confirm_bulk_collection_import_apply_session(
+            session,
+            application_plan_sha256,
+        )
+
+    def execute(self, session, store):
+        return execute_bulk_collection_import_apply_session(
+            session,
+            store,
+        )
+
+    def session_result(self, session):
+        return session.result
+
+    def serialize_confirmation(self, confirmation):
+        return serialize_bulk_collection_import_apply_confirmation(
+            confirmation
+        )
+
+    def assert_apply_error(self, callback):
+        with self.assertRaises(BulkCollectionImportApplyError):
+            callback()
+
+    def test_production_constants_match_apply_contract(self):
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_APPLY_CONFIRMATION_SCHEMA,
+            APPLY_CONFIRMATION_SCHEMA,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_APPLY_CONFIRMATION_VERSION,
+            APPLY_CONFIRMATION_VERSION,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_APPLY_SESSION_STATES,
+            APPLY_SESSION_STATES,
+        )
+        self.assertEqual(
+            BULK_COLLECTION_IMPORT_APPLY_TERMINAL_STATES,
+            APPLY_TERMINAL_STATES,
+        )
+
+    def test_session_freezes_plan_used_for_execution(self):
+        plan = _application_plan()
+        session = create_bulk_collection_import_apply_session(plan)
+        fingerprint = session.application_plan_sha256
+
+        # The exact canonical plan fingerprint was frozen at session creation.
+        self.assertEqual(
+            fingerprint,
+            _canonical_plan_sha256(plan),
+        )
+
+        confirm_bulk_collection_import_apply_session(
+            session,
+            fingerprint,
+        )
+        store = _ApplyContractStore()
+        result = execute_bulk_collection_import_apply_session(
+            session,
+            store,
+        )
+
+        self.assertEqual(result.import_id, plan.import_id)
+        self.assertEqual(store.begin_count, 1)
+
+    def test_malformed_confirmation_serialization_fails_closed(self):
+        with self.assertRaises(BulkCollectionImportApplyError):
+            serialize_bulk_collection_import_apply_confirmation(
+                {
+                    "schema": APPLY_CONFIRMATION_SCHEMA,
+                    "version": APPLY_CONFIRMATION_VERSION,
+                    "import_id": "apply-contract-suite",
+                    "source_sha256": SOURCE_SHA256,
+                    "application_plan_sha256": "0" * 64,
+                    "confirmed": False,
+                }
+            )
+
+    def test_terminal_failure_keeps_explicit_confirmation_for_audit(self):
+        session = create_bulk_collection_import_apply_session(
+            _application_plan()
+        )
+        confirm_bulk_collection_import_apply_session(
+            session,
+            session.application_plan_sha256,
+        )
+        store = _ApplyContractStore(
+            update_sha256="e" * 64
+        )
+
+        with self.assertRaises(BulkCollectionImportApplyError):
+            execute_bulk_collection_import_apply_session(
+                session,
+                store,
+            )
+
+        self.assertEqual(session.state, "failed")
+        confirmation = (
+            bulk_collection_import_apply_confirmation_to_document(
+                session
+            )
+        )
+        self.assertTrue(confirmation["confirmed"])
+        self.assertEqual(
+            confirmation["application_plan_sha256"],
+            session.application_plan_sha256,
+        )
+
 
 
 if __name__ == "__main__":
