@@ -9,6 +9,8 @@ from collection_ingestion import (
     IngestionSource,
     RomFileEvidence,
     SOURCE_CAPABILITIES,
+    SharedMetadataEvidence,
+    UserPlaythroughEvidence,
 )
 
 
@@ -53,6 +55,22 @@ class CollectionIngestionModelTest(unittest.TestCase):
             "41022",
             by_kind[IdentityEvidenceKind.SMWC_SUBMISSION_ID].value,
         )
+
+    def test_remote_metadata_and_user_history_are_evidence_not_local_paths(self):
+        metadata = SharedMetadataEvidence(
+            source=IngestionSource.KAIZOFF,
+            title="Example",
+            download_url="https://dl.smwcentral.net/1/example.zip",
+        )
+        history = UserPlaythroughEvidence(
+            source=IngestionSource.GIGANTIC_BUCKET,
+            source_record_id="12:0",
+            elapsed_seconds=3600,
+        )
+
+        self.assertFalse(hasattr(metadata, "file_path"))
+        self.assertFalse(hasattr(history, "file_path"))
+        self.assertEqual(3600, history.elapsed_seconds)
 
 
 if __name__ == "__main__":
