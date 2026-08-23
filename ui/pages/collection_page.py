@@ -520,6 +520,9 @@ class CollectionPage:
                         review_document,
                     )
                 ),
+                on_application_preview=(
+                    self._build_bulk_collection_import_application_preview
+                ),
             )
         )
         self.bulk_collection_import_dialog.show()
@@ -539,6 +542,21 @@ class CollectionPage:
             selected_path,
             self.data_manager,
             review_document,
+        )
+
+    def _build_bulk_collection_import_application_preview(
+        self,
+        resolution_plan,
+    ):
+        """Build a final read-only plan against live Collection state."""
+
+        from bulk_collection_import_application_preview import (
+            build_v5_1_bulk_collection_import_application_preview,
+        )
+
+        return build_v5_1_bulk_collection_import_application_preview(
+            resolution_plan,
+            self.data_manager,
         )
 
     def _on_bulk_collection_import_closed(self):

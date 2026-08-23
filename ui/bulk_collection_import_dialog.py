@@ -1,7 +1,7 @@
 """Interactive review dialog for bulk Collection imports.
 
-This dialog can collect and validate review decisions, but it never resolves,
-applies, or persists Collection changes.
+This dialog collects review decisions and displays read-only resolution and
+application previews, but it never applies or persists Collection changes.
 """
 
 from __future__ import annotations
@@ -10,6 +10,9 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any
 
+from bulk_collection_import_application import (
+    BulkCollectionImportApplicationPlan,
+)
 from bulk_collection_import_resolution import (
     BulkCollectionImportResolutionPlan,
 )
@@ -72,6 +75,7 @@ class BulkCollectionImportDialog:
         logger=None,
         on_close=None,
         on_review_ready=None,
+        on_application_preview=None,
     ):
         if not isinstance(
             preview,
@@ -84,12 +88,20 @@ class BulkCollectionImportDialog:
             raise TypeError("on_close must be callable or None")
         if on_review_ready is not None and not callable(on_review_ready):
             raise TypeError("on_review_ready must be callable or None")
+        if (
+            on_application_preview is not None
+            and not callable(on_application_preview)
+        ):
+            raise TypeError(
+                "on_application_preview must be callable or None"
+            )
 
         self.parent = parent
         self.preview = preview
         self.logger = logger
         self.on_close = on_close
         self.on_review_ready = on_review_ready
+        self.on_application_preview = on_application_preview
 
         self.review_form = build_bulk_collection_import_review_form(
             preview
@@ -133,6 +145,13 @@ class BulkCollectionImportDialog:
         self._second_selections = {}
         self._second_action_vars = {}
         self._second_conflict_vars = {}
+
+        self.application_preview = None
+        self.application_frame = None
+        self.application_summary_var = None
+        self.application_tree = None
+        self.application_detail_var = None
+        self._application_operations_by_key = {}
 
     @property
     def selections(self):
@@ -192,8 +211,10 @@ class BulkCollectionImportDialog:
         self._build_review_panel(container)
         self._build_resolution_panel(container)
         self._build_second_review_panel(container)
+        self._build_application_panel(container)
         self._build_footer(container)
         self._populate_rows()
+        self._prepare_no_review_from_ui()
 
         self._center()
         self.window.deiconify()
@@ -334,6 +355,19 @@ class BulkCollectionImportDialog:
         self._show_resolution_plan(resolution_plan)
 
         return document
+
+    def prepare_no_review_resolution(self):
+        """Resolve a review-free import through the same fresh callback."""
+
+        if self.review_form.items:
+            raise BulkCollectionImportReviewFormError(
+                "This import still requires explicit review decisions."
+            )
+        if self.resolution_plan is not None:
+            return self.resolution_plan
+
+        self.build_validated_review_document()
+        return self.resolution_plan
 
     def set_second_review_action(
         self,
@@ -606,6 +640,75 @@ class BulkCollectionImportDialog:
             wraplength=1000,
         ).pack(fill="x")
 
+    def _build_application_panel(self, parent):
+        self.application_frame = ttk.LabelFrame(
+            parent,
+            text="Final application preview",
+            padding=10,
+        )
+        self.application_frame.pack(fill="x", pady=(12, 0))
+
+        self.application_summary_var = tk.StringVar(
+            value=(
+                "Complete all review rounds to build the final "
+                "read-only application preview."
+            )
+        )
+        ttk.Label(
+            self.application_frame,
+            textvariable=self.application_summary_var,
+            anchor="w",
+            justify="left",
+            wraplength=1000,
+        ).pack(fill="x")
+
+        columns = (
+            "action",
+            "entry_key",
+            "collection_key",
+            "changes",
+            "fingerprint",
+        )
+        self.application_tree = ttk.Treeview(
+            self.application_frame,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+            height=5,
+        )
+        headings = {
+            "action": ("Action", 95, "center", False),
+            "entry_key": ("Import entry", 170, "w", True),
+            "collection_key": ("Final Collection key", 170, "w", True),
+            "changes": ("Shared changes", 360, "w", True),
+            "fingerprint": ("Freshness", 120, "w", False),
+        }
+        for column, values in headings.items():
+            label, width, anchor, stretch = values
+            self.application_tree.heading(column, text=label)
+            self.application_tree.column(
+                column,
+                width=width,
+                anchor=anchor,
+                stretch=stretch,
+            )
+        self.application_tree.pack(fill="x", pady=(8, 0))
+        self.application_tree.bind(
+            "<<TreeviewSelect>>",
+            self._application_selection_changed,
+        )
+
+        self.application_detail_var = tk.StringVar(
+            value="No final application operation is available yet."
+        )
+        ttk.Label(
+            self.application_frame,
+            textvariable=self.application_detail_var,
+            anchor="w",
+            justify="left",
+            wraplength=1000,
+        ).pack(fill="x", pady=(8, 0))
+
     def _build_footer(self, parent):
         footer = ttk.Frame(parent)
         footer.pack(fill="x", pady=(12, 0))
@@ -613,7 +716,7 @@ class BulkCollectionImportDialog:
         ttk.Label(
             footer,
             text=(
-                "Validation only — resolution and Collection writes "
+                "Preview only — application execution and Collection writes "
                 "remain disabled."
             ),
         ).pack(side="left")
@@ -1074,6 +1177,35 @@ class BulkCollectionImportDialog:
             choice,
         )
 
+    def _prepare_no_review_from_ui(self):
+        if self.review_form.items:
+            return
+        try:
+            self.prepare_no_review_resolution()
+        except Exception as error:
+            self.validated_review_document = None
+            self.resolution_plan = None
+            self._clear_application_preview(
+                "The review-free application preview could not be built."
+            )
+            if self.logger:
+                self.logger.log(
+                    "Bulk Collection review-free preview failed: "
+                    f"{error}",
+                    "Error",
+                )
+            messagebox.showerror(
+                "Bulk Collection Import Preview",
+                (
+                    "The import requires no manual review, but its "
+                    "final read-only application preview could not "
+                    "be prepared.\n\n"
+                    f"{error}\n\n"
+                    "No Collection changes were applied."
+                ),
+                parent=self.window,
+            )
+
     def _validate_second_review_from_ui(self):
         try:
             document = self.build_validated_second_review_document()
@@ -1186,6 +1318,9 @@ class BulkCollectionImportDialog:
         self.validated_review_document = None
         self.resolution_plan = None
         self._clear_second_review_state()
+        self._clear_application_preview(
+            "Review changed. Validate again to rebuild the final preview."
+        )
         if self.resolution_var is not None:
             self.resolution_var.set(
                 "Review changed. Validate again to refresh the "
@@ -1194,6 +1329,10 @@ class BulkCollectionImportDialog:
 
     def _invalidate_second_review_validation(self):
         self.validated_second_review_document = None
+        self._clear_application_preview(
+            "Follow-up review changed. Validate again to rebuild "
+            "the final preview."
+        )
         if self.second_review_status_var is not None:
             self.second_review_status_var.set(
                 "Follow-up review changed. Validate again to "
@@ -1218,6 +1357,9 @@ class BulkCollectionImportDialog:
     def _show_resolution_plan(self, plan):
         if plan is None:
             self._clear_second_review_state()
+            self._clear_application_preview(
+                "No final application preview callback is connected."
+            )
             if self.resolution_var is not None:
                 self.resolution_var.set(
                     "Review decisions validated. No resolution callback "
@@ -1230,6 +1372,14 @@ class BulkCollectionImportDialog:
             self.resolution_var.set(
                 self._resolution_summary_text(plan)
             )
+
+        if plan.summary["review_required"]:
+            self._clear_application_preview(
+                "Resolve the follow-up metadata review before the "
+                "final application preview is built."
+            )
+        else:
+            self._refresh_application_preview(plan)
 
     def _prepare_second_review(self, plan):
         if not plan.summary["review_required"]:
@@ -1280,6 +1430,222 @@ class BulkCollectionImportDialog:
                 "Application remains disabled."
             )
         return text
+
+    def _refresh_application_preview(self, resolution_plan):
+        if self.on_application_preview is None:
+            self._clear_application_preview(
+                "Resolution is complete. No final application preview "
+                "callback is connected."
+            )
+            return None
+
+        preview = self.on_application_preview(resolution_plan)
+        if preview is None:
+            self._clear_application_preview(
+                "Resolution is complete. No final application preview "
+                "was returned."
+            )
+            return None
+        if not isinstance(preview, BulkCollectionImportApplicationPlan):
+            self._clear_application_preview(
+                "The final application preview callback returned an "
+                "invalid result."
+            )
+            raise TypeError(
+                "on_application_preview must return "
+                "BulkCollectionImportApplicationPlan or None"
+            )
+
+        self.application_preview = preview
+        self._application_operations_by_key = {
+            operation.entry_key: operation
+            for operation in preview.operations
+        }
+        self._render_application_preview(preview)
+        return preview
+
+    def _clear_application_preview(self, status=None):
+        self.application_preview = None
+        self._application_operations_by_key = {}
+
+        if self.application_tree is not None:
+            for child in self.application_tree.get_children(""):
+                self.application_tree.delete(child)
+        if self.application_summary_var is not None and status is not None:
+            self.application_summary_var.set(status)
+        if self.application_detail_var is not None:
+            self.application_detail_var.set(
+                "No final application operation is available yet."
+            )
+
+    def _render_application_preview(self, preview):
+        if self.application_summary_var is not None:
+            self.application_summary_var.set(
+                self._application_summary_text(preview)
+            )
+        if self.application_tree is None:
+            return
+
+        for child in self.application_tree.get_children(""):
+            self.application_tree.delete(child)
+        for operation in preview.operations:
+            self.application_tree.insert(
+                "",
+                "end",
+                iid=operation.entry_key,
+                values=self._application_operation_values(operation),
+            )
+
+        children = self.application_tree.get_children("")
+        if children:
+            first = children[0]
+            self.application_tree.selection_set(first)
+            self.application_tree.focus(first)
+            self.application_tree.see(first)
+            operation = self._application_operations_by_key[first]
+            if self.application_detail_var is not None:
+                self.application_detail_var.set(
+                    self._application_operation_detail_text(operation)
+                )
+
+    def _application_selection_changed(self, _event=None):
+        if self.application_tree is None:
+            return
+        selection = self.application_tree.selection()
+        if not selection:
+            return
+        operation = self._application_operations_by_key.get(
+            selection[0]
+        )
+        if operation is not None and self.application_detail_var is not None:
+            self.application_detail_var.set(
+                self._application_operation_detail_text(operation)
+            )
+
+    @staticmethod
+    def _application_summary_text(preview):
+        summary = preview.summary
+        return (
+            f"{summary['total']} operations · "
+            f"{summary['create_record']} create · "
+            f"{summary['update_record']} update · "
+            f"{summary['no_change']} unchanged · "
+            f"{summary['skip']} skip\n"
+            "Final Collection keys and freshness fingerprints are ready. "
+            "Application remains disabled."
+        )
+
+    @classmethod
+    def _application_operation_values(cls, operation):
+        labels = {
+            "create_record": "Create",
+            "update_record": "Update",
+            "no_change": "No Change",
+            "skip": "Skip",
+        }
+        fingerprint = (
+            operation.expected_shared_sha256[:12] + "…"
+            if operation.expected_shared_sha256
+            else "—"
+        )
+        return (
+            labels.get(operation.action, operation.action),
+            operation.entry_key,
+            operation.collection_key or "—",
+            cls._application_change_summary(operation),
+            fingerprint,
+        )
+
+    @classmethod
+    def _application_change_summary(cls, operation):
+        if operation.action == "skip":
+            return "No write"
+        if operation.action == "no_change":
+            return "No shared changes"
+
+        changes = []
+        if operation.title_value is not None:
+            changes.append("title")
+        if operation.action == "create_record":
+            if operation.source_references:
+                changes.append(
+                    f"{len(operation.source_references)} source link(s)"
+                )
+            if operation.attributes:
+                changes.append(
+                    "metadata: " + ", ".join(operation.attributes)
+                )
+        else:
+            if operation.source_reference_additions:
+                changes.append(
+                    f"{len(operation.source_reference_additions)} "
+                    "source link(s)"
+                )
+            if operation.attribute_changes:
+                changes.append(
+                    "metadata: "
+                    + ", ".join(
+                        change.field
+                        for change in operation.attribute_changes
+                    )
+                )
+        return "; ".join(changes) if changes else "Shared update"
+
+    @classmethod
+    def _application_operation_detail_text(cls, operation):
+        lines = [
+            f"Action: {operation.action}",
+            "Final Collection key: " + (
+                operation.collection_key or "none"
+            ),
+        ]
+
+        if operation.expected_shared_sha256:
+            lines.append(
+                "Expected shared-state SHA-256: "
+                + operation.expected_shared_sha256
+            )
+        if operation.title_value is not None:
+            lines.append("Title: " + operation.title_value)
+        if operation.source_references:
+            lines.append(
+                "Create source reference(s): "
+                + ", ".join(
+                    f"{value.source}:{value.external_id}"
+                    for value in operation.source_references
+                )
+            )
+        if operation.source_reference_additions:
+            lines.append(
+                "Source reference addition(s): "
+                + ", ".join(
+                    f"{value.source}:{value.external_id}"
+                    for value in operation.source_reference_additions
+                )
+            )
+        if operation.attributes:
+            lines.append(
+                "Create metadata: "
+                + "; ".join(
+                    f"{field}={cls._display_value(value)}"
+                    for field, value in operation.attributes.items()
+                )
+            )
+        if operation.attribute_changes:
+            lines.append(
+                "Metadata change(s): "
+                + "; ".join(
+                    f"{change.field}={cls._display_value(change.value)}"
+                    for change in operation.attribute_changes
+                )
+            )
+        if operation.warnings:
+            lines.append("Warnings: " + ", ".join(operation.warnings))
+        if operation.action == "no_change":
+            lines.append("No shared Collection changes will be written.")
+        if operation.action == "skip":
+            lines.append("This entry has no Collection write operation.")
+        return "\n".join(lines)
 
     def _require_second_review_item(self, entry_key):
         item = self.second_review_items_by_key.get(entry_key)

@@ -8,6 +8,13 @@ from pathlib import Path
 from types import MappingProxyType
 from unittest.mock import Mock
 
+from bulk_collection_import_application import (
+    BulkCollectionImportApplicationAttributeChange,
+    BulkCollectionImportApplicationGroup,
+    BulkCollectionImportApplicationOperation,
+    BulkCollectionImportApplicationPlan,
+    BulkCollectionImportApplicationSourceReference,
+)
 from bulk_collection_import_resolution import (
     BulkCollectionImportResolutionAttributeChange,
     BulkCollectionImportResolutionConflict,
@@ -202,6 +209,145 @@ def _preview():
 
 
 
+def _application_plan():
+    operations = (
+        BulkCollectionImportApplicationOperation(
+            entry_key="matched",
+            action="update_record",
+            collection_key="100",
+            expected_shared_sha256="c" * 64,
+            title_value=None,
+            source_references=(),
+            source_reference_additions=(
+                BulkCollectionImportApplicationSourceReference(
+                    source="kaizoff",
+                    external_id="mirror-100",
+                ),
+            ),
+            attributes=MappingProxyType({}),
+            attribute_changes=(
+                BulkCollectionImportApplicationAttributeChange(
+                    field="difficulty",
+                    value="Expert",
+                ),
+            ),
+            warnings=(),
+        ),
+        BulkCollectionImportApplicationOperation(
+            entry_key="new",
+            action="create_record",
+            collection_key="usr_import_0123456789abcdef",
+            expected_shared_sha256=None,
+            title_value="New Hack",
+            source_references=(
+                BulkCollectionImportApplicationSourceReference(
+                    source="kaizoff",
+                    external_id="new-hack",
+                ),
+            ),
+            source_reference_additions=(),
+            attributes=MappingProxyType(
+                {"authors": ("Author New",)}
+            ),
+            attribute_changes=(),
+            warnings=(),
+        ),
+        BulkCollectionImportApplicationOperation(
+            entry_key="ambiguous",
+            action="no_change",
+            collection_key="usr_1",
+            expected_shared_sha256="d" * 64,
+            title_value=None,
+            source_references=(),
+            source_reference_additions=(),
+            attributes=MappingProxyType({}),
+            attribute_changes=(),
+            warnings=(),
+        ),
+        BulkCollectionImportApplicationOperation(
+            entry_key="hard",
+            action="skip",
+            collection_key=None,
+            expected_shared_sha256=None,
+            title_value=None,
+            source_references=(),
+            source_reference_additions=(),
+            attributes=MappingProxyType({}),
+            attribute_changes=(),
+            warnings=("source_identity_conflict",),
+        ),
+        BulkCollectionImportApplicationOperation(
+            entry_key="metadata",
+            action="update_record",
+            collection_key="300",
+            expected_shared_sha256="e" * 64,
+            title_value="Metadata Conflict",
+            source_references=(),
+            source_reference_additions=(),
+            attributes=MappingProxyType({}),
+            attribute_changes=(),
+            warnings=(),
+        ),
+    )
+    return BulkCollectionImportApplicationPlan(
+        schema="smwc-bulk-collection-application-plan",
+        version=1,
+        import_id="dialog-review-suite",
+        source_sha256="f" * 64,
+        summary=MappingProxyType(
+            {
+                "total": 5,
+                "create_record": 1,
+                "update_record": 2,
+                "no_change": 1,
+                "skip": 1,
+            }
+        ),
+        operations=operations,
+        groups=(
+            BulkCollectionImportApplicationGroup(
+                group_key="queue",
+                title="Queue",
+                entry_keys=tuple(
+                    operation.entry_key
+                    for operation in operations
+                ),
+            ),
+        ),
+    )
+
+
+def _preview_without_reviews():
+    preview = _preview()
+    rows = preview.rows[:2]
+    return BulkCollectionImportWorkflowPreview(
+        schema=preview.schema,
+        version=preview.version,
+        source_name=preview.source_name,
+        byte_count=preview.byte_count,
+        source_sha256=preview.source_sha256,
+        import_id=preview.import_id,
+        title=preview.title,
+        summary=MappingProxyType(
+            {
+                "total": 2,
+                "create_record": 1,
+                "update_record": 1,
+                "no_change": 0,
+                "review_required": 0,
+            }
+        ),
+        rows=rows,
+        groups=(
+            BulkCollectionImportWorkflowGroup(
+                group_key="queue",
+                title="Queue",
+                entry_keys=tuple(row.entry_key for row in rows),
+            ),
+        ),
+    )
+
+
 def _resolution_plan(*, further_review=0):
     actions = [
         BulkCollectionImportResolutionItem(
@@ -344,6 +490,13 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
                 None,
                 _preview(),
                 on_review_ready="not callable",
+            )
+
+        with self.assertRaises(TypeError):
+            BulkCollectionImportDialog(
+                None,
+                _preview(),
+                on_application_preview="not callable",
             )
 
     def test_constructor_builds_review_form_without_defaults(self):
@@ -926,6 +1079,161 @@ class BulkCollectionImportDialogContractTest(unittest.TestCase):
             'text="Save',
             "build_v5_1_bulk_collection_import_application_plan",
             "allocate_bulk_collection_import_keys",
+            "BulkCollectionImportHackDataStore",
+        ):
+            self.assertNotIn(forbidden, source)
+
+
+
+    def test_resolved_plan_builds_final_application_preview(self):
+        application_callback = Mock(return_value=_application_plan())
+        dialog = BulkCollectionImportDialog(
+            None,
+            _preview(),
+            on_application_preview=application_callback,
+        )
+
+        resolution = _resolution_plan()
+        dialog._show_resolution_plan(resolution)
+
+        application_callback.assert_called_once_with(resolution)
+        self.assertIs(
+            dialog.application_preview,
+            application_callback.return_value,
+        )
+        self.assertEqual(
+            dialog.application_preview.operations[1].collection_key,
+            "usr_import_0123456789abcdef",
+        )
+
+    def test_further_review_delays_application_preview_until_refined(self):
+        application_callback = Mock(return_value=_application_plan())
+        dialog = BulkCollectionImportDialog(
+            None,
+            _preview(),
+            on_application_preview=application_callback,
+        )
+        dialog.resolution_plan = _resolution_plan(further_review=1)
+        dialog._show_resolution_plan(dialog.resolution_plan)
+
+        application_callback.assert_not_called()
+        self.assertIsNone(dialog.application_preview)
+
+        dialog.set_second_review_action("ambiguous", "skip")
+        dialog.build_validated_second_review_document()
+
+        application_callback.assert_called_once_with(
+            dialog.resolution_plan
+        )
+        self.assertIsNotNone(dialog.application_preview)
+
+    def test_application_callback_wrong_type_fails_closed(self):
+        dialog = BulkCollectionImportDialog(
+            None,
+            _preview(),
+            on_application_preview=lambda _plan: object(),
+        )
+
+        with self.assertRaises(TypeError):
+            dialog._show_resolution_plan(_resolution_plan())
+
+        self.assertIsNone(dialog.application_preview)
+
+    def test_application_summary_exposes_final_operation_counts(self):
+        self.assertEqual(
+            BulkCollectionImportDialog._application_summary_text(
+                _application_plan()
+            ),
+            "5 operations · 1 create · 2 update · 1 unchanged · "
+            "1 skip\nFinal Collection keys and freshness fingerprints "
+            "are ready. Application remains disabled.",
+        )
+
+    def test_application_rows_show_final_key_and_short_fingerprint(self):
+        plan = _application_plan()
+
+        self.assertEqual(
+            BulkCollectionImportDialog._application_operation_values(
+                plan.operations[0]
+            ),
+            (
+                "Update",
+                "matched",
+                "100",
+                "1 source link(s); metadata: difficulty",
+                "cccccccccccc…",
+            ),
+        )
+        self.assertEqual(
+            BulkCollectionImportDialog._application_operation_values(
+                plan.operations[1]
+            )[2],
+            "usr_import_0123456789abcdef",
+        )
+
+    def test_application_detail_shows_full_freshness_and_exact_changes(self):
+        detail = (
+            BulkCollectionImportDialog._application_operation_detail_text(
+                _application_plan().operations[0]
+            )
+        )
+
+        self.assertIn("Final Collection key: 100", detail)
+        self.assertIn("c" * 64, detail)
+        self.assertIn("kaizoff:mirror-100", detail)
+        self.assertIn("difficulty=Expert", detail)
+
+    def test_first_round_edit_clears_final_application_preview(self):
+        dialog = BulkCollectionImportDialog(
+            None,
+            _preview(),
+            on_application_preview=lambda _plan: _application_plan(),
+        )
+        dialog._show_resolution_plan(_resolution_plan())
+        self.assertIsNotNone(dialog.application_preview)
+
+        dialog._invalidate_validation()
+
+        self.assertIsNone(dialog.application_preview)
+
+    def test_review_free_import_can_prepare_resolution_without_fake_choices(self):
+        resolution_callback = Mock(return_value=_resolution_plan())
+        application_callback = Mock(return_value=_application_plan())
+        dialog = BulkCollectionImportDialog(
+            None,
+            _preview_without_reviews(),
+            on_review_ready=resolution_callback,
+            on_application_preview=application_callback,
+        )
+
+        result = dialog.prepare_no_review_resolution()
+
+        self.assertIs(result, resolution_callback.return_value)
+        review_document = resolution_callback.call_args.args[0]
+        self.assertEqual(review_document["decisions"], [])
+        application_callback.assert_called_once_with(result)
+        self.assertIsNotNone(dialog.application_preview)
+
+    def test_dialog_source_renders_application_preview_without_apply(self):
+        source = Path(
+            "ui/bulk_collection_import_dialog.py"
+        ).read_text(encoding="utf-8")
+
+        for required in (
+            "Final application preview",
+            "on_application_preview",
+            "BulkCollectionImportApplicationPlan",
+            "Final Collection key",
+            "Expected shared-state SHA-256",
+            "Application remains disabled",
+            "prepare_no_review_resolution",
+        ):
+            self.assertIn(required, source)
+
+        for forbidden in (
+            'text="Apply',
+            'text="Save',
+            "execute_bulk_collection_import_application_plan",
             "BulkCollectionImportHackDataStore",
         ):
             self.assertNotIn(forbidden, source)
