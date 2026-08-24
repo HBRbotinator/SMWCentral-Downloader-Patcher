@@ -146,7 +146,7 @@ class CollectionBehaviorTest(unittest.TestCase):
         self.assertEqual(backup["202"], record)
 
     def test_local_save_backed_entry_remains_a_valid_collection_record(self):
-        local_id = "usr_save_0123456789abcdef"
+        local_id = "usr_0123456789abcdef"
         local_record = {
             "title": "Local Challenge",
             "current_difficulty": "No Difficulty",

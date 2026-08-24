@@ -1441,16 +1441,18 @@ class LocalSaveEntryTest(unittest.TestCase):
             self.data[hack_id] = dict(entry)
             return True
 
-    def test_local_entry_id_is_deterministic_and_path_free(self):
+    def test_local_entry_id_is_opaque_random_and_evidence_independent(self):
         first_id, first = save_sync.build_local_entry(
             os.path.join("private", "QW2.srm"), "Unlisted Hack", 12
         )
         second_id, second = save_sync.build_local_entry(
             os.path.join("other", "QW2.srm"), "Unlisted Hack", "12"
         )
-        self.assertEqual(first_id, second_id)
-        self.assertTrue(first_id.startswith("usr_save_"))
+        self.assertRegex(first_id, r"^usr_[0-9a-f]{16}$")
+        self.assertRegex(second_id, r"^usr_[0-9a-f]{16}$")
+        self.assertNotEqual(first_id, second_id)
         self.assertNotIn("private", first_id)
+        self.assertNotIn("qw2", first_id.casefold())
         self.assertEqual(first["exits"], 12)
         self.assertTrue(first["local_save_entry"])
         self.assertEqual(first, second)
@@ -1486,15 +1488,16 @@ class LocalSaveEntryTest(unittest.TestCase):
         self.assertTrue(entry["local_save_entry"])
 
 
-    def test_existing_local_entry_can_be_relinked(self):
+    def test_local_resolution_never_reidentifies_existing_entry_by_title(self):
         hack_id, _entry = save_sync.build_local_entry(
             "Unlisted.srm", "Unlisted Hack", 10
         )
         resolution = save_sync.resolution_for_local_entry(
             "Unlisted.srm", "Unlisted Hack", 10, {hack_id}
         )
-        self.assertEqual(resolution["status"], save_sync.RESOLUTION_EXISTS)
-        self.assertEqual(resolution["hack_id"], hack_id)
+        self.assertEqual(resolution["status"], save_sync.RESOLUTION_LOCAL)
+        self.assertNotEqual(resolution["hack_id"], hack_id)
+        self.assertRegex(resolution["hack_id"], r"^usr_[0-9a-f]{16}$")
 
     def test_diagnostics_identify_local_custom_resolution(self):
         manager = self.DataManager()
@@ -1532,7 +1535,7 @@ class LocalSaveEntryLifecycleRegressionTest(unittest.TestCase):
     @staticmethod
     def _local_hack():
         return {
-            "id": "usr_save_cc154f1fc78c6ebd",
+            "id": "usr_cc154f1fc78c6ebd",
             "title": "Grand Poo World 3",
             "exits": 41,
             "completed": False,
@@ -1684,17 +1687,17 @@ class LocalSaveEntryManagementTest(unittest.TestCase):
             "personal_rating": 5,
             "local_save_entry": True,
         }
-        manager = self.DataManager({"usr_save_local": entry})
+        manager = self.DataManager({"usr_aaaaaaaaaaaaaaaa": entry})
 
         changed = save_sync.update_local_entry(
             manager,
-            "usr_save_local",
+            "usr_aaaaaaaaaaaaaaaa",
             "New Title",
             25,
         )
 
         self.assertTrue(changed)
-        self.assertIn("usr_save_local", manager.data)
+        self.assertIn("usr_aaaaaaaaaaaaaaaa", manager.data)
         self.assertEqual(entry["title"], "New Title")
         self.assertEqual(entry["exits"], 25)
         self.assertTrue(entry["completed"])
@@ -1740,22 +1743,22 @@ class LocalSaveEntryManagementTest(unittest.TestCase):
                 "local_save_entry": True,
                 "file_path": recorded_path,
             }
-            manager = self.DataManager({"usr_save_local": entry})
+            manager = self.DataManager({"usr_aaaaaaaaaaaaaaaa": entry})
             config = self.Config({
                 save_sync.ASSOCIATION_CONFIG_KEY: {
-                    "localhack": "usr_save_local",
-                    "alternate": "usr_save_local",
+                    "localhack": "usr_aaaaaaaaaaaaaaaa",
+                    "alternate": "usr_aaaaaaaaaaaaaaaa",
                     "other": "456",
                 }
             })
 
             removed, aliases = save_sync.remove_local_entry(
-                manager, config, "usr_save_local"
+                manager, config, "usr_aaaaaaaaaaaaaaaa"
             )
 
             self.assertTrue(removed)
             self.assertEqual(aliases, 2)
-            self.assertNotIn("usr_save_local", manager.data)
+            self.assertNotIn("usr_aaaaaaaaaaaaaaaa", manager.data)
             self.assertTrue(os.path.isfile(recorded_path))
             self.assertEqual(
                 config.values[save_sync.ASSOCIATION_CONFIG_KEY],

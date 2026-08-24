@@ -26,7 +26,6 @@ Copyright (c) 2025 iamtheratio
 Licensed under the MIT License - see LICENSE file for details
 """
 
-import hashlib
 import json
 import os
 import re
@@ -41,6 +40,7 @@ from save_analysis import (
     SaveAnalysis,
     analyze_save,
 )
+from collection_reconciliation import generate_local_collection_id
 
 # --- SMW SRAM layout ---------------------------------------------------------
 
@@ -267,7 +267,7 @@ def association_key(name):
 
 
 def clean_save_associations(value):
-    """Return a normalized ``save filename -> SMWC ID`` mapping."""
+    """Return a normalized ``save filename -> Collection ID`` mapping."""
 
     if not isinstance(value, dict):
         return {}
@@ -857,12 +857,15 @@ def _smwc_entry_fields(hack):
     }
 
 
-def local_entry_id(save_name, title):
-    """Return a deterministic path-free ID for a user-defined save entry."""
+def local_entry_id(save_name=None, title=None):
+    """Allocate one opaque local Collection ID independent of save/title evidence.
 
-    identity = f"{association_key(save_name)}\0{_normalize(title)}"
-    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
-    return f"usr_save_{digest}"
+    ``save_name`` and ``title`` remain accepted for compatibility with the
+    experimental Save Sync call sites, but neither value participates in the ID.
+    """
+
+    del save_name, title
+    return generate_local_collection_id()
 
 
 def validate_local_entry_fields(title, total_exits):

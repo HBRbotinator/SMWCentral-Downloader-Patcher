@@ -172,7 +172,7 @@ class SmwcRatingBackfillTest(unittest.TestCase):
                 "time": 1_600_000_000,
                 "date": "2020-09-13",
             },
-            "usr_save_local": {
+            "usr_aaaaaaaaaaaaaaaa": {
                 "title": "Local Save Entry",
                 "time": 0,
                 "date": "",
@@ -211,7 +211,7 @@ class SmwcRatingBackfillTest(unittest.TestCase):
         self.assertEqual(processed["101"]["rating"], 4.6)
         self.assertEqual(processed["101"]["time"], 1_600_000_000)
         self.assertEqual(processed["101"]["date"], "2020-09-13")
-        self.assertNotIn("rating", processed["usr_save_local"])
+        self.assertNotIn("rating", processed["usr_aaaaaaaaaaaaaaaa"])
         fetch_individual.assert_not_called()
         self.assertEqual(saved[-1]["101"]["rating"], 4.6)
 

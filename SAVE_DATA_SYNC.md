@@ -155,9 +155,10 @@ entry.
 4. Confirm the prepared resolution.
 5. Press **Apply Selected**.
 
-The entry is marked internally with `local_save_entry: true` and receives a
-stable privacy-safe ID beginning with `usr_save_`. The ID is derived from the
-normalized filename and entered title, never from an absolute path.
+The entry is marked internally with `local_save_entry: true` and receives the
+same opaque local Collection identity used by other ingestion sources:
+`usr_<16 lowercase hex characters>`. The ID is randomly allocated and is not
+derived from the save filename, entered title, ROM hash, or absolute path.
 
 A total of `0` means unknown and keeps the progress uncertain.
 
