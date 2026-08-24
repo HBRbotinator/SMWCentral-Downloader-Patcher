@@ -254,36 +254,48 @@ def resolve_rom_against_catalogue(
     embedded_id = rom.embedded_smwc_submission_id
     if embedded_id is not None:
         entry = matcher.get(embedded_id)
-        if entry is not None:
-            direct_match = matcher.score_entry(
-                rom.title_hint,
-                embedded_id,
-                difficulty_hint=rom.difficulty_hint,
-            )
-            direct_score = direct_match.score if direct_match is not None else 0.0
-
-            # The explicit filename ID is strong evidence, but filenames are
-            # user-controlled. A severe title disagreement is surfaced for
-            # review instead of silently attaching the wrong catalogue record.
-            if direct_score >= 0.68:
-                return RomCatalogueResolution(
-                    rom=rom,
-                    selected=entry,
-                    suggestion=entry,
-                    confidence=direct_score,
-                    classification="Explicit SMWC ID",
-                    auto_selected=True,
-                    evidence_title=rom.title_hint,
-                )
+        if entry is None:
+            # An explicit filename ID is strong user-controlled evidence. If it
+            # is absent from the frozen catalogue, do not silently reidentify
+            # the ROM by title to a different submission.
             return RomCatalogueResolution(
                 rom=rom,
                 selected=None,
-                suggestion=entry,
-                confidence=direct_score,
-                classification="SMWC ID/title conflict - review",
+                suggestion=None,
+                confidence=0.0,
+                classification="SMWC ID not in current catalogue - review",
                 auto_selected=False,
                 evidence_title=rom.title_hint,
             )
+        direct_match = matcher.score_entry(
+            rom.title_hint,
+            embedded_id,
+            difficulty_hint=rom.difficulty_hint,
+        )
+        direct_score = direct_match.score if direct_match is not None else 0.0
+
+        # The explicit filename ID is strong evidence, but filenames are
+        # user-controlled. A severe title disagreement is surfaced for
+        # review instead of silently attaching the wrong catalogue record.
+        if direct_score >= 0.68:
+            return RomCatalogueResolution(
+                rom=rom,
+                selected=entry,
+                suggestion=entry,
+                confidence=direct_score,
+                classification="Explicit SMWC ID",
+                auto_selected=True,
+                evidence_title=rom.title_hint,
+            )
+        return RomCatalogueResolution(
+            rom=rom,
+            selected=None,
+            suggestion=entry,
+            confidence=direct_score,
+            classification="SMWC ID/title conflict - review",
+            auto_selected=False,
+            evidence_title=rom.title_hint,
+        )
 
     filename_result = matcher.find(
         rom.title_hint,

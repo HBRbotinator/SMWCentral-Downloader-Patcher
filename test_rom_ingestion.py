@@ -149,6 +149,25 @@ class RomIngestionTest(unittest.TestCase):
             )
             self.assertEqual(41022, bad_result.suggestion.smwc_submission_id)
 
+
+    def test_explicit_id_missing_from_catalogue_never_falls_back_to_title_reidentity(self):
+        matcher = CatalogueMatcher(CATALOGUE)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "Quickie World 2 [SMWC-ID-99999].sfc"
+            path.write_bytes(b"rom")
+            rom = scan_rom_library(root).roms[0]
+
+            result = resolve_rom_against_catalogue(rom, matcher)
+
+            self.assertFalse(result.auto_selected)
+            self.assertIsNone(result.selected)
+            self.assertIsNone(result.suggestion)
+            self.assertEqual(
+                "SMWC ID not in current catalogue - review",
+                result.classification,
+            )
+
     def test_filename_title_can_match_without_any_id_metadata(self):
         matcher = CatalogueMatcher(CATALOGUE)
         with tempfile.TemporaryDirectory() as temporary:
