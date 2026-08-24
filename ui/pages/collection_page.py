@@ -6,6 +6,8 @@ import platform
 import subprocess
 import shlex
 import re
+import threading
+import queue
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from hack_data_manager import HackDataManager
@@ -122,6 +124,14 @@ class CollectionPage:
 
         # Track open dialogs to prevent duplicates
         self.column_config_dialog = None
+        self.collection_ingestion_source_dialog = None
+        self.collection_ingestion_progress_dialog = None
+        self.collection_ingestion_review_dialog = None
+        self._collection_ingestion_busy = False
+        self._collection_ingestion_result_queue = queue.Queue()
+        self._collection_ingestion_poll_id = None
+        self._active_collection_ingestion_session = None
+        self._last_collection_ingestion_review_decisions = None
 
         # Debounce timer for scrollbar toggle
         self.scrollbar_toggle_timer = None
@@ -1580,6 +1590,188 @@ class CollectionPage:
         else:
             scrollbar.grid_remove()
 
+
+    def _open_collection_import(self):
+        """Open the real-source import picker without applying any Collection changes."""
+        if self._collection_ingestion_busy:
+            return
+        if (
+            self.collection_ingestion_review_dialog is not None
+            and self.collection_ingestion_review_dialog.is_open
+        ):
+            self.collection_ingestion_review_dialog.lift()
+            return
+        if (
+            self.collection_ingestion_source_dialog is not None
+            and self.collection_ingestion_source_dialog.is_open
+        ):
+            self.collection_ingestion_source_dialog.lift()
+            return
+
+        if self.data_manager.unsaved_changes:
+            messagebox.showinfo(
+                "Collection Import",
+                "Collection edits are still waiting to be saved. "
+                "Wait a moment and try Import again so the review starts from "
+                "a stable Collection snapshot.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+
+        from ui.collection_ingestion_source_dialog import (
+            CollectionIngestionSourceDialog,
+        )
+
+        default_root = str(self.config_manager.get("output_dir", "") or "")
+        parent = self.frame.winfo_toplevel()
+        self.collection_ingestion_source_dialog = CollectionIngestionSourceDialog(
+            parent,
+            default_rom_root=default_root,
+            on_start=self._start_collection_ingestion_review,
+            on_close=self._collection_ingestion_source_closed,
+        )
+        self.collection_ingestion_source_dialog.show()
+
+    def _collection_ingestion_source_closed(self):
+        self.collection_ingestion_source_dialog = None
+
+    def _start_collection_ingestion_review(self, selection):
+        """Build the immutable ingestion session on a worker thread."""
+        if self._collection_ingestion_busy:
+            return False
+
+        from collection_ingestion_entrypoint import known_difficulties_from_config
+        from ui.collection_ingestion_source_dialog import (
+            CollectionIngestionProgressDialog,
+        )
+
+        self._collection_ingestion_busy = True
+        self._active_collection_ingestion_session = None
+        self._last_collection_ingestion_review_decisions = None
+        parent = self.frame.winfo_toplevel()
+        self.collection_ingestion_progress_dialog = CollectionIngestionProgressDialog(parent)
+        self.collection_ingestion_progress_dialog.show()
+        processed_json_path = str(self.data_manager.json_path)
+        known_difficulties = known_difficulties_from_config(
+            dict(self.config_manager.config)
+        )
+        self._log("📥 Preparing Collection import review session", "Information")
+
+        worker = threading.Thread(
+            target=self._collection_ingestion_worker,
+            args=(processed_json_path, selection, known_difficulties),
+            daemon=True,
+            name="collection-ingestion-review",
+        )
+        worker.start()
+        self._schedule_collection_ingestion_poll()
+        return True
+
+    def _collection_ingestion_worker(
+        self,
+        processed_json_path,
+        selection,
+        known_difficulties,
+    ):
+        try:
+            from collection_ingestion_entrypoint import (
+                create_collection_ingestion_review_session,
+            )
+
+            session = create_collection_ingestion_review_session(
+                processed_json_path,
+                selection,
+                known_difficulties=known_difficulties,
+            )
+        except Exception as error:
+            self._collection_ingestion_result_queue.put(("error", error))
+            return
+        self._collection_ingestion_result_queue.put(("ready", session))
+
+    def _schedule_collection_ingestion_poll(self):
+        if self._collection_ingestion_poll_id is not None:
+            return
+        try:
+            if self.frame and self.frame.winfo_exists():
+                self._collection_ingestion_poll_id = self.frame.after(
+                    75,
+                    self._poll_collection_ingestion_worker,
+                )
+        except (tk.TclError, AttributeError):
+            self._collection_ingestion_poll_id = None
+
+    def _poll_collection_ingestion_worker(self):
+        self._collection_ingestion_poll_id = None
+        try:
+            state, payload = self._collection_ingestion_result_queue.get_nowait()
+        except queue.Empty:
+            if self._collection_ingestion_busy:
+                self._schedule_collection_ingestion_poll()
+            return
+
+        if state == "ready":
+            self._collection_ingestion_ready(payload)
+        else:
+            self._collection_ingestion_failed(payload)
+
+    def _close_collection_ingestion_progress(self):
+        if self.collection_ingestion_progress_dialog is not None:
+            self.collection_ingestion_progress_dialog.close()
+        self.collection_ingestion_progress_dialog = None
+
+    def _collection_ingestion_failed(self, error):
+        self._close_collection_ingestion_progress()
+        self._collection_ingestion_busy = False
+        self._log(f"❌ Collection import review failed: {error}", "Error")
+        messagebox.showerror(
+            "Collection Import",
+            f"Could not prepare the Collection import review:\n\n{error}",
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _collection_ingestion_ready(self, session):
+        self._close_collection_ingestion_progress()
+        self._collection_ingestion_busy = False
+        self._active_collection_ingestion_session = session
+        self._log(
+            "📥 Collection import review ready: "
+            f"{len(session.groups)} group(s), "
+            f"{len(session.blocking_groups)} requiring decisions",
+            "Information",
+        )
+
+        from ui.collection_ingestion_review_dialog import (
+            CollectionIngestionReviewDialog,
+        )
+
+        parent = self.frame.winfo_toplevel()
+        self.collection_ingestion_review_dialog = CollectionIngestionReviewDialog(
+            parent,
+            session,
+            on_complete=self._collection_ingestion_review_complete,
+            on_close=self._collection_ingestion_review_closed,
+        )
+        self.collection_ingestion_review_dialog.show()
+
+    def _collection_ingestion_review_complete(self, decisions):
+        """Capture reviewed decisions only; Commit 009 intentionally cannot Apply."""
+        self._last_collection_ingestion_review_decisions = dict(decisions)
+        self._log(
+            "✅ Collection import review completed without applying changes",
+            "Information",
+        )
+        messagebox.showinfo(
+            "Collection Import Review Complete",
+            "All required review decisions are resolved.\n\n"
+            "This integration slice stops here intentionally: no Collection, "
+            "Save Sync, identity-hint, or ROM files were changed.",
+            parent=self.frame.winfo_toplevel(),
+        )
+        return True
+
+    def _collection_ingestion_review_closed(self):
+        self.collection_ingestion_review_dialog = None
+
     def _create_pagination_controls(self):
         """Create pagination controls"""
         pagination_frame = ttk.Frame(self.frame)
@@ -1601,7 +1793,14 @@ class CollectionPage:
 
         ttk.Label(left_frame, text="").pack(side="left")
 
-          # Add Columns button
+        self.collection_import_button = ttk.Button(
+            left_frame,
+            text="Import...",
+            command=self._open_collection_import,
+        )
+        self.collection_import_button.pack(side="left", padx=(0, 10))
+
+        # Add Columns button
         ttk.Button(left_frame, text="⚙ Columns", command=self._show_column_config).pack(side="left", padx=(0, 15))
 
         # Center - Page info
