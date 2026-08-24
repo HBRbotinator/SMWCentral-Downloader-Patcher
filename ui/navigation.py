@@ -15,7 +15,9 @@ except ImportError:
 class NavigationBar:
     """Handles the main navigation bar with tabs"""
 
-    def __init__(self, root, page_manager, toggle_theme_callback=None):
+    def __init__(
+        self, root, page_manager, toggle_theme_callback=None, *, planner_visible=True
+    ):
         self.root = root
         self.page_manager = page_manager
         self.toggle_theme_callback = toggle_theme_callback
@@ -25,6 +27,7 @@ class NavigationBar:
         self.moon_label = None
         self.moon_image = None  # Store image reference
         self.current_page = "Dashboard"
+        self.planner_visible = bool(planner_visible)
 
         # Platform-specific cursor
         self.hover_cursor = "pointinghand" if platform.system() == "Darwin" else "hand2"
@@ -50,31 +53,7 @@ class NavigationBar:
         self.root.after(500, lambda: self.nav_bar.configure(bg=colors["nav_bg"]))
 
         # Add tabs - CENTERED VERTICALLY AND HORIZONTALLY
-        tabs = ["Dashboard", "Download", "Collection", "Planner", "Settings"]
-        tab_width = 130
-
-        for i, tab in enumerate(tabs):
-            x_pos = 20 + (i * tab_width)
-
-            tab_id = self.nav_bar.create_text(
-                x_pos + (tab_width // 2),  # Center text horizontally within tab space
-                nav_height // 2,
-                text=tab,
-                font=("Segoe UI", 11, "bold" if tab == self.current_page else "normal"),
-                fill=colors["nav_text"],
-                anchor="center"  # Center anchor for better alignment
-            )
-
-            self.tab_refs.append({
-                "name": tab,
-                "text_id": tab_id,
-                "x": x_pos,
-                "width": tab_width
-            })
-
-            self.nav_bar.tag_bind(tab_id, "<Button-1>", lambda e, t=tab: self.show_page(t))
-            self.nav_bar.tag_bind(tab_id, "<Enter>", lambda e: self.nav_bar.config(cursor=self.hover_cursor))
-            self.nav_bar.tag_bind(tab_id, "<Leave>", lambda e: self.nav_bar.config(cursor=""))
+        self._draw_tabs(nav_height)
 
         # Dynamic positioning for toggle
         if self.toggle_theme_callback:
@@ -132,8 +111,76 @@ class NavigationBar:
             # Initial position setup
             self.root.after(100, self._update_toggle_position)
 
+
+    def _visible_tabs(self):
+        """Return navigation tabs without making Planner a required feature."""
+        tabs = ["Dashboard", "Download", "Collection", "Planner", "Settings"]
+        if not self.planner_visible:
+            tabs.remove("Planner")
+        return tabs
+
+    def _draw_tabs(self, nav_height=60):
+        """Rebuild the visible tab strip while preserving page registrations."""
+        if self.nav_bar is None:
+            return
+        colors = get_colors()
+        self.nav_bar.delete("nav_tab")
+        self.tab_refs = []
+        tab_width = 130
+        for i, tab in enumerate(self._visible_tabs()):
+            x_pos = 20 + (i * tab_width)
+            tab_id = self.nav_bar.create_text(
+                x_pos + (tab_width // 2),
+                nav_height // 2,
+                text=tab,
+                font=(
+                    "Segoe UI",
+                    11,
+                    "bold" if tab == self.current_page else "normal",
+                ),
+                fill=colors["nav_text"],
+                anchor="center",
+                tags=("nav_tab",),
+            )
+            self.tab_refs.append(
+                {
+                    "name": tab,
+                    "text_id": tab_id,
+                    "x": x_pos,
+                    "width": tab_width,
+                }
+            )
+            self.nav_bar.tag_bind(
+                tab_id,
+                "<Button-1>",
+                lambda e, t=tab: self.show_page(t),
+            )
+            self.nav_bar.tag_bind(
+                tab_id,
+                "<Enter>",
+                lambda e: self.nav_bar.config(cursor=self.hover_cursor),
+            )
+            self.nav_bar.tag_bind(
+                tab_id,
+                "<Leave>",
+                lambda e: self.nav_bar.config(cursor=""),
+            )
+
+    def set_planner_visible(self, visible):
+        """Show or hide Planner UI without deleting Planner-owned state."""
+        visible = bool(visible)
+        if self.planner_visible == visible:
+            return
+        self.planner_visible = visible
+        if not visible and self.current_page == "Planner":
+            self.show_page("Collection")
+        self._draw_tabs()
+        self._update_tab_styles(self.current_page)
+
     def show_page(self, page_name):
         """Switch to a specific page"""
+        if page_name == "Planner" and not self.planner_visible:
+            page_name = "Collection"
         self.current_page = page_name
         self.page_manager.show_page(page_name)
         self._update_tab_styles(page_name)

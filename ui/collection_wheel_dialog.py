@@ -86,6 +86,7 @@ class CollectionWheelDialog:
         runtime_bridge=None,
         runtime_bridge_factory=CollectionWheelRuntimeBridge,
         browser_landing_offset_supplier=build_browser_landing_offset,
+        planner_features_visible=True,
     ):
         self.parent = parent
         self.model = model
@@ -93,6 +94,7 @@ class CollectionWheelDialog:
         self.collection_records = copy.deepcopy(list(collection_records))
         self.result_callback = result_callback
         self.on_close = on_close
+        self.planner_features_visible = bool(planner_features_visible)
         self.runtime_bridge = (
             runtime_bridge
             if runtime_bridge is not None
@@ -733,7 +735,8 @@ class CollectionWheelDialog:
         )
 
         self._planner_refinements_visible = (
-            self.model.planner_refinements_available
+            self.planner_features_visible
+            and self.model.planner_refinements_available
         )
         if not self._planner_refinements_visible:
             self.planner_frame.pack_forget()

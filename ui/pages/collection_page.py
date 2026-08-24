@@ -479,12 +479,16 @@ class CollectionPage:
             return
 
         self.collection_wheel_model.reload_planner_state()
+        self.config_manager.reload()
         self.collection_wheel_dialog = CollectionWheelDialog(
             self.frame.winfo_toplevel(),
             self.collection_wheel_model,
             collection_records=self.data_manager.get_all_hacks(include_obsolete=True),
             result_callback=self._focus_wheel_result,
             on_close=self._on_collection_wheel_closed,
+            planner_features_visible=self.config_manager.get(
+                "show_planner", True
+            ),
         )
     def _on_collection_wheel_closed(self):
         self.collection_wheel_dialog = None

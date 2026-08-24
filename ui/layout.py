@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from .navigation import NavigationBar
 from .page_manager import PageManager
 from .theme_controls import ThemeControls
@@ -49,7 +49,12 @@ class MainLayout:
         self.page_manager = PageManager(self.content_frame)
 
         # Create navigation bar
-        self.navigation = NavigationBar(self.root, self.page_manager, self.toggle_theme_callback)
+        self.navigation = NavigationBar(
+            self.root,
+            self.page_manager,
+            self.toggle_theme_callback,
+            planner_visible=self.setup_section.config.get("show_planner", True),
+        )
         self.navigation.create()
 
         # Store navigation reference for theme updates
@@ -105,6 +110,9 @@ class MainLayout:
             self.difficulty_section,
             self.logger
         )
+        self.settings_page.planner_visibility_callback = (
+            self.set_planner_visible
+        )
         settings_frame = self.settings_page.create()
         self.page_manager.add_page("Settings", settings_frame)
 
@@ -137,6 +145,27 @@ class MainLayout:
         # immediately refreshes the play icon column in the collection table.
         self.settings_page.emulator_settings_callback = self.collection_page.refresh_emulator_cache
 
+
+    def set_planner_visible(self, visible):
+        """Update Planner UI visibility without changing Planner persistence."""
+        visible = bool(visible)
+        if (
+            not visible
+            and self.planner_page is not None
+            and self.planner_page.model.has_unsaved_changes
+        ):
+            messagebox.showwarning(
+                "Planner",
+                (
+                    "Planner changes are still unsaved. Save or discard them "
+                    "before hiding Planner."
+                ),
+                parent=self.root,
+            )
+            return False
+        if self.navigation is not None:
+            self.navigation.set_planner_visible(visible)
+        return True
 
     def get_download_button(self):
         """Return the download button reference - deprecated for Settings page"""

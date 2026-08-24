@@ -86,6 +86,17 @@ Using **Refresh** reloads current collection records but deliberately keeps
 staged Planner changes. Leaving and returning to the Planner after saving shows
 the persisted values.
 
+### Optional visibility
+
+Planner is an optional application view over Collection-owned hacks. In
+**Settings → Optional Features**, clear **Show Planner in the application** to
+hide the Planner navigation page and Planner-specific Wheel refinements.
+
+Hiding Planner does **not** delete `planner_state.json`, make Planner authoritative
+for Collection membership, or opt persisted Planner references out of
+Collection identity migrations. Re-enabling the view later restores access to
+the same Planner-specific state.
+
 ## Data and compatibility
 
 Planner data is stored separately in `planner_state.json`. The core collection

@@ -64,6 +64,8 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
   with Someday/Soon/Next and filter-driven selection.
 - Documented the Planner workflow, compatibility behavior, persistence safety,
   and current Wheel limitation in `PLANNER.md`.
+- Added an optional Planner visibility setting that hides Planner UI surfaces
+  while preserving Planner-owned state and Collection-ID migration participation.
 <!-- planner-foundation:end -->
 
 <!-- save-data-sync-expansion:start -->

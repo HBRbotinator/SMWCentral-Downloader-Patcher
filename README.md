@@ -497,7 +497,9 @@ The Planner organizes collection entries with independent lifecycle statuses,
 multi-membership custom lists. Search and filters can be combined to focus the
 backlog without storing a fixed Low/Normal/High priority.
 
-Edits are staged until **Save Changes** is pressed, and Planner state is stored
+Planner can be hidden from **Settings → Optional Features** without
+deleting its saved state. Edits are staged until **Save Changes** is pressed,
+and Planner state is stored
 separately from `processed.json`. Existing completed collection entries remain
 visible as Completed without requiring an automatic migration.
 

@@ -29,6 +29,8 @@ class SettingsPage:
 
         # Callback for emulator settings changes
         self.emulator_settings_callback = None
+        # Optional feature visibility callback owned by the main layout.
+        self.planner_visibility_callback = None
 
         # Opt-in startup scan state. Automatic scans only prepare a review;
         # they never write collection data without the existing dialog.
@@ -259,6 +261,35 @@ class SettingsPage:
 
         # Load auto-check setting
         self._load_auto_check_setting()
+
+        # Optional features remain presentation choices; their persisted data
+        # and reference-integrity participation are intentionally independent.
+        optional_features_frame = ttk.LabelFrame(
+            content, text="Optional Features", padding=(15, 10, 15, 15)
+        )
+        optional_features_frame.pack(fill="x", pady=(0, 20))
+
+        self.show_planner_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            optional_features_frame,
+            text="Show Planner in the application",
+            variable=self.show_planner_var,
+            style="Custom.TCheckbutton",
+            command=self._save_planner_visibility_setting,
+        ).pack(anchor="w")
+        ttk.Label(
+            optional_features_frame,
+            text=(
+                "Hiding Planner removes its navigation page and Planner-specific "
+                "Wheel refinements. Existing planner_state.json data is preserved "
+                "and still follows Collection identity migrations safely."
+            ),
+            style="Custom.TLabel",
+            foreground="gray",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w", padx=(22, 0), pady=(4, 0))
+        self._load_planner_visibility_setting()
 
         # Second row: Emulator and Difficulty Migration side by side
         second_row_frame = ttk.Frame(content)
@@ -664,6 +695,28 @@ class SettingsPage:
 
         except Exception as e:
             print(f"Error saving multi-type settings: {e}")
+
+    def _load_planner_visibility_setting(self):
+        """Load optional Planner presentation state from shared config."""
+        try:
+            visible = self.setup_section.config.get("show_planner", True)
+            self.show_planner_var.set(bool(visible))
+        except Exception as error:
+            print(f"Error loading Planner visibility setting: {error}")
+            self.show_planner_var.set(True)
+
+    def _save_planner_visibility_setting(self):
+        """Persist Planner visibility without deleting or rewriting Planner data."""
+        try:
+            visible = bool(self.show_planner_var.get())
+            if self.planner_visibility_callback is not None:
+                accepted = self.planner_visibility_callback(visible)
+                if accepted is False:
+                    self.show_planner_var.set(not visible)
+                    return
+            self.setup_section.config.set("show_planner", visible)
+        except Exception as error:
+            print(f"Error saving Planner visibility setting: {error}")
 
     def _check_for_updates(self):
         """Check for updates manually"""
