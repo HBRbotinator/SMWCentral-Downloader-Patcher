@@ -1,25 +1,29 @@
-"""Read-only Tk preview for one finalized CollectionChangePlan."""
+"""Final Tk preview and explicit Apply confirmation for Collection ingestion."""
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from collection_ingestion_plan_preview import CollectionIngestionPlanPreviewModel
 
 
 class CollectionIngestionPlanPreviewDialog:
-    """Show exactly what the finalized plan contains without applying it."""
+    """Show the finalized plan and require explicit confirmation before Apply."""
 
-    def __init__(self, parent, plan, *, on_close=None):
+    def __init__(self, parent, plan, *, on_apply=None, on_close=None):
         self.parent = parent
         self.model = CollectionIngestionPlanPreviewModel(plan)
+        self.on_apply = on_apply
         self.on_close = on_close
         self.win = None
         self.tree = None
         self.summary_label = None
         self.details = None
         self._rows = ()
+        self.apply_button = None
+        self.close_button = None
         self._closed = False
+        self._applying = False
 
     @property
     def is_open(self):
@@ -53,7 +57,8 @@ class CollectionIngestionPlanPreviewDialog:
             text=(
                 "This preview is generated directly from the finalized immutable "
                 "Collection change plan. Rich KaizOFF details have already been "
-                "hydrated where required. Nothing is applied from this preview."
+                "hydrated where required. Review it before explicitly applying "
+                "these exact planned changes."
             ),
             wraplength=1080,
         ).pack(anchor="w", pady=(3, 8))
@@ -111,13 +116,27 @@ class CollectionIngestionPlanPreviewDialog:
         ttk.Label(
             footer,
             text=(
-                "No Collection, Save Sync, Planner, identity-hint, ROM, or save "
-                "state has been changed. Transactional Apply is a later boundary."
+                "Nothing has been applied yet. Apply updates Collection and any "
+                "planned dependent references transactionally; ROM/save files are "
+                "not moved, renamed, or deleted by ingestion."
             ),
             foreground="gray",
             wraplength=900,
         ).pack(side="left", anchor="w")
-        ttk.Button(footer, text="Close Preview", command=self.close).pack(side="right")
+        self.close_button = ttk.Button(
+            footer,
+            text="Close Preview",
+            command=self.close,
+        )
+        self.close_button.pack(side="right")
+        self.apply_button = ttk.Button(
+            footer,
+            text="Apply Import...",
+            command=self._request_apply,
+        )
+        self.apply_button.pack(side="right", padx=(0, 8))
+        if self.on_apply is None:
+            self.apply_button.configure(state="disabled")
 
         self._populate()
         self._center()
@@ -140,6 +159,39 @@ class CollectionIngestionPlanPreviewDialog:
         self.win = None
         if self.on_close:
             self.on_close()
+
+    def _request_apply(self):
+        if self._applying or self.on_apply is None:
+            return False
+        summary = self.model.summary()
+        confirmed = messagebox.askyesno(
+            "Apply Collection Import",
+            (
+                "Apply exactly the finalized changes shown in this preview?\n\n"
+                f"{summary.creates} create(s), {summary.updates} update(s), "
+                f"{summary.identity_migrations} identity migration(s), and "
+                f"{summary.rom_assets} ROM asset change(s) are planned.\n\n"
+                "Collection metadata and planned dependent references will be "
+                "written transactionally. Ingestion will not move, rename, or "
+                "delete ROM/save files."
+            ),
+            icon="warning",
+            parent=self.win or self.parent,
+        )
+        if not confirmed:
+            return False
+        accepted = bool(self.on_apply())
+        if accepted:
+            self.set_applying(True)
+        return accepted
+
+    def set_applying(self, applying=True):
+        self._applying = bool(applying)
+        state = "disabled" if self._applying else "normal"
+        if self.apply_button is not None:
+            self.apply_button.configure(state=state)
+        if self.close_button is not None:
+            self.close_button.configure(state=state)
 
     def _populate(self):
         summary = self.model.summary()
@@ -207,6 +259,86 @@ class CollectionIngestionPlanPreviewDialog:
             y = self.parent.winfo_rooty() + max(
                 0,
                 (self.parent.winfo_height() - height) // 2,
+            )
+            self.win.geometry(f"+{x}+{y}")
+        except (tk.TclError, AttributeError):
+            pass
+
+
+class CollectionIngestionApplyProgressDialog:
+    """Modal progress while the finalized plan crosses the transactional boundary."""
+
+    def __init__(self, parent, *, recovery=False):
+        self.parent = parent
+        self.recovery = bool(recovery)
+        self.win = None
+
+    def show(self):
+        if self.win:
+            return self.win
+        self.win = tk.Toplevel(self.parent)
+        self.win.title(
+            "Recovering Collection Import"
+            if self.recovery
+            else "Applying Collection Import"
+        )
+        self.win.resizable(False, False)
+        self.win.transient(self.parent)
+        self.win.protocol("WM_DELETE_WINDOW", lambda: None)
+        try:
+            self.win.grab_set()
+        except tk.TclError:
+            pass
+
+        body = ttk.Frame(self.win, padding=18)
+        body.pack(fill="both", expand=True)
+        heading = (
+            "Recovering interrupted Collection transaction..."
+            if self.recovery
+            else "Applying finalized Collection changes..."
+        )
+        detail = (
+            "Restoring or cleaning the existing coordinated transaction journal. "
+            "The current import plan will be discarded after recovery."
+            if self.recovery
+            else
+            "Writing Collection and planned dependent reference stores as one "
+            "coordinated transaction. Do not close another application instance "
+            "over these files while this operation is active."
+        )
+        ttk.Label(body, text=heading, font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(body, text=detail, wraplength=470).pack(
+            anchor="w",
+            pady=(5, 10),
+        )
+        progress = ttk.Progressbar(body, mode="indeterminate", length=470)
+        progress.pack(fill="x")
+        progress.start(12)
+        self.win.update_idletasks()
+        self._center()
+        return self.win
+
+    def close(self):
+        try:
+            if self.win and self.win.winfo_exists():
+                try:
+                    self.win.grab_release()
+                except tk.TclError:
+                    pass
+                self.win.destroy()
+        except tk.TclError:
+            pass
+        self.win = None
+
+    def _center(self):
+        try:
+            x = self.parent.winfo_rootx() + max(
+                0,
+                (self.parent.winfo_width() - self.win.winfo_width()) // 2,
+            )
+            y = self.parent.winfo_rooty() + max(
+                0,
+                (self.parent.winfo_height() - self.win.winfo_height()) // 2,
             )
             self.win.geometry(f"+{x}+{y}")
         except (tk.TclError, AttributeError):

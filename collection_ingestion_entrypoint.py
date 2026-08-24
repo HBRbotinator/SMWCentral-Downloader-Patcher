@@ -5,8 +5,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from collection_change_plan import CollectionChangePlan
 from collection_identity_hints import CollectionIdentityHintsStore
 from collection_ingestion_finalization import finalize_reviewed_ingestion_session
+from collection_plan_apply import (
+    COLLECTION_APPLY_JOURNAL_FILENAME,
+    CollectionPlanApplyResult,
+    apply_collection_change_plan,
+    recover_interrupted_collection_apply,
+)
 from collection_ingestion_session import (
     CollectionIngestionSession,
     create_collection_ingestion_session,
@@ -207,6 +214,56 @@ def finalize_collection_ingestion_review_plan(
     )
 
 
+
+def apply_collection_ingestion_plan(
+    processed_json_path: str | Path,
+    plan: CollectionChangePlan,
+    *,
+    manager: HackDataManager | None = None,
+    identity_hints: CollectionIdentityHintsStore | None = None,
+    participants=None,
+) -> CollectionPlanApplyResult:
+    """Apply the already-finalized immutable plan without discovery or network work."""
+
+    if not isinstance(plan, CollectionChangePlan):
+        raise CollectionIngestionEntrypointError(
+            "Collection import Apply requires the finalized immutable change plan."
+        )
+    processed = Path(processed_json_path).expanduser().resolve()
+    runtime_manager = _runtime_manager(processed, manager)
+    hints = identity_hints or CollectionIdentityHintsStore.beside_processed_json(
+        processed
+    )
+    runtime_participants = (
+        collection_identity_reference_participants(processed)
+        if participants is None
+        else tuple(participants)
+    )
+    return apply_collection_change_plan(
+        plan,
+        runtime_manager,
+        hints,
+        reference_participants=tuple(runtime_participants),
+    )
+
+
+def collection_ingestion_apply_recovery_pending(
+    processed_json_path: str | Path,
+) -> bool:
+    """Return whether a prior coordinated Apply journal still needs attention."""
+
+    processed = Path(processed_json_path).expanduser().resolve()
+    return (processed.parent / COLLECTION_APPLY_JOURNAL_FILENAME).exists()
+
+
+def recover_collection_ingestion_apply(
+    processed_json_path: str | Path,
+) -> bool:
+    """Recover/clean a prior Apply only after the caller confirms it is abandoned."""
+
+    processed = Path(processed_json_path).expanduser().resolve()
+    return recover_interrupted_collection_apply(processed.parent)
+
 def _runtime_manager(
     processed: Path,
     manager: HackDataManager | None,
@@ -221,6 +278,8 @@ def _runtime_manager(
 
 __all__ = [
     "KAIZOFF_CACHE_DIRECTORY",
+    "apply_collection_ingestion_plan",
+    "collection_ingestion_apply_recovery_pending",
     "CollectionIngestionEntrypointError",
     "CollectionIngestionSourceSelection",
     "collection_identity_reference_participants",
@@ -228,5 +287,6 @@ __all__ = [
     "finalize_collection_ingestion_review_plan",
     "kaizoff_cache_dir_for_processed_json",
     "known_difficulties_from_config",
+    "recover_collection_ingestion_apply",
     "validate_collection_ingestion_selection",
 ]

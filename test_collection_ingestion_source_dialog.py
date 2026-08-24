@@ -61,7 +61,7 @@ class CollectionIngestionSourceDialogContractTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIn(value, self.page_source)
 
-    def test_collection_page_finalizes_review_but_still_cannot_apply(self):
+    def test_collection_page_keeps_finalization_worker_read_only_before_apply(self):
         complete = next(
             node
             for node in ast.walk(self.page_tree)

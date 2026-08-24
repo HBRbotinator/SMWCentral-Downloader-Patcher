@@ -129,6 +129,7 @@ class CollectionPage:
         self.collection_ingestion_review_dialog = None
         self.collection_ingestion_finalization_progress_dialog = None
         self.collection_ingestion_plan_preview_dialog = None
+        self.collection_ingestion_apply_progress_dialog = None
         self._collection_ingestion_busy = False
         self._collection_ingestion_result_queue = queue.Queue()
         self._collection_ingestion_poll_id = None
@@ -1852,7 +1853,7 @@ class CollectionPage:
         self._collection_ingestion_busy = False
         self._last_collection_ingestion_plan = plan
         self._log(
-            "✅ Final Collection import plan ready for read-only preview; nothing applied",
+            "✅ Final Collection import plan ready for preview and explicit confirmation",
             "Information",
         )
 
@@ -1865,13 +1866,300 @@ class CollectionPage:
             CollectionIngestionPlanPreviewDialog(
                 parent,
                 plan,
+                on_apply=self._collection_ingestion_apply_requested,
                 on_close=self._collection_ingestion_plan_preview_closed,
             )
         )
         self.collection_ingestion_plan_preview_dialog.show()
 
+
+    def _collection_ingestion_apply_requested(self):
+        """Cross the explicit final-confirmation boundary for the frozen plan."""
+        if self._collection_ingestion_busy:
+            return False
+        if self._last_collection_ingestion_plan is None:
+            messagebox.showerror(
+                "Collection Import",
+                "The finalized Collection import plan is no longer available.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+        if not self._collection_ingestion_state_is_saved():
+            return False
+
+        from ui.collection_ingestion_plan_preview_dialog import (
+            CollectionIngestionApplyProgressDialog,
+        )
+
+        self._collection_ingestion_busy = True
+        parent = self.frame.winfo_toplevel()
+        self.collection_ingestion_apply_progress_dialog = (
+            CollectionIngestionApplyProgressDialog(parent)
+        )
+        self.collection_ingestion_apply_progress_dialog.show()
+        self._log(
+            "💾 Applying finalized Collection import plan transactionally",
+            "Information",
+        )
+        # Apply is intentionally scheduled back onto the Tk thread. It is a short
+        # local filesystem transaction and must serialize with the live manager.
+        self.frame.after(1, self._execute_collection_ingestion_apply)
+        return True
+
+    def _execute_collection_ingestion_apply(self):
+        from collection_plan_apply import (
+            CollectionPlanRecoveryError,
+            CollectionPlanStaleStateError,
+        )
+
+        plan = self._last_collection_ingestion_plan
+        if plan is None:
+            self._collection_ingestion_apply_failed(
+                RuntimeError("Finalized Collection import plan is missing.")
+            )
+            return
+
+        try:
+            from collection_ingestion_entrypoint import (
+                apply_collection_ingestion_plan,
+                collection_ingestion_apply_recovery_pending,
+                recover_collection_ingestion_apply,
+            )
+            result = apply_collection_ingestion_plan(
+                str(self.data_manager.json_path),
+                plan,
+                manager=self.data_manager,
+            )
+        except CollectionPlanStaleStateError as error:
+            self._collection_ingestion_apply_stale(error)
+            return
+        except CollectionPlanRecoveryError as error:
+            self._collection_ingestion_recovery_required(error)
+            return
+        except Exception as error:
+            self._collection_ingestion_apply_failed(error)
+            return
+
+        cleanup_error = None
+        if collection_ingestion_apply_recovery_pending(self.data_manager.json_path):
+            try:
+                # apply_collection_change_plan has already crossed its committed
+                # journal point if it returned successfully. A remaining journal
+                # is therefore cleanup-only and safe to finish in this instance.
+                recover_collection_ingestion_apply(self.data_manager.json_path)
+            except Exception as error:
+                cleanup_error = error
+        self._collection_ingestion_apply_succeeded(result, cleanup_error)
+
+    def _close_collection_ingestion_apply_progress(self):
+        if self.collection_ingestion_apply_progress_dialog is not None:
+            self.collection_ingestion_apply_progress_dialog.close()
+        self.collection_ingestion_apply_progress_dialog = None
+
+    def _collection_ingestion_apply_succeeded(self, result, cleanup_error=None):
+        self._close_collection_ingestion_apply_progress()
+        self._collection_ingestion_busy = False
+        self._reload_collection_ingestion_live_state()
+        self._close_collection_ingestion_plan_preview()
+        self._clear_collection_ingestion_review_state()
+
+        self._log(
+            "✅ Collection import applied transactionally: "
+            f"{result.collection_record_count} Collection record(s), "
+            f"{len(result.written_files)} file(s) written",
+            "Information",
+        )
+        cleanup_note = ""
+        if cleanup_error is not None:
+            cleanup_note = (
+                "\n\nThe transaction itself committed successfully, but its recovery/cleanup "
+                f"journal could not be removed: {cleanup_error}\n\n"
+                "Do not start another Collection import until that journal is recovered."
+            )
+            self._log(
+                f"⚠️ Collection import committed but journal cleanup failed: {cleanup_error}",
+                "Warning",
+            )
+        messagebox.showinfo(
+            "Collection Import Applied",
+            (
+                "The finalized Collection import was applied successfully.\n\n"
+                f"Collection records: {result.collection_record_count}\n"
+                f"Files written transactionally: {len(result.written_files)}\n"
+                f"Identity migrations: {result.identity_migration_count}\n"
+                f"Dependent reference stores participating: {result.reference_participant_count}"
+                f"{cleanup_note}"
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _collection_ingestion_apply_stale(self, error):
+        self._close_collection_ingestion_apply_progress()
+        self._collection_ingestion_busy = False
+        self._log(f"⚠️ Collection import plan became stale: {error}", "Warning")
+        self._close_collection_ingestion_plan_preview()
+        self._clear_collection_ingestion_review_state()
+        messagebox.showerror(
+            "Collection Import Changed",
+            (
+                "The reviewed Collection or dependent state changed before Apply, "
+                "so the finalized plan was rejected.\n\n"
+                f"{error}\n\nStart a new Collection import review. Nothing from this "
+                "stale plan was applied."
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _collection_ingestion_apply_failed(self, error):
+        self._close_collection_ingestion_apply_progress()
+        self._collection_ingestion_busy = False
+        if (
+            self.collection_ingestion_plan_preview_dialog is not None
+            and self.collection_ingestion_plan_preview_dialog.is_open
+        ):
+            self.collection_ingestion_plan_preview_dialog.set_applying(False)
+        self._log(f"❌ Collection import Apply failed: {error}", "Error")
+        messagebox.showerror(
+            "Collection Import Failed",
+            (
+                "The transactional Collection import could not be committed.\n\n"
+                f"{error}\n\nNo reviewed plan change was committed; any prepared "
+                "transaction was rolled back. You may close "
+                "the preview or retry if the underlying problem has been corrected."
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _collection_ingestion_recovery_required(self, error):
+        self._close_collection_ingestion_apply_progress()
+        self._collection_ingestion_busy = False
+        self._log(f"⚠️ Collection import recovery required: {error}", "Warning")
+        if (
+            self.collection_ingestion_plan_preview_dialog is not None
+            and self.collection_ingestion_plan_preview_dialog.is_open
+        ):
+            self.collection_ingestion_plan_preview_dialog.set_applying(False)
+
+        recover_now = messagebox.askyesno(
+            "Collection Import Recovery Required",
+            (
+                "A coordinated Collection transaction journal still exists. This can "
+                "mean another application instance is currently applying changes, or "
+                "a previous Apply was interrupted.\n\n"
+                f"{error}\n\n"
+                "Close every other SMWC Downloader & Patcher instance first. Only "
+                "choose Yes after you have confirmed no other instance is applying "
+                "Collection changes. Recovery may roll back a prepared transaction "
+                "or finish cleanup for an already committed one.\n\nRecover now?"
+            ),
+            icon="warning",
+            parent=self.frame.winfo_toplevel(),
+        )
+        if not recover_now:
+            return
+        self._run_collection_ingestion_recovery()
+
+    def _run_collection_ingestion_recovery(self):
+        from collection_ingestion_entrypoint import recover_collection_ingestion_apply
+        from ui.collection_ingestion_plan_preview_dialog import (
+            CollectionIngestionApplyProgressDialog,
+        )
+
+        self._collection_ingestion_busy = True
+        parent = self.frame.winfo_toplevel()
+        self.collection_ingestion_apply_progress_dialog = (
+            CollectionIngestionApplyProgressDialog(parent, recovery=True)
+        )
+        self.collection_ingestion_apply_progress_dialog.show()
+        try:
+            recovered = recover_collection_ingestion_apply(self.data_manager.json_path)
+        except Exception as error:
+            self._close_collection_ingestion_apply_progress()
+            self._collection_ingestion_busy = False
+            self._log(f"❌ Collection import recovery failed: {error}", "Error")
+            messagebox.showerror(
+                "Collection Import Recovery Failed",
+                (
+                    "The transaction journal could not be recovered safely.\n\n"
+                    f"{error}\n\nDo not start another Collection import until the "
+                    "recovery issue has been resolved."
+                ),
+                parent=parent,
+            )
+            return
+
+        self._close_collection_ingestion_apply_progress()
+        self._collection_ingestion_busy = False
+        self._reload_collection_ingestion_live_state()
+        self._close_collection_ingestion_plan_preview()
+        self._clear_collection_ingestion_review_state()
+        self._log(
+            "✅ Collection import transaction recovery completed",
+            "Information",
+        )
+        messagebox.showinfo(
+            "Collection Import Recovery Complete",
+            (
+                "The interrupted Collection transaction was recovered and live "
+                "application state was reloaded.\n\n"
+                + (
+                    "Start a new Collection import review before applying anything else."
+                    if recovered
+                    else "No recovery journal remained. Start a new review if needed."
+                )
+            ),
+            parent=parent,
+        )
+
+    def _reload_collection_ingestion_live_state(self):
+        """Best-effort reload after a transaction has already committed/recovered."""
+        try:
+            self.data_manager.reload_data()
+            self.config_manager.reload()
+            self._emulator_path = self.config_manager.get("emulator_path", "")
+            self._show_rom_picker = self.config_manager.get("show_rom_picker", False)
+            self.filters.refresh_dropdown_values(self.data_manager)
+            if self.tree:
+                self._apply_filters()
+                self._refresh_table()
+
+            root = self.frame.winfo_toplevel()
+            layout = getattr(root, "main_layout", None)
+            setup_section = getattr(layout, "setup_section", None)
+            setup_config = getattr(setup_section, "config", None)
+            if setup_config is not None and hasattr(setup_config, "reload"):
+                setup_config.reload()
+
+            settings_page = getattr(layout, "settings_page", None)
+            if (
+                settings_page is not None
+                and hasattr(settings_page, "_load_save_sync_settings")
+            ):
+                settings_page._load_save_sync_settings()
+
+            planner_page = getattr(layout, "planner_page", None)
+            if planner_page is not None and hasattr(planner_page, "refresh"):
+                planner_page.refresh(reload_planner=True)
+        except Exception as error:
+            self._log(
+                f"⚠️ Collection import transaction completed but a live UI refresh failed: {error}",
+                "Warning",
+            )
+
+    def _close_collection_ingestion_plan_preview(self):
+        dialog = self.collection_ingestion_plan_preview_dialog
+        self.collection_ingestion_plan_preview_dialog = None
+        if dialog is not None and dialog.is_open:
+            dialog.close()
+
+    def _clear_collection_ingestion_review_state(self):
+        self._active_collection_ingestion_session = None
+        self._last_collection_ingestion_review_decisions = None
+        self._last_collection_ingestion_plan = None
+
     def _collection_ingestion_plan_preview_closed(self):
         self.collection_ingestion_plan_preview_dialog = None
+        self.collection_ingestion_apply_progress_dialog = None
 
     def _collection_ingestion_review_closed(self):
         self.collection_ingestion_review_dialog = None
