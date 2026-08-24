@@ -4,6 +4,19 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+<!-- collection-update-discovery:start -->
+### Collection update/replacement discovery
+
+- Added an explicit **Find Update...** action for existing numeric SMWC Collection entries.
+- Refreshes the lightweight KaizOFF Index in the background and shows only possible related
+  submissions; it never claims that a different SMWC ID is automatically newer.
+- Supports local frozen-Index search by title or SMWC ID, including targets that already exist
+  in Collection.
+- Keeps the discovery boundary read-only: selecting a possible relationship does not download,
+  patch, migrate identity, or modify Collection/dependent state.
+
+<!-- collection-update-discovery:end -->
+
 <!-- collection-wheel:start -->
 ### Collection Wheel
 

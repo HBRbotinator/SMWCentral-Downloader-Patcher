@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+import copy
 import sys
 import os
 import platform
@@ -8,6 +9,7 @@ import shlex
 import re
 import threading
 import queue
+from pathlib import Path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from hack_data_manager import HackDataManager
@@ -137,6 +139,14 @@ class CollectionPage:
         self._last_collection_ingestion_review_decisions = None
         self._last_collection_ingestion_plan = None
 
+        # Read-only, user-initiated SMWC update/replacement discovery.
+        self.collection_update_discovery_dialog = None
+        self.collection_update_discovery_progress_dialog = None
+        self._collection_update_discovery_busy = False
+        self._collection_update_discovery_queue = queue.Queue()
+        self._collection_update_discovery_poll_id = None
+        self._last_collection_update_selection = None
+
         # Debounce timer for scrollbar toggle
         self.scrollbar_toggle_timer = None
 
@@ -246,6 +256,19 @@ class CollectionPage:
         if self.collection_wheel_dialog:
             self.collection_wheel_dialog.close()
             self.collection_wheel_dialog = None
+
+        if self.collection_update_discovery_dialog is not None:
+            self.collection_update_discovery_dialog.close()
+            self.collection_update_discovery_dialog = None
+        if self.collection_update_discovery_progress_dialog is not None:
+            self.collection_update_discovery_progress_dialog.close()
+            self.collection_update_discovery_progress_dialog = None
+        if self._collection_update_discovery_poll_id is not None and self.frame:
+            try:
+                self.frame.after_cancel(self._collection_update_discovery_poll_id)
+            except tk.TclError:
+                pass
+            self._collection_update_discovery_poll_id = None
 
         # Force save any pending changes
         self.data_manager.force_save()
@@ -1599,6 +1622,183 @@ class CollectionPage:
             scrollbar.grid_remove()
 
 
+    def _open_collection_update_discovery(self):
+        """Search the current KaizOFF Index for a selected numeric Collection entry."""
+        if self._collection_update_discovery_busy:
+            return
+        if self._collection_ingestion_busy:
+            messagebox.showinfo(
+                "Find Possible SMWC Update",
+                "Finish the active Collection import operation before starting a separate "
+                "update/replacement search.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+        if (
+            self.collection_update_discovery_dialog is not None
+            and self.collection_update_discovery_dialog.is_open
+        ):
+            self.collection_update_discovery_dialog.lift()
+            return
+
+        parent = self.frame.winfo_toplevel()
+        selected = self.tree.selection()
+        if len(selected) != 1:
+            messagebox.showinfo(
+                "Find Possible SMWC Update",
+                "Select one known SMWC Collection entry first.",
+                parent=parent,
+            )
+            return
+        tags = self.tree.item(selected[0]).get("tags") or ()
+        if not tags:
+            return
+        source_key = str(tags[0])
+        if not source_key.isdigit() or int(source_key) <= 0:
+            messagebox.showinfo(
+                "Find Possible SMWC Update",
+                "Update/replacement discovery is available only for Collection entries "
+                "that already have a numeric SMWC submission ID. Local usr_* entries can "
+                "be promoted through the Collection import review flow instead.",
+                parent=parent,
+            )
+            return
+        if getattr(self.data_manager, "unsaved_changes", False):
+            messagebox.showinfo(
+                "Find Possible SMWC Update",
+                "Collection changes are still waiting for the normal delayed save. "
+                "Wait for them to save before starting update discovery so the selected "
+                "entry has a stable catalogue snapshot.",
+                parent=parent,
+            )
+            return
+
+        source_record = self.data_manager.data.get(source_key)
+        if not isinstance(source_record, dict):
+            messagebox.showerror(
+                "Find Possible SMWC Update",
+                "The selected Collection record is unavailable.",
+                parent=parent,
+            )
+            return
+
+        from ui.collection_update_discovery_dialog import (
+            CollectionUpdateDiscoveryProgressDialog,
+        )
+
+        frozen_record = copy.deepcopy(source_record)
+        existing_keys = tuple(str(key) for key in self.data_manager.data)
+        self._collection_update_discovery_busy = True
+        self._last_collection_update_selection = None
+        self.collection_update_discovery_progress_dialog = (
+            CollectionUpdateDiscoveryProgressDialog(parent)
+        )
+        self.collection_update_discovery_progress_dialog.show()
+        self._log(
+            f"🔎 Looking for possible SMWC update/replacement candidates for {source_key}",
+            "Information",
+        )
+
+        def worker():
+            try:
+                from collection_update_discovery import build_collection_update_discovery
+                from kaizoff_provider import KaizOffCatalogueProvider
+
+                processed = Path(self.data_manager.json_path).expanduser().resolve()
+                provider = KaizOffCatalogueProvider(
+                    cache_dir=processed.with_name("kaizoff_cache")
+                )
+                # This is an explicit update check, so prefer a current Index. The provider
+                # may still return a validated stale cache when the network is unavailable.
+                snapshot = provider.get_index(force_refresh=True)
+                discovery = build_collection_update_discovery(
+                    source_key,
+                    frozen_record,
+                    snapshot,
+                    existing_collection_keys=existing_keys,
+                )
+                self._collection_update_discovery_queue.put(("ok", discovery))
+            except Exception as error:
+                self._collection_update_discovery_queue.put(("error", error))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._poll_collection_update_discovery()
+
+    def _poll_collection_update_discovery(self):
+        try:
+            status, payload = self._collection_update_discovery_queue.get_nowait()
+        except queue.Empty:
+            self._collection_update_discovery_poll_id = self.frame.after(
+                100,
+                self._poll_collection_update_discovery,
+            )
+            return
+
+        self._collection_update_discovery_poll_id = None
+        self._collection_update_discovery_busy = False
+        if self.collection_update_discovery_progress_dialog is not None:
+            self.collection_update_discovery_progress_dialog.close()
+            self.collection_update_discovery_progress_dialog = None
+
+        if status != "ok":
+            self._log(f"❌ SMWC update discovery failed: {payload}", "Error")
+            messagebox.showerror(
+                "Find Possible SMWC Update",
+                f"Could not load possible related SMWC submissions:\n\n{payload}",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+        self._show_collection_update_discovery(payload)
+
+    def _show_collection_update_discovery(self, discovery):
+        from ui.collection_update_discovery_dialog import CollectionUpdateDiscoveryDialog
+
+        self._log(
+            "🔎 SMWC update discovery ready: "
+            f"{len(discovery.suggestions)} possible related suggestion(s)",
+            "Information",
+        )
+        self.collection_update_discovery_dialog = CollectionUpdateDiscoveryDialog(
+            self.frame.winfo_toplevel(),
+            discovery,
+            on_select=self._collection_update_candidate_selected,
+            on_close=self._collection_update_discovery_closed,
+        )
+        self.collection_update_discovery_dialog.show()
+
+    def _collection_update_candidate_selected(self, selection):
+        """Keep one detached user-confirmed relationship for the next bounded slice."""
+        self._last_collection_update_selection = selection
+        target = selection.target_entry
+        existing_note = (
+            "\n\nThat target already exists in Collection, so a later replacement flow "
+            "must reconcile the two records explicitly."
+            if selection.target_already_in_collection
+            else ""
+        )
+        self._log(
+            "🔎 Possible SMWC replacement relationship selected without changes: "
+            f"{selection.source_collection_key} -> {target.smwc_submission_id}",
+            "Information",
+        )
+        messagebox.showinfo(
+            "Possible SMWC Replacement Selected",
+            (
+                f"SMWC {target.smwc_submission_id} — {target.title} was selected as a "
+                "possible replacement/update candidate.\n\n"
+                "Nothing was downloaded, patched, migrated, or written to Collection. "
+                "The application is not claiming that this submission is newer."
+                f"{existing_note}"
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+        return True
+
+    def _collection_update_discovery_closed(self):
+        self.collection_update_discovery_dialog = None
+
+
+
     def _open_collection_import(self):
         """Open the real-source import picker without applying any Collection changes."""
         if self._collection_ingestion_busy:
@@ -2227,7 +2427,14 @@ class CollectionPage:
             text="Import...",
             command=self._open_collection_import,
         )
-        self.collection_import_button.pack(side="left", padx=(0, 10))
+        self.collection_import_button.pack(side="left", padx=(0, 8))
+
+        self.collection_update_button = ttk.Button(
+            left_frame,
+            text="Find Update...",
+            command=self._open_collection_update_discovery,
+        )
+        self.collection_update_button.pack(side="left", padx=(0, 10))
 
         # Add Columns button
         ttk.Button(left_frame, text="⚙ Columns", command=self._show_column_config).pack(side="left", padx=(0, 15))
