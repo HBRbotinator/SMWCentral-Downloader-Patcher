@@ -127,11 +127,14 @@ class CollectionPage:
         self.collection_ingestion_source_dialog = None
         self.collection_ingestion_progress_dialog = None
         self.collection_ingestion_review_dialog = None
+        self.collection_ingestion_finalization_progress_dialog = None
+        self.collection_ingestion_plan_preview_dialog = None
         self._collection_ingestion_busy = False
         self._collection_ingestion_result_queue = queue.Queue()
         self._collection_ingestion_poll_id = None
         self._active_collection_ingestion_session = None
         self._last_collection_ingestion_review_decisions = None
+        self._last_collection_ingestion_plan = None
 
         # Debounce timer for scrollbar toggle
         self.scrollbar_toggle_timer = None
@@ -1596,6 +1599,12 @@ class CollectionPage:
         if self._collection_ingestion_busy:
             return
         if (
+            self.collection_ingestion_plan_preview_dialog is not None
+            and self.collection_ingestion_plan_preview_dialog.is_open
+        ):
+            self.collection_ingestion_plan_preview_dialog.lift()
+            return
+        if (
             self.collection_ingestion_review_dialog is not None
             and self.collection_ingestion_review_dialog.is_open
         ):
@@ -1608,14 +1617,7 @@ class CollectionPage:
             self.collection_ingestion_source_dialog.lift()
             return
 
-        if self.data_manager.unsaved_changes:
-            messagebox.showinfo(
-                "Collection Import",
-                "Collection edits are still waiting to be saved. "
-                "Wait a moment and try Import again so the review starts from "
-                "a stable Collection snapshot.",
-                parent=self.frame.winfo_toplevel(),
-            )
+        if not self._collection_ingestion_state_is_saved():
             return
 
         from ui.collection_ingestion_source_dialog import (
@@ -1639,6 +1641,8 @@ class CollectionPage:
         """Build the immutable ingestion session on a worker thread."""
         if self._collection_ingestion_busy:
             return False
+        if not self._collection_ingestion_state_is_saved():
+            return False
 
         from collection_ingestion_entrypoint import known_difficulties_from_config
         from ui.collection_ingestion_source_dialog import (
@@ -1648,6 +1652,7 @@ class CollectionPage:
         self._collection_ingestion_busy = True
         self._active_collection_ingestion_session = None
         self._last_collection_ingestion_review_decisions = None
+        self._last_collection_ingestion_plan = None
         parent = self.frame.winfo_toplevel()
         self.collection_ingestion_progress_dialog = CollectionIngestionProgressDialog(parent)
         self.collection_ingestion_progress_dialog.show()
@@ -1711,6 +1716,10 @@ class CollectionPage:
 
         if state == "ready":
             self._collection_ingestion_ready(payload)
+        elif state == "plan-ready":
+            self._collection_ingestion_plan_ready(payload)
+        elif state == "plan-error":
+            self._collection_ingestion_plan_failed(payload)
         else:
             self._collection_ingestion_failed(payload)
 
@@ -1754,23 +1763,151 @@ class CollectionPage:
         self.collection_ingestion_review_dialog.show()
 
     def _collection_ingestion_review_complete(self, decisions):
-        """Capture reviewed decisions only; Commit 009 intentionally cannot Apply."""
+        """Hydrate completed review into an immutable plan on a worker thread."""
+        if self._collection_ingestion_busy:
+            return False
+        if not self._collection_ingestion_state_is_saved():
+            return False
+        if self._active_collection_ingestion_session is None:
+            messagebox.showerror(
+                "Collection Import",
+                "The reviewed Collection import session is no longer available.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+
         self._last_collection_ingestion_review_decisions = dict(decisions)
+        self._last_collection_ingestion_plan = None
+        self._collection_ingestion_busy = True
+        parent = self.frame.winfo_toplevel()
+        from ui.collection_ingestion_plan_preview_dialog import (
+            CollectionIngestionFinalizationProgressDialog,
+        )
+
+        self.collection_ingestion_finalization_progress_dialog = (
+            CollectionIngestionFinalizationProgressDialog(parent)
+        )
+        self.collection_ingestion_finalization_progress_dialog.show()
+        processed_json_path = str(self.data_manager.json_path)
         self._log(
-            "✅ Collection import review completed without applying changes",
+            "📋 Finalizing reviewed Collection import plan for preview",
             "Information",
         )
-        messagebox.showinfo(
-            "Collection Import Review Complete",
-            "All required review decisions are resolved.\n\n"
-            "This integration slice stops here intentionally: no Collection, "
-            "Save Sync, identity-hint, or ROM files were changed.",
+        worker = threading.Thread(
+            target=self._collection_ingestion_finalization_worker,
+            args=(
+                processed_json_path,
+                self._active_collection_ingestion_session,
+                dict(decisions),
+            ),
+            daemon=True,
+            name="collection-ingestion-finalization",
+        )
+        worker.start()
+        self._schedule_collection_ingestion_poll()
+        return True
+
+    def _collection_ingestion_finalization_worker(
+        self,
+        processed_json_path,
+        session,
+        decisions,
+    ):
+        try:
+            from collection_ingestion_entrypoint import (
+                finalize_collection_ingestion_review_plan,
+            )
+
+            plan = finalize_collection_ingestion_review_plan(
+                processed_json_path,
+                session,
+                decisions,
+            )
+        except Exception as error:
+            self._collection_ingestion_result_queue.put(("plan-error", error))
+            return
+        self._collection_ingestion_result_queue.put(("plan-ready", plan))
+
+    def _close_collection_ingestion_finalization_progress(self):
+        if self.collection_ingestion_finalization_progress_dialog is not None:
+            self.collection_ingestion_finalization_progress_dialog.close()
+        self.collection_ingestion_finalization_progress_dialog = None
+
+    def _collection_ingestion_plan_failed(self, error):
+        self._close_collection_ingestion_finalization_progress()
+        self._collection_ingestion_busy = False
+        self._last_collection_ingestion_plan = None
+        self._log(f"❌ Collection import plan finalization failed: {error}", "Error")
+        messagebox.showerror(
+            "Collection Import Preview",
+            "Could not build the final Collection import preview:\n\n"
+            f"{error}\n\n"
+            "Nothing was applied. If reviewed Collection or dependent state changed, "
+            "start a new import review.",
             parent=self.frame.winfo_toplevel(),
         )
-        return True
+
+    def _collection_ingestion_plan_ready(self, plan):
+        self._close_collection_ingestion_finalization_progress()
+        self._collection_ingestion_busy = False
+        self._last_collection_ingestion_plan = plan
+        self._log(
+            "✅ Final Collection import plan ready for read-only preview; nothing applied",
+            "Information",
+        )
+
+        from ui.collection_ingestion_plan_preview_dialog import (
+            CollectionIngestionPlanPreviewDialog,
+        )
+
+        parent = self.frame.winfo_toplevel()
+        self.collection_ingestion_plan_preview_dialog = (
+            CollectionIngestionPlanPreviewDialog(
+                parent,
+                plan,
+                on_close=self._collection_ingestion_plan_preview_closed,
+            )
+        )
+        self.collection_ingestion_plan_preview_dialog.show()
+
+    def _collection_ingestion_plan_preview_closed(self):
+        self.collection_ingestion_plan_preview_dialog = None
 
     def _collection_ingestion_review_closed(self):
         self.collection_ingestion_review_dialog = None
+
+    def _collection_ingestion_state_is_saved(self):
+        """Require disk-backed Collection/dependent state before review/finalization."""
+        parent = self.frame.winfo_toplevel()
+        if self.data_manager.unsaved_changes:
+            messagebox.showinfo(
+                "Collection Import",
+                "Collection edits are still waiting to be saved. "
+                "Wait a moment and try again so ingestion uses a stable Collection snapshot.",
+                parent=parent,
+            )
+            return False
+        if self._planner_has_unsaved_changes():
+            messagebox.showinfo(
+                "Collection Import",
+                "Planner changes are still unsaved. Save or discard them before "
+                "continuing so any Planner Collection-ID references participate in "
+                "the same reviewed transaction state.",
+                parent=parent,
+            )
+            return False
+        return True
+
+    def _planner_has_unsaved_changes(self):
+        """Inspect optional live Planner state without making Planner an ingestion dependency."""
+        try:
+            root = self.frame.winfo_toplevel()
+            layout = getattr(root, "main_layout", None)
+            planner_page = getattr(layout, "planner_page", None)
+            model = getattr(planner_page, "model", None)
+            return bool(getattr(model, "has_unsaved_changes", False))
+        except (tk.TclError, AttributeError):
+            return False
 
     def _create_pagination_controls(self):
         """Create pagination controls"""

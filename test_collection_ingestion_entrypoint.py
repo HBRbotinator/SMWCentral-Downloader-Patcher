@@ -75,7 +75,7 @@ class CollectionIngestionEntrypointTest(unittest.TestCase):
             known_difficulties_from_config({"difficulty_lookup": "bad"}),
         )
 
-    def test_default_wiring_uses_collection_adjacent_cache_hints_and_save_sync(self):
+    def test_default_wiring_uses_collection_adjacent_cache_and_reference_participants(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processed = root / "processed.json"
@@ -88,7 +88,8 @@ class CollectionIngestionEntrypointTest(unittest.TestCase):
             fake_manager.json_path = str(processed.resolve())
             fake_hints = Mock()
             fake_provider = Mock()
-            fake_participant = Mock()
+            fake_save_sync = Mock()
+            fake_planner = Mock()
             expected_session = object()
 
             with (
@@ -106,8 +107,12 @@ class CollectionIngestionEntrypointTest(unittest.TestCase):
                 ) as provider_type,
                 patch(
                     "collection_ingestion_entrypoint.SaveSyncAssociationReferenceParticipant.beside_processed_json",
-                    return_value=fake_participant,
-                ) as participant_factory,
+                    return_value=fake_save_sync,
+                ) as save_sync_factory,
+                patch(
+                    "collection_ingestion_entrypoint.PlannerCollectionReferenceParticipant.beside_processed_json",
+                    return_value=fake_planner,
+                ) as planner_factory,
                 patch(
                     "collection_ingestion_entrypoint.create_collection_ingestion_session",
                     return_value=expected_session,
@@ -122,7 +127,8 @@ class CollectionIngestionEntrypointTest(unittest.TestCase):
             self.assertIs(expected_session, actual)
             manager_type.assert_called_once_with(str(processed.resolve()))
             hints_factory.assert_called_once_with(processed.resolve())
-            participant_factory.assert_called_once_with(processed.resolve())
+            save_sync_factory.assert_called_once_with(processed.resolve())
+            planner_factory.assert_called_once_with(processed.resolve())
             provider_type.assert_called_once_with(
                 cache_dir=kaizoff_cache_dir_for_processed_json(processed)
             )
@@ -133,11 +139,11 @@ class CollectionIngestionEntrypointTest(unittest.TestCase):
                 rom_root=str(roms.resolve()),
                 giganticbucket_path=None,
                 known_difficulties=("Expert",),
-                participants=(fake_participant,),
+                participants=(fake_save_sync, fake_planner),
                 force_catalogue_refresh=False,
             )
 
-    def test_real_empty_rom_session_is_read_only_and_captures_save_sync_precondition(self):
+    def test_real_empty_rom_session_captures_optional_dependent_preconditions_read_only(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processed = root / "processed.json"
@@ -163,12 +169,18 @@ class CollectionIngestionEntrypointTest(unittest.TestCase):
 
             self.assertEqual((), session.groups)
             self.assertEqual(
-                {"collection", "collection_identity_hints", "save_sync_config"},
+                {
+                    "collection",
+                    "collection_identity_hints",
+                    "save_sync_config",
+                    "planner_state",
+                },
                 {item.store_name for item in session.preconditions},
             )
             self.assertEqual(processed_bytes, processed.read_bytes())
             self.assertEqual(config_bytes, config.read_bytes())
             self.assertFalse((root / "collection_identity_hints.json").exists())
+            self.assertFalse((root / "planner_state.json").exists())
 
     def test_injected_manager_must_reference_same_collection_file(self):
         with tempfile.TemporaryDirectory() as temporary:

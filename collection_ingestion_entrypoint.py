@@ -1,4 +1,4 @@
-"""Non-persisting entrypoint wiring for real Collection ingestion review sessions."""
+"""Runtime composition for real Collection ingestion review and plan preview."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from collection_identity_hints import CollectionIdentityHintsStore
+from collection_ingestion_finalization import finalize_reviewed_ingestion_session
 from collection_ingestion_session import (
     CollectionIngestionSession,
     create_collection_ingestion_session,
 )
 from hack_data_manager import HackDataManager
 from kaizoff_provider import KaizOffCatalogueProvider
+from planner_reference_participant import PlannerCollectionReferenceParticipant
 from save_sync_reference_participant import SaveSyncAssociationReferenceParticipant
 
 
@@ -110,6 +112,18 @@ def kaizoff_cache_dir_for_processed_json(processed_json_path: str | Path) -> Pat
     return processed.with_name(KAIZOFF_CACHE_DIRECTORY)
 
 
+def collection_identity_reference_participants(
+    processed_json_path: str | Path,
+):
+    """Compose optional feature-owned stores that persist Collection identities."""
+
+    processed = Path(processed_json_path).expanduser().resolve()
+    return (
+        SaveSyncAssociationReferenceParticipant.beside_processed_json(processed),
+        PlannerCollectionReferenceParticipant.beside_processed_json(processed),
+    )
+
+
 def create_collection_ingestion_review_session(
     processed_json_path: str | Path,
     selection: CollectionIngestionSourceSelection,
@@ -121,27 +135,22 @@ def create_collection_ingestion_review_session(
     identity_hints: CollectionIdentityHintsStore | None = None,
     participants=None,
 ) -> CollectionIngestionSession:
-    """Wire real sources into Commit 006 without finalizing or applying a plan."""
+    """Wire real sources into one frozen review session without applying changes."""
 
     normalized = validate_collection_ingestion_selection(selection)
     processed = Path(processed_json_path).expanduser().resolve()
-    runtime_manager = manager or HackDataManager(str(processed))
-    if Path(runtime_manager.json_path).expanduser().resolve() != processed:
-        raise CollectionIngestionEntrypointError(
-            "Collection manager does not reference the selected processed.json."
-        )
-
+    runtime_manager = _runtime_manager(processed, manager)
     hints = identity_hints or CollectionIdentityHintsStore.beside_processed_json(
         processed
     )
     runtime_provider = provider or KaizOffCatalogueProvider(
         cache_dir=kaizoff_cache_dir_for_processed_json(processed)
     )
-    runtime_participants = participants
-    if runtime_participants is None:
-        runtime_participants = (
-            SaveSyncAssociationReferenceParticipant.beside_processed_json(processed),
-        )
+    runtime_participants = (
+        collection_identity_reference_participants(processed)
+        if participants is None
+        else tuple(participants)
+    )
 
     return create_collection_ingestion_session(
         runtime_manager,
@@ -155,11 +164,68 @@ def create_collection_ingestion_review_session(
     )
 
 
+def finalize_collection_ingestion_review_plan(
+    processed_json_path: str | Path,
+    session: CollectionIngestionSession,
+    decisions,
+    *,
+    force_detail_refresh: bool = False,
+    provider: KaizOffCatalogueProvider | None = None,
+    manager: HackDataManager | None = None,
+    identity_hints: CollectionIdentityHintsStore | None = None,
+    participants=None,
+    id_factory=None,
+):
+    """Hydrate completed review into a final immutable plan without Apply."""
+
+    processed = Path(processed_json_path).expanduser().resolve()
+    runtime_manager = _runtime_manager(processed, manager)
+    hints = identity_hints or CollectionIdentityHintsStore.beside_processed_json(
+        processed
+    )
+    runtime_provider = provider or KaizOffCatalogueProvider(
+        cache_dir=kaizoff_cache_dir_for_processed_json(processed)
+    )
+    runtime_participants = (
+        collection_identity_reference_participants(processed)
+        if participants is None
+        else tuple(participants)
+    )
+    kwargs = {
+        "participants": tuple(runtime_participants),
+        "force_detail_refresh": force_detail_refresh,
+    }
+    if id_factory is not None:
+        kwargs["id_factory"] = id_factory
+    return finalize_reviewed_ingestion_session(
+        session,
+        decisions,
+        runtime_manager,
+        hints,
+        runtime_provider,
+        **kwargs,
+    )
+
+
+def _runtime_manager(
+    processed: Path,
+    manager: HackDataManager | None,
+) -> HackDataManager:
+    runtime_manager = manager or HackDataManager(str(processed))
+    if Path(runtime_manager.json_path).expanduser().resolve() != processed:
+        raise CollectionIngestionEntrypointError(
+            "Collection manager does not reference the selected processed.json."
+        )
+    return runtime_manager
+
+
 __all__ = [
     "KAIZOFF_CACHE_DIRECTORY",
     "CollectionIngestionEntrypointError",
     "CollectionIngestionSourceSelection",
+    "collection_identity_reference_participants",
     "create_collection_ingestion_review_session",
+    "finalize_collection_ingestion_review_plan",
     "kaizoff_cache_dir_for_processed_json",
     "known_difficulties_from_config",
     "validate_collection_ingestion_selection",
