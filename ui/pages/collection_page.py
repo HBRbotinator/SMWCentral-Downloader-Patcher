@@ -139,13 +139,19 @@ class CollectionPage:
         self._last_collection_ingestion_review_decisions = None
         self._last_collection_ingestion_plan = None
 
-        # Read-only, user-initiated SMWC update/replacement discovery.
+        # Read-only, user-initiated SMWC update/replacement discovery and planning.
         self.collection_update_discovery_dialog = None
         self.collection_update_discovery_progress_dialog = None
         self._collection_update_discovery_busy = False
         self._collection_update_discovery_queue = queue.Queue()
         self._collection_update_discovery_poll_id = None
         self._last_collection_update_selection = None
+        self.collection_update_plan_progress_dialog = None
+        self.collection_update_plan_preview_dialog = None
+        self._collection_update_plan_busy = False
+        self._collection_update_plan_queue = queue.Queue()
+        self._collection_update_plan_poll_id = None
+        self._last_collection_update_plan = None
 
         # Debounce timer for scrollbar toggle
         self.scrollbar_toggle_timer = None
@@ -269,6 +275,18 @@ class CollectionPage:
             except tk.TclError:
                 pass
             self._collection_update_discovery_poll_id = None
+        if self.collection_update_plan_preview_dialog is not None:
+            self.collection_update_plan_preview_dialog.close()
+            self.collection_update_plan_preview_dialog = None
+        if self.collection_update_plan_progress_dialog is not None:
+            self.collection_update_plan_progress_dialog.close()
+            self.collection_update_plan_progress_dialog = None
+        if self._collection_update_plan_poll_id is not None and self.frame:
+            try:
+                self.frame.after_cancel(self._collection_update_plan_poll_id)
+            except tk.TclError:
+                pass
+            self._collection_update_plan_poll_id = None
 
         # Force save any pending changes
         self.data_manager.force_save()
@@ -1624,7 +1642,7 @@ class CollectionPage:
 
     def _open_collection_update_discovery(self):
         """Search the current KaizOFF Index for a selected numeric Collection entry."""
-        if self._collection_update_discovery_busy:
+        if self._collection_update_discovery_busy or self._collection_update_plan_busy:
             return
         if self._collection_ingestion_busy:
             messagebox.showinfo(
@@ -1633,6 +1651,12 @@ class CollectionPage:
                 "update/replacement search.",
                 parent=self.frame.winfo_toplevel(),
             )
+            return
+        if (
+            self.collection_update_plan_preview_dialog is not None
+            and self.collection_update_plan_preview_dialog.is_open
+        ):
+            self.collection_update_plan_preview_dialog.lift()
             return
         if (
             self.collection_update_discovery_dialog is not None
@@ -1767,31 +1791,139 @@ class CollectionPage:
         self.collection_update_discovery_dialog.show()
 
     def _collection_update_candidate_selected(self, selection):
-        """Keep one detached user-confirmed relationship for the next bounded slice."""
+        """Hydrate one explicitly confirmed relationship into a read-only final plan."""
         self._last_collection_update_selection = selection
+        self._last_collection_update_plan = None
         target = selection.target_entry
-        existing_note = (
-            "\n\nThat target already exists in Collection, so a later replacement flow "
-            "must reconcile the two records explicitly."
-            if selection.target_already_in_collection
-            else ""
-        )
         self._log(
-            "🔎 Possible SMWC replacement relationship selected without changes: "
+            "🔎 Possible SMWC replacement relationship explicitly confirmed: "
             f"{selection.source_collection_key} -> {target.smwc_submission_id}",
             "Information",
         )
-        messagebox.showinfo(
-            "Possible SMWC Replacement Selected",
-            (
-                f"SMWC {target.smwc_submission_id} — {target.title} was selected as a "
-                "possible replacement/update candidate.\n\n"
-                "Nothing was downloaded, patched, migrated, or written to Collection. "
-                "The application is not claiming that this submission is newer."
-                f"{existing_note}"
-            ),
-            parent=self.frame.winfo_toplevel(),
+        if selection.target_already_in_collection:
+            messagebox.showinfo(
+                "Existing Replacement Target Needs Merge Review",
+                (
+                    f"SMWC {target.smwc_submission_id} — {target.title} already exists in "
+                    "Collection.\n\nSafely replacing another numeric Collection identity with an "
+                    "existing target requires explicit review of conflicting user-owned state. "
+                    "This read-only planning slice intentionally refuses to invent those merge "
+                    "choices.\n\nNothing was downloaded, patched, migrated, or written."
+                ),
+                parent=self.frame.winfo_toplevel(),
+            )
+            return True
+        if not self._collection_update_state_is_saved():
+            return False
+        return self._start_collection_update_plan_preview(selection)
+
+    def _start_collection_update_plan_preview(self, selection):
+        if self._collection_update_plan_busy:
+            return False
+        parent = self.frame.winfo_toplevel()
+        from ui.collection_update_plan_preview_dialog import (
+            CollectionUpdatePlanProgressDialog,
         )
+
+        self._collection_update_plan_busy = True
+        self.collection_update_plan_progress_dialog = CollectionUpdatePlanProgressDialog(parent)
+        self.collection_update_plan_progress_dialog.show()
+        processed_json_path = str(self.data_manager.json_path)
+        self._log(
+            "📋 Building immutable SMWC replacement plan for read-only preview",
+            "Information",
+        )
+
+        def worker():
+            try:
+                from collection_update_plan import finalize_collection_update_selection_plan
+
+                finalized = finalize_collection_update_selection_plan(
+                    processed_json_path,
+                    selection,
+                    force_detail_refresh=True,
+                )
+                self._collection_update_plan_queue.put(("ready", finalized))
+            except Exception as error:
+                self._collection_update_plan_queue.put(("error", error))
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="collection-update-plan-preview",
+        ).start()
+        self._poll_collection_update_plan()
+        return True
+
+    def _poll_collection_update_plan(self):
+        try:
+            status, payload = self._collection_update_plan_queue.get_nowait()
+        except queue.Empty:
+            self._collection_update_plan_poll_id = self.frame.after(
+                100,
+                self._poll_collection_update_plan,
+            )
+            return
+
+        self._collection_update_plan_poll_id = None
+        self._collection_update_plan_busy = False
+        if self.collection_update_plan_progress_dialog is not None:
+            self.collection_update_plan_progress_dialog.close()
+            self.collection_update_plan_progress_dialog = None
+        if status != "ready":
+            self._last_collection_update_plan = None
+            self._log(f"❌ SMWC replacement plan finalization failed: {payload}", "Error")
+            messagebox.showerror(
+                "SMWC Replacement Plan Preview",
+                (
+                    "Could not build the read-only replacement plan:\n\n"
+                    f"{payload}\n\nNothing was applied. Start update discovery again if "
+                    "Collection or dependent state changed."
+                ),
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+        self._show_collection_update_plan_preview(payload)
+
+    def _show_collection_update_plan_preview(self, finalized):
+        from ui.collection_update_plan_preview_dialog import (
+            CollectionUpdatePlanPreviewDialog,
+        )
+
+        self._last_collection_update_plan = finalized
+        self._log(
+            "✅ Immutable SMWC replacement plan ready for read-only preview",
+            "Information",
+        )
+        self.collection_update_plan_preview_dialog = CollectionUpdatePlanPreviewDialog(
+            self.frame.winfo_toplevel(),
+            finalized,
+            on_close=self._collection_update_plan_preview_closed,
+        )
+        self.collection_update_plan_preview_dialog.show()
+
+    def _collection_update_plan_preview_closed(self):
+        self.collection_update_plan_preview_dialog = None
+
+    def _collection_update_state_is_saved(self):
+        parent = self.frame.winfo_toplevel()
+        if getattr(self.data_manager, "unsaved_changes", False):
+            messagebox.showinfo(
+                "SMWC Replacement Plan Preview",
+                "Collection changes are still waiting for the normal delayed save. Wait for "
+                "them to save before finalizing the replacement preview.",
+                parent=parent,
+            )
+            return False
+        if self._planner_has_unsaved_changes():
+            messagebox.showinfo(
+                "SMWC Replacement Plan Preview",
+                "Planner changes are still unsaved. Save or discard them before finalizing "
+                "the replacement preview so Planner Collection-ID references participate in "
+                "the same immutable transaction state.",
+                parent=parent,
+            )
+            return False
         return True
 
     def _collection_update_discovery_closed(self):

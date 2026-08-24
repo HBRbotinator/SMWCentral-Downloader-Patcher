@@ -11,7 +11,7 @@ class CollectionUpdateDiscoveryWiringTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = COLLECTION_PAGE.read_text(encoding="utf-8")
         start = cls.source.index("    def _open_collection_update_discovery")
-        end = cls.source.index("    def _open_collection_import", start)
+        end = cls.source.index("    def _collection_update_candidate_selected", start)
         cls.discovery_wiring = cls.source[start:end]
 
     def test_collection_exposes_explicit_find_update_action(self):
@@ -26,21 +26,19 @@ class CollectionUpdateDiscoveryWiringTests(unittest.TestCase):
         self.assertIn("get_index(force_refresh=True)", self.discovery_wiring)
         self.assertIn("validated stale cache", self.discovery_wiring)
 
-    def test_wiring_freezes_record_before_background_provider_work(self):
+    def test_discovery_freezes_record_before_background_provider_work(self):
         self.assertIn("frozen_record = copy.deepcopy(source_record)", self.discovery_wiring)
         self.assertIn("threading.Thread(target=worker, daemon=True).start()", self.discovery_wiring)
 
-    def test_relationship_selection_is_detached_and_read_only(self):
-        self.assertIn("_last_collection_update_selection = selection", self.discovery_wiring)
-        self.assertIn("Nothing was downloaded, patched, migrated, or written", self.discovery_wiring)
+    def test_discovery_itself_still_does_not_hydrate_or_apply(self):
         forbidden = (
-            "apply_collection_ingestion_plan",
+            "finalize_collection_update_selection_plan",
             "apply_collection_change_plan",
-            "finalize_collection_ingestion_review_plan",
+            "apply_collection_ingestion_plan",
             "get_hack(",
-            "download_and_patch",
-            "os.replace",
-            "os.remove",
+            "patch_rom",
+            "os.replace(",
+            "os.remove(",
         )
         for token in forbidden:
             self.assertNotIn(token, self.discovery_wiring)

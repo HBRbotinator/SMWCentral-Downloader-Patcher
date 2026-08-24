@@ -12,8 +12,12 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
   submissions; it never claims that a different SMWC ID is automatically newer.
 - Supports local frozen-Index search by title or SMWC ID, including targets that already exist
   in Collection.
-- Keeps the discovery boundary read-only: selecting a possible relationship does not download,
-  patch, migrate identity, or modify Collection/dependent state.
+- After explicit relationship confirmation, hydrates only the selected target's rich KaizOFF
+  detail and builds an immutable numeric-to-numeric replacement plan for read-only preview.
+- The replacement preview shows the exact Collection identity/catalogue/reference changes while
+  remaining non-applying; no target ROM is downloaded or patched and no filesystem data moves.
+- Existing numeric targets fail closed before planning because merging independent user-owned
+  Collection state requires a separate explicit conflict-review boundary.
 
 <!-- collection-update-discovery:end -->
 

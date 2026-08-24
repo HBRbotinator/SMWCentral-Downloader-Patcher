@@ -98,7 +98,9 @@ The current build contract publishes a native tarball rather than an AppImage. E
 11. **Check a known SMWC entry for a possible replacement**: Select a numeric SMWC Collection row and click **Find Update...**
    - The app refreshes the lightweight KaizOFF Index and ranks/searches possible related submissions
    - A different SMWC ID is never automatically treated as a newer version; you must recognize and confirm the relationship yourself
-   - This discovery step is read-only and does not download, patch, migrate, or modify Collection data
+   - After you explicitly confirm a relationship, only that target's rich KaizOFF detail is hydrated and an immutable replacement plan is shown
+   - The replacement plan preview is still read-only: it does not apply the identity migration or download/patch a target ROM
+   - If the target already exists in Collection, planning stops because conflicting user-owned state needs its own explicit merge review
 
 ![Collection Page](images/application-5.0-collection.png)
 
