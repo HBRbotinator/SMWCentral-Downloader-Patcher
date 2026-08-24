@@ -87,6 +87,7 @@ class CatalogueSuggestion:
     hack_type: str
     exits: int | None
     confidence: float
+    authors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,7 @@ class CollectionIngestionSession:
     catalogue_fetched_at: float
     catalogue_source: str
     catalogue_stale: bool
+    catalogue_entries: tuple[CatalogueEntry, ...]
     existing_collection_keys: tuple[str, ...]
     preconditions: tuple
     resolutions: tuple[CandidateResolution, ...]
@@ -249,6 +251,7 @@ def build_collection_ingestion_session(
         catalogue_fetched_at=float(catalogue.fetched_at),
         catalogue_source=str(catalogue.source),
         catalogue_stale=bool(catalogue.stale),
+        catalogue_entries=tuple(catalogue.entries),
         existing_collection_keys=tuple(sorted(state.records, key=_collection_key_sort)),
         preconditions=state.preconditions,
         resolutions=tuple(sorted(resolutions, key=lambda item: item.candidate_id)),
@@ -257,6 +260,36 @@ def build_collection_ingestion_session(
         suppressed_roms=tuple(sorted(suppressed, key=lambda item: (item.path.casefold(), item.sha256))),
     )
 
+
+
+def search_session_catalogue(
+    session: CollectionIngestionSession,
+    query: str,
+    *,
+    limit: int = 20,
+) -> tuple[CatalogueSuggestion, ...]:
+    """Search only the immutable KaizOFF Index snapshot captured by this session."""
+
+    text = str(query or "").strip()
+    if not text:
+        return ()
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0 or limit > 50:
+        raise CollectionIngestionSessionError("Catalogue search limit must be 1-50.")
+    matcher = CatalogueMatcher(session.catalogue_entries)
+
+    numeric = text
+    lowered = text.casefold()
+    for prefix in ("smwc-id-", "smwc id " , "smwc-"):
+        if lowered.startswith(prefix):
+            numeric = text[len(prefix):].strip()
+            break
+    if numeric.isdecimal():
+        direct = matcher.get(int(numeric))
+        if direct is not None:
+            return (_catalogue_suggestion(direct, 1.0),)
+
+    ranked = matcher.rank(text, limit=limit)
+    return tuple(_catalogue_suggestion(item.entry, item.score) for item in ranked)
 
 def required_catalogue_detail_ids(
     session: CollectionIngestionSession,
@@ -846,6 +879,7 @@ def _catalogue_suggestion(entry: CatalogueEntry, score: float) -> CatalogueSugge
         hack_type=entry.hack_type,
         exits=entry.exits,
         confidence=float(score),
+        authors=tuple(entry.authors),
     )
 
 
@@ -963,4 +997,5 @@ __all__ = [
     "fetch_required_catalogue_details",
     "finalize_ingestion_session_plan",
     "required_catalogue_detail_ids",
+    "search_session_catalogue",
 ]
