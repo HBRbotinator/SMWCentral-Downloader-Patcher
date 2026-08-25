@@ -70,6 +70,8 @@ The current build contract publishes a native tarball rather than an AppImage. E
    - Enabling it does not rename existing ROMs or saves; many emulators associate saves by ROM basename, so existing save-name behavior is intentionally left untouched.
 7. **Multi-BPS dialog**: If a hack contains multiple patch files (e.g. different versions), a dialog will appear letting you choose which files to download and which is the default
 8. **Wait for completion**: The app will automatically download each hack and apply it to your base ROM
+   - Newly patched ROMs are recorded in Collection with SHA-256, exact size, `tool_patch` acquisition provenance, and the known SMWC submission ID even when the optional ID-in-filename setting is OFF.
+   - Re-downloading an existing Collection entry preserves its user-owned/local state (completion, notes, personal rating, imported history, and newer unknown fields) while refreshing provider/download facts.
 9. **Play**: Your patched ROMs will be saved to your chosen folder, ready to play in any emulator
 
 ![Download Page](images/application-5.0-download.png)

@@ -286,7 +286,7 @@ class SmwcRatingSourceContractTest(unittest.TestCase):
             "smwc_rating = extract_smwc_rating(hack)",
             'existing_hack["rating"] = smwc_rating',
             'smwc_rating = extract_smwc_rating(detailed_hack)',
-            'processed.get(hack_id, {}).get("rating", 0)',
+            'existing_record.get("rating", 0)',
         ):
             self.assertIn(required, main_source)
 

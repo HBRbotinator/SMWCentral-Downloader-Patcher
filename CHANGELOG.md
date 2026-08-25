@@ -52,6 +52,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 <!-- collection-update-discovery:end -->
 
+### Modern ROM asset persistence
+
+- Newly patched normal-download ROMs now enter Collection `files[]` with SHA-256, exact byte size, `tool_patch` source provenance, and their known SMWC submission ID.
+- Single-patch downloads now use the same modern multi-file structure as ingestion/replacement flows while keeping `file_path` as the compatibility projection of the selected primary ROM.
+- Re-downloads merge newly patched assets with existing modern ROM rows instead of discarding other retained variants, and the newly patched output becomes primary.
+- Refreshing/re-downloading an existing SMWC entry overlays provider/download facts onto the existing Collection record so imported history, completion, notes, personal rating, and unknown future/local fields survive.
+- Multi-type distribution copies remain represented by the existing `additional_paths` compatibility field; this commit does not reinterpret those copies as separate launchable variants.
+
 ### Optional SMWC-ID ROM filenames
 
 - Added a **Settings → ROM File Naming** option to include the known SMWC submission ID in newly patched ROM filenames.

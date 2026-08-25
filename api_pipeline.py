@@ -22,6 +22,7 @@ from utils import (
 from smwc_api_proxy import smwc_api_get, get_api_delay
 from patch_handler import PatchHandler
 from rom_filename_policy import build_patched_rom_filename
+from rom_asset_metadata import build_tool_patch_rom_asset, merge_collection_rom_assets
 
 # Global cancellation flag
 _cancel_operation = False
@@ -572,7 +573,13 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
                         if log:
                             log(f"⚠️ Patch failed for {clean_name}, skipping.", "Warning")
                         continue
-                    patched_files.append({"path": out_path, "name": clean_name, "primary": sel["primary"]})
+                    patched_files.append(
+                        build_tool_patch_rom_asset(
+                            out_path,
+                            smwc_submission_id=int(hack_id),
+                            primary=bool(sel["primary"]),
+                        )
+                    )
                     if sel["primary"]:
                         primary_output_path = out_path
 
@@ -583,8 +590,11 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
                     primary_output_path = patched_files[0]["path"]
                     patched_files[0]["primary"] = True
 
-                output_path = primary_output_path
                 patched_files_data = patched_files
+                primary_output_path = next(
+                    row["path"] for row in patched_files_data if row.get("primary")
+                )
+                output_path = primary_output_path
                 if log:
                     log(f"✅ Patched: {title_clean} ({len(patched_files)} file(s))")
 
@@ -601,7 +611,14 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
                 success = PatchHandler.apply_patch(patch_path, base_rom_path, output_path, log)
                 if not success:
                     raise Exception("Patch application failed")
-                patched_files_data = []
+                patched_files_data = [
+                    build_tool_patch_rom_asset(
+                        output_path,
+                        smwc_submission_id=int(hack_id),
+                        primary=True,
+                    )
+                ]
+                output_path = patched_files_data[0]["path"]
                 if log:
                     log(f"✅ Patched: {title_clean}")
 
@@ -629,38 +646,33 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
                     if log:
                         log(f"Updated: {title_clean} title formatting updated from '{current_title}' → '{proper_title}'", "Information")
 
-            # Update processed data
-            processed[hack_id] = {
-                "title": clean_hack_title(raw_title),  # Clean the title
-                "difficulty_id": raw_diff,  # Store raw difficulty ID for migration detection
+            # Overlay refreshed provider/download facts onto the existing Collection
+            # record so user-owned and newer local fields survive a redownload.
+            updated_record = dict(existing_hack)
+            updated_record.update({
+                "title": clean_hack_title(raw_title),
+                "difficulty_id": raw_diff,
                 "current_difficulty": display_diff,
                 "folder_name": folder_name,
                 "file_path": output_path,
                 "hack_type": normalized_type,
-                # Only include the specific metadata fields we want to track
                 "hall_of_fame": new_metadata.get("hall_of_fame", False),
                 "sa1_compatibility": new_metadata.get("sa1_compatibility", False),
                 "collaboration": new_metadata.get("collaboration", False),
                 "demo": new_metadata.get("demo", False),
                 "exits": new_metadata.get("exits", 0),
                 "authors": new_metadata.get("authors", []),
-                "rating": new_metadata.get(
-                    "rating",
-                    existing_hack.get("rating", 0),
-                ),
-                "time": new_metadata.get("time", 0),  # Raw timestamp
-                "date": "",  # Will be populated below
-                "obsolete": new_metadata.get("obsolete", False),  # NEW: Track obsolete status
-                # Collection tracking fields - preserve existing values
-                "completed": existing_hack.get("completed", False),
-                "completed_date": existing_hack.get("completed_date", ""),
-                "personal_rating": existing_hack.get("personal_rating", 0),
-                "notes": existing_hack.get("notes", ""),
-                "time_to_beat": existing_hack.get("time_to_beat", 0)  # v3.1 NEW: preserve existing time
-            }
-            # Store multi-patch files if present
-            if patched_files_data:
-                processed[hack_id]["files"] = patched_files_data
+                "rating": new_metadata.get("rating", existing_hack.get("rating", 0)),
+                "time": new_metadata.get("time", 0),
+                "date": "",
+                "obsolete": new_metadata.get("obsolete", False),
+            })
+            updated_record["files"] = merge_collection_rom_assets(
+                existing_hack.get("files", []),
+                patched_files_data,
+                primary_path=output_path,
+            )
+            processed[hack_id] = updated_record
 
             # Populate date from time if available
             if processed[hack_id]["time"]:

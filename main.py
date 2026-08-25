@@ -23,6 +23,7 @@ from utils import resource_path
 from product_identity import PRODUCT_DISPLAY_NAME, VERSION
 from update_policy import current_update_policy
 from rom_filename_policy import build_patched_rom_filename
+from rom_asset_metadata import build_tool_patch_rom_asset, merge_collection_rom_assets
 import sv_ttk
 
 # Multiple approaches to suppress threading cleanup errors
@@ -629,7 +630,13 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                             if log:
                                 log(f"⚠️ Patch failed for {sel['output_name']}, skipping.", "Warning")
                             continue
-                        patched_list.append({"path": out_path, "name": sel["output_name"], "primary": sel["primary"]})
+                        patched_list.append(
+                            build_tool_patch_rom_asset(
+                                out_path,
+                                smwc_submission_id=int(hack_id),
+                                primary=bool(sel["primary"]),
+                            )
+                        )
                         if sel["primary"]:
                             primary_output_path = out_path
 
@@ -641,6 +648,9 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                         patched_list[0]["primary"] = True
 
                     patched_files_data = patched_list
+                    primary_output_path = next(
+                        row["path"] for row in patched_files_data if row.get("primary")
+                    )
                     if log:
                         log(f"✅ Patched: {title_clean} ({len(patched_list)} file(s))", "Information")
 
@@ -676,6 +686,14 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                             log("❌ Download cancelled by user", "Warning")
                         break
 
+                    patched_files_data = [
+                        build_tool_patch_rom_asset(
+                            primary_output_path,
+                            smwc_submission_id=int(hack_id),
+                            primary=True,
+                        )
+                    ]
+                    primary_output_path = patched_files_data[0]["path"]
                     if log:
                         log(f"✅ Patched: {title_clean}", "Information")
 
@@ -712,16 +730,19 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
 
                         log(f"⚠️ Potential duplicate detected: '{current_title}' already exists as ID {duplicate_id}, but downloading with new ID {hack_id}", "Warning")
 
-                # Update processed data with multi-type support
-                processed[hack_id] = {
+                # Overlay refreshed provider/download facts onto the existing Collection
+                # record so imported history, personal state, and unknown local fields survive.
+                existing_record = processed.get(hack_id, {})
+                updated_record = dict(existing_record)
+                updated_record.update({
                     "title": current_title,
-                    "difficulty_id": raw_diff,  # Store raw difficulty ID for migration detection
+                    "difficulty_id": raw_diff,
                     "current_difficulty": display_diff,
                     "folder_name": folder_name,
-                    "file_path": primary_output_path,  # Use primary path for backward compatibility
-                    "additional_paths": additional_paths,  # Store additional paths for multi-type
-                    "hack_type": primary_type,  # Keep for backward compatibility
-                    "hack_types": hack_types,   # New: array of all types
+                    "file_path": primary_output_path,
+                    "additional_paths": additional_paths,
+                    "hack_type": primary_type,
+                    "hack_types": hack_types,
                     "hall_of_fame": bool(raw_fields.get("hof", False)),
                     "sa1_compatibility": bool(raw_fields.get("sa1", False)),
                     "collaboration": bool(raw_fields.get("collab", False)),
@@ -731,15 +752,18 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                     "rating": (
                         smwc_rating
                         if smwc_rating is not None
-                        else processed.get(hack_id, {}).get("rating", 0)
+                        else existing_record.get("rating", 0)
                     ),
-                    "time": metadata_time,  # Use fetched metadata time
-                    "date": "",  # Will be populated below
-                    "obsolete": is_obsolete_version  # Use the duplicate detection result
-                }
-
-                if patched_files_data:
-                    processed[hack_id]["files"] = patched_files_data
+                    "time": metadata_time,
+                    "date": "",
+                    "obsolete": is_obsolete_version,
+                })
+                updated_record["files"] = merge_collection_rom_assets(
+                    existing_record.get("files", []),
+                    patched_files_data,
+                    primary_path=primary_output_path,
+                )
+                processed[hack_id] = updated_record
 
                 # Populate date from time if available
                 if processed[hack_id]["time"]:
