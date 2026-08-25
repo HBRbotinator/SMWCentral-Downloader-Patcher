@@ -20,10 +20,16 @@ class CollectionUpdatePlanWiringTests(unittest.TestCase):
         self.assertIn("force_detail_refresh=True", self.update_plan_wiring)
         self.assertIn("collection-update-plan-preview", self.update_plan_wiring)
 
-    def test_existing_target_is_routed_to_explicit_merge_review(self):
+    def test_existing_target_is_routed_through_merge_review_then_merge_plan(self):
         self.assertIn("selection.target_already_in_collection", self.update_plan_wiring)
         self.assertIn("_prepare_collection_update_existing_target_merge_review(selection)", self.update_plan_wiring)
         self.assertIn("build_collection_update_existing_target_merge_review", self.update_plan_wiring)
+        self.assertIn("merge_review=review", self.update_plan_wiring)
+        self.assertIn("merge_decision=decision", self.update_plan_wiring)
+        self.assertIn(
+            "finalize_collection_update_existing_target_selection_plan",
+            self.update_plan_wiring,
+        )
 
     def test_unsaved_collection_or_planner_state_blocks_plan_finalization(self):
         self.assertIn("_collection_update_state_is_saved", self.update_plan_wiring)

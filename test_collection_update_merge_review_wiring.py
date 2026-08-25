@@ -20,16 +20,16 @@ class CollectionUpdateMergeReviewWiringTests(unittest.TestCase):
         self.assertIn("build_collection_update_existing_target_merge_review", self.merge_wiring)
         self.assertIn("CollectionUpdateMergeReviewDialog", self.merge_wiring)
 
-    def test_review_decision_remains_detached(self):
+    def test_review_decision_feeds_the_next_read_only_plan_boundary(self):
         self.assertIn("_last_collection_update_merge_decision = decision", self.merge_wiring)
-        self.assertIn("completed without applying changes", self.merge_wiring)
-        self.assertIn("Nothing was hydrated", self.merge_wiring)
+        self.assertIn("preparing immutable preview", self.merge_wiring)
+        self.assertIn("merge_review=review", self.merge_wiring)
+        self.assertIn("merge_decision=decision", self.merge_wiring)
 
-    def test_merge_review_wiring_has_no_hydration_plan_or_apply(self):
+    def test_merge_review_wiring_still_has_no_direct_provider_or_apply(self):
         forbidden = (
             "KaizOffCatalogueProvider",
             "get_hack(",
-            "finalize_collection_update_selection_plan",
             "finalize_collection_change_plan",
             "apply_collection_change_plan",
             "recover_interrupted_collection_apply",

@@ -26,8 +26,8 @@ class CollectionUpdatePlanPreviewDialogContractTests(unittest.TestCase):
         self.assertIn("attached; no ROM/save files", self.source)
         self.assertIn("no ROM/save files are moved, renamed, or deleted", self.source)
 
-    def test_commit_014_dialog_has_no_apply_boundary(self):
-        self.assertIn("Commit 014 is preview-only", self.source)
+    def test_commit_016_dialog_has_no_apply_boundary(self):
+        self.assertIn("Commit 016 remains preview-only", self.source)
         self.assertNotIn("Apply Import", self.source)
         self.assertNotIn("Apply Replacement", self.source)
         forbidden = (

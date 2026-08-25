@@ -1873,28 +1873,34 @@ class CollectionPage:
     def _collection_update_existing_target_merge_review_saved(self, review, decision):
         self._last_collection_update_merge_review = review
         self._last_collection_update_merge_decision = decision
+        self._last_collection_update_plan = None
         self._log(
-            "✅ Existing-target Collection merge review completed without applying changes",
+            "✅ Existing-target Collection merge review completed; preparing immutable preview",
             "Information",
         )
-        messagebox.showinfo(
-            "Merge Review Complete",
-            (
-                "The conflicting Collection state has been reviewed and the choices are retained "
-                "only in memory for the next planning boundary.\n\nNothing was hydrated, "
-                "migrated, downloaded, patched, or written."
-            ),
-            parent=self.frame.winfo_toplevel(),
+        if not self._collection_update_state_is_saved():
+            return False
+        return self._start_collection_update_plan_preview(
+            review.selection,
+            merge_review=review,
+            merge_decision=decision,
         )
-        return True
 
     def _collection_update_existing_target_merge_review_closed(self):
         self.collection_update_merge_review_dialog = None
 
 
-    def _start_collection_update_plan_preview(self, selection):
+    def _start_collection_update_plan_preview(
+        self,
+        selection,
+        *,
+        merge_review=None,
+        merge_decision=None,
+    ):
         if self._collection_update_plan_busy:
             return False
+        if (merge_review is None) != (merge_decision is None):
+            raise ValueError("Existing-target plan preview requires both merge review and decision.")
         parent = self.frame.winfo_toplevel()
         from ui.collection_update_plan_preview_dialog import (
             CollectionUpdatePlanProgressDialog,
@@ -1911,13 +1917,25 @@ class CollectionPage:
 
         def worker():
             try:
-                from collection_update_plan import finalize_collection_update_selection_plan
+                if merge_review is None:
+                    from collection_update_plan import finalize_collection_update_selection_plan
 
-                finalized = finalize_collection_update_selection_plan(
-                    processed_json_path,
-                    selection,
-                    force_detail_refresh=True,
-                )
+                    finalized = finalize_collection_update_selection_plan(
+                        processed_json_path,
+                        selection,
+                        force_detail_refresh=True,
+                    )
+                else:
+                    from collection_update_plan import (
+                        finalize_collection_update_existing_target_selection_plan,
+                    )
+
+                    finalized = finalize_collection_update_existing_target_selection_plan(
+                        processed_json_path,
+                        merge_review,
+                        merge_decision,
+                        force_detail_refresh=True,
+                    )
                 self._collection_update_plan_queue.put(("ready", finalized))
             except Exception as error:
                 self._collection_update_plan_queue.put(("error", error))

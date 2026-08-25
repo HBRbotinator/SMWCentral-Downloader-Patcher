@@ -409,6 +409,15 @@ def _apply_plan_to_collection(
             operation.value,
             f"user field {operation.field}",
         )
+    for operation in plan.first_clear_selections:
+        record = _require_record(staged, operation.target_key)
+        record["first_clear_playthrough"] = {
+            "source": operation.source,
+            "source_record_id": operation.source_record_id,
+        }
+    for operation in plan.primary_rom_selections:
+        record = _require_record(staged, operation.target_key)
+        _apply_primary_rom_selection(record, operation.primary_path)
 
     return _json_round_trip(staged, "final staged Collection")
 
@@ -650,6 +659,33 @@ def _apply_rom_assets(record: dict[str, Any], operation: RomAssetsOperation) -> 
         result.append(row)
     record["files"] = result
     record["file_path"] = primary
+
+
+def _apply_primary_rom_selection(record: dict[str, Any], primary_path: str) -> None:
+    rows = record.get("files")
+    if not isinstance(rows, list):
+        raise CollectionPlanApplyError(
+            "Reviewed primary ROM selection requires Collection files[] state."
+        )
+    found = False
+    result = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            result.append(copy.deepcopy(raw))
+            continue
+        row = copy.deepcopy(raw)
+        path = row.get("path")
+        selected = isinstance(path, str) and path == primary_path
+        if selected:
+            found = True
+        row["primary"] = selected
+        result.append(row)
+    if not found:
+        raise CollectionPlanApplyError(
+            "Reviewed primary ROM path is no longer present after Collection merge."
+        )
+    record["files"] = result
+    record["file_path"] = primary_path
 
 
 def _apply_user_history(record: dict[str, Any], operation: UserHistoryOperation) -> None:

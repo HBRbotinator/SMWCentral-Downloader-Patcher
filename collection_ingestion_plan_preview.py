@@ -17,6 +17,7 @@ class CollectionPlanPreviewSummary:
     updates: int
     identity_migrations: int
     rom_assets: int
+    primary_rom_selections: int
     imported_playthroughs: int
     user_state_changes: int
     ignored_roms: int
@@ -53,10 +54,13 @@ class CollectionIngestionPlanPreviewModel:
             updates=len(self.plan.updates),
             identity_migrations=len(self.plan.identity_migrations),
             rom_assets=sum(len(item.assets) for item in self.plan.rom_updates),
+            primary_rom_selections=len(self.plan.primary_rom_selections),
             imported_playthroughs=sum(
                 len(item.playthroughs) for item in self.plan.user_history_updates
             ),
-            user_state_changes=len(self.plan.user_state_updates),
+            user_state_changes=(
+                len(self.plan.user_state_updates) + len(self.plan.first_clear_selections)
+            ),
             ignored_roms=len(self.plan.ignored_roms),
             remembered_associations=len(self.plan.remembered_associations),
             skipped_items=len(self.plan.skipped_candidate_ids),
@@ -252,6 +256,26 @@ class CollectionIngestionPlanPreviewModel:
                     target=self._target_label(item.target_key),
                     change=f"Set {item.field} = {item.value!r}",
                     details=f"{item.source.value}: {item.reason}",
+                )
+            )
+
+        for item in self.plan.primary_rom_selections:
+            rows.append(
+                CollectionPlanPreviewRow(
+                    category="ROM",
+                    target=self._target_label(item.target_key),
+                    change="Select reviewed primary ROM",
+                    details=f"{item.primary_path} · {item.reason}",
+                )
+            )
+
+        for item in self.plan.first_clear_selections:
+            rows.append(
+                CollectionPlanPreviewRow(
+                    category="User state",
+                    target=self._target_label(item.target_key),
+                    change="Select reviewed first-clear playthrough",
+                    details=f"{item.source}:{item.source_record_id} · {item.reason}",
                 )
             )
 

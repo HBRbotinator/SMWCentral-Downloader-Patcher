@@ -76,11 +76,17 @@ class CollectionUpdatePlanPreviewDialog:
             foreground="#C47F00",
             wraplength=1090,
         ).pack(anchor="w", pady=(0, 4))
+        merge_text = (
+            " The target already existed in Collection, so the explicit merge-review choices "
+            "are also encoded in this plan."
+            if self.finalized.merge_decision is not None
+            else ""
+        )
         ttk.Label(
             root,
             text=(
-                "Commit 014 is preview-only. This replacement plan cannot be applied from this "
-                "dialog yet."
+                "Commit 016 remains preview-only. This replacement plan cannot be applied from "
+                "this dialog yet." + merge_text
             ),
             foreground="gray",
             wraplength=1090,
@@ -174,7 +180,9 @@ class CollectionUpdatePlanPreviewDialog:
             text=(
                 f"{summary.creates} create(s) · {summary.updates} update(s) · "
                 f"{summary.identity_migrations} identity migration(s) · "
-                f"{summary.rom_assets} ROM asset operation(s) · dependent stores: {stores}"
+                f"{summary.rom_assets} ROM asset operation(s) · "
+                f"{summary.primary_rom_selections} primary-ROM selection(s) · "
+                f"dependent stores: {stores}"
             )
         )
         self._rows = self.model.rows()

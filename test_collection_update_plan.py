@@ -9,10 +9,16 @@ from collection_identity_hints import CollectionIdentityHintsStore
 from collection_plan_apply import apply_collection_change_plan
 from collection_reconciliation import IdentityMigrationKind
 from collection_update_discovery import CollectionUpdateSelection
+from collection_update_merge_review import (
+    MergeValueOrigin,
+    build_collection_update_existing_target_merge_review,
+    finalize_collection_update_existing_target_merge_decision,
+)
 from collection_update_plan import (
     CollectionUpdateExistingTargetError,
     CollectionUpdatePlanError,
     CollectionUpdatePlanStaleStateError,
+    finalize_collection_update_existing_target_merge_plan,
     finalize_collection_update_replacement_plan,
 )
 from hack_data_manager import HackDataManager
@@ -138,6 +144,164 @@ class CollectionUpdatePlanTests(unittest.TestCase):
     def setUp(self):
         self.fixture = _Fixture()
         self.addCleanup(self.fixture.close)
+
+
+    def _existing_target_fixture(self):
+        source = dict(self.fixture.manager.data[SOURCE_ID])
+        source["completed_date"] = "2025-01-01"
+        source["first_clear_playthrough"] = {
+            "source": "giganticbucket",
+            "source_record_id": "old-clear",
+        }
+        source["playthroughs"] = [
+            {"source": "giganticbucket", "source_record_id": "old-clear", "time": "2:00"}
+        ]
+        target = {
+            "title": "Super Dram World 3 Updated",
+            "authors": ["PangaeaPanga"],
+            "current_difficulty": "Grandmaster",
+            "hack_type": "kaizo",
+            "hack_types": ["kaizo"],
+            "exits": 30,
+            "completed": False,
+            "completed_date": "2026-01-01",
+            "notes": "target notes",
+            "personal_rating": 4,
+            "first_clear_playthrough": {
+                "source": "giganticbucket",
+                "source_record_id": "new-clear",
+            },
+            "playthroughs": [
+                {"source": "giganticbucket", "source_record_id": "new-clear", "time": "1:00"}
+            ],
+            "file_path": "C:/ROMs/Super Dram World 3 Updated.sfc",
+            "files": [
+                {
+                    "path": "C:/ROMs/Super Dram World 3 Updated.sfc",
+                    "name": "Super Dram World 3 Updated.sfc",
+                    "sha256": "b" * 64,
+                    "size_bytes": 120,
+                    "primary": True,
+                }
+            ],
+        }
+        self.fixture.close()
+        self.fixture = _Fixture({SOURCE_ID: source, TARGET_ID: target})
+        self.addCleanup(self.fixture.close)
+        review = build_collection_update_existing_target_merge_review(
+            _selection(target_already_in_collection=True),
+            self.fixture.manager,
+        )
+        decision = finalize_collection_update_existing_target_merge_decision(
+            review,
+            field_origins={
+                "completed_date": MergeValueOrigin.SOURCE,
+                "personal_rating": MergeValueOrigin.TARGET,
+                "notes": MergeValueOrigin.SOURCE,
+                "first_clear_playthrough": MergeValueOrigin.SOURCE,
+            },
+            primary_rom_path="C:/ROMs/Super Dram World 3.sfc",
+        )
+        return review, decision
+
+    def test_reviewed_existing_target_merge_becomes_explicit_immutable_plan(self):
+        review, decision = self._existing_target_fixture()
+        finalized = finalize_collection_update_existing_target_merge_plan(
+            review,
+            decision,
+            self.fixture.manager,
+            self.fixture.hints,
+            _Provider(_detail()),
+            participants=(),
+        )
+
+        self.assertIs(decision, finalized.merge_decision)
+        migration = finalized.plan.identity_migrations[0]
+        self.assertTrue(migration.merge_existing_target)
+        self.assertEqual(SOURCE_ID, migration.source_key)
+        self.assertEqual(TARGET_ID, migration.target_key)
+        updates = {item.field: item.value for item in finalized.plan.user_state_updates}
+        self.assertEqual("2025-01-01", updates["completed_date"])
+        self.assertEqual(4, updates["personal_rating"])
+        self.assertEqual("keep me", updates["notes"])
+        self.assertNotIn("first_clear_playthrough", updates)
+        self.assertEqual(1, len(finalized.plan.first_clear_selections))
+        self.assertEqual("giganticbucket", finalized.plan.first_clear_selections[0].source)
+        self.assertEqual("old-clear", finalized.plan.first_clear_selections[0].source_record_id)
+        self.assertEqual(1, len(finalized.plan.primary_rom_selections))
+        self.assertEqual(
+            "C:/ROMs/Super Dram World 3.sfc",
+            finalized.plan.primary_rom_selections[0].primary_path,
+        )
+        self.assertEqual(1, len(finalized.plan.catalogue_updates))
+        self.assertEqual((), finalized.plan.rom_updates)
+
+    def test_reviewed_existing_target_plan_applies_exact_review_choices_and_unions_safe_state(self):
+        review, decision = self._existing_target_fixture()
+        finalized = finalize_collection_update_existing_target_merge_plan(
+            review,
+            decision,
+            self.fixture.manager,
+            self.fixture.hints,
+            _Provider(_detail()),
+            participants=(),
+        )
+
+        apply_collection_change_plan(
+            finalized.plan,
+            self.fixture.manager,
+            self.fixture.hints,
+            reference_participants=(),
+        )
+
+        self.assertNotIn(SOURCE_ID, self.fixture.manager.data)
+        record = self.fixture.manager.data[TARGET_ID]
+        self.assertTrue(record["completed"])
+        self.assertEqual("2025-01-01", record["completed_date"])
+        self.assertEqual("keep me", record["notes"])
+        self.assertEqual(4, record["personal_rating"])
+        self.assertEqual(
+            {"source": "giganticbucket", "source_record_id": "old-clear"},
+            record["first_clear_playthrough"],
+        )
+        self.assertEqual("C:/ROMs/Super Dram World 3.sfc", record["file_path"])
+        self.assertEqual(2, len(record["files"]))
+        self.assertEqual(2, len(record["playthroughs"]))
+        self.assertIn(int(SOURCE_ID), record["prior_smwc_submission_ids"])
+
+    def test_existing_target_merge_plan_is_read_only(self):
+        review, decision = self._existing_target_fixture()
+        before = self.fixture.processed.read_bytes()
+        manager_before = json.loads(json.dumps(self.fixture.manager.data))
+
+        finalize_collection_update_existing_target_merge_plan(
+            review,
+            decision,
+            self.fixture.manager,
+            self.fixture.hints,
+            _Provider(_detail()),
+            participants=(),
+        )
+
+        self.assertEqual(before, self.fixture.processed.read_bytes())
+        self.assertEqual(manager_before, self.fixture.manager.data)
+        self.assertFalse(self.fixture.hints.path.exists())
+
+    def test_existing_target_merge_plan_rejects_stale_review_before_provider_fetch(self):
+        review, decision = self._existing_target_fixture()
+        self.fixture.manager.data[SOURCE_ID]["notes"] = "changed"
+        provider = _Provider(_detail())
+
+        with self.assertRaisesRegex(CollectionUpdatePlanStaleStateError, "changed after"):
+            finalize_collection_update_existing_target_merge_plan(
+                review,
+                decision,
+                self.fixture.manager,
+                self.fixture.hints,
+                provider,
+                participants=(),
+            )
+        self.assertEqual([], provider.calls)
 
     def test_explicit_selection_becomes_one_immutable_submission_replacement_plan(self):
         provider = _Provider(_detail())

@@ -22,8 +22,13 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 - Unknown conflicting fields, conflicting imported playthrough identities, the same ROM path
   carrying different SHA-256 values, and distinct legacy file_path-only primaries fail closed instead
   of falling through to generic merge rules that could lose local state.
-- Commit 015 retains only a detached in-memory merge decision; it does not hydrate rich detail,
-  build/apply a replacement plan, or modify Collection/dependent stores.
+- A completed existing-target merge review now hydrates only the explicitly selected target,
+  freezes Collection/hints/Save Sync/optional Planner state, and builds an immutable replacement
+  merge plan for read-only preview.
+- The merge plan records every reviewed user-state choice plus any reviewed primary-ROM selection
+  after the structural identity merge, so preview and a later Apply cannot disagree.
+- Commit 016 remains non-applying: it does not download/patch a target ROM, migrate identity,
+  or write Collection/dependent stores.
 
 <!-- collection-update-discovery:end -->
 

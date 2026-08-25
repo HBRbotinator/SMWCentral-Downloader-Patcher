@@ -102,7 +102,8 @@ The current build contract publishes a native tarball rather than an AppImage. E
    - The replacement plan preview is still read-only: it does not apply the identity migration or download/patch a target ROM
    - If the target already exists in Collection, the app opens an explicit read-only merge review instead of choosing between independent user-owned state
    - Conflicting notes, rating, time/completion-date/first-clear values and different primary ROMs require explicit source/target choices; safely combinable ROM/history state is retained together
-   - Unsupported conflicting state fails closed, and saving the merge review only retains a detached in-memory decision for the next planning boundary
+   - Unsupported conflicting state fails closed; after a valid merge review, the app hydrates only the selected target and shows an immutable read-only merge plan containing the exact reviewed choices
+   - The merge plan still does not apply the identity migration or download/patch/move/delete ROM or save files
 
 ![Collection Page](images/application-5.0-collection.png)
 

@@ -223,6 +223,39 @@ class UserStateOperation:
 
 
 @dataclass(frozen=True)
+class FirstClearSelectionOperation:
+    """Select one existing imported playthrough reference as first clear after a merge."""
+
+    target_key: str
+    source: str
+    source_record_id: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        validate_collection_key(self.target_key)
+        if not self.source.strip() or not self.source_record_id.strip():
+            raise PlanFinalizationError("First-clear selection requires source identity.")
+        if not self.reason.strip():
+            raise PlanFinalizationError("First-clear selection requires review provenance.")
+
+
+@dataclass(frozen=True)
+class PrimaryRomSelectionOperation:
+    """Select one already-retained ROM path as primary after reconciliation/merge."""
+
+    target_key: str
+    primary_path: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        validate_collection_key(self.target_key)
+        if not isinstance(self.primary_path, str) or not self.primary_path:
+            raise PlanFinalizationError("Primary ROM selection requires a path.")
+        if not isinstance(self.reason, str) or not self.reason.strip():
+            raise PlanFinalizationError("Primary ROM selection requires review provenance.")
+
+
+@dataclass(frozen=True)
 class IdentityMigrationOperation:
     """Move/merge one reviewed Collection identity into another."""
 
@@ -313,6 +346,8 @@ class CollectionChangePlan:
     remembered_associations: tuple[RememberedAssociationOperation, ...]
     skipped_candidate_ids: tuple[str, ...]
     ignored_candidate_ids: tuple[str, ...]
+    primary_rom_selections: tuple[PrimaryRomSelectionOperation, ...] = ()
+    first_clear_selections: tuple[FirstClearSelectionOperation, ...] = ()
 
     @property
     def creates(self) -> tuple[RecordIntent, ...]:
