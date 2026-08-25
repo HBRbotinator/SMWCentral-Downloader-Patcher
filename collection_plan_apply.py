@@ -53,6 +53,20 @@ class CollectionPlanRecoveryError(CollectionPlanApplyError):
 
 
 @dataclass(frozen=True)
+class CollectionApplyRecoveryInfo:
+    """Read-only description of a validated coordinated Apply journal."""
+
+    state: str
+    affected_targets: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.state not in {"prepared", "committed"}:
+            raise CollectionPlanRecoveryError("Collection recovery state is invalid.")
+        if not self.affected_targets:
+            raise CollectionPlanRecoveryError("Collection recovery has no affected targets.")
+
+
+@dataclass(frozen=True)
 class PreparedFileWrite:
     """One already-serialized sidecar replacement owned by a participant."""
 
@@ -304,6 +318,35 @@ def apply_collection_change_plan(
             identity_migration_count=len(plan.identity_migrations),
             reference_participant_count=len(participant_mutations),
         )
+
+
+def inspect_interrupted_collection_apply(
+    data_root: str | Path,
+) -> CollectionApplyRecoveryInfo | None:
+    """Return validated recovery facts without modifying journal or store files."""
+
+    root = Path(data_root).resolve()
+    journal_path = root / COLLECTION_APPLY_JOURNAL_FILENAME
+    if not journal_path.exists():
+        return None
+
+    try:
+        document = json.loads(
+            journal_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_object_keys,
+            parse_constant=_reject_nonfinite,
+        )
+        _validate_journal(document)
+        return CollectionApplyRecoveryInfo(
+            state=document["state"],
+            affected_targets=tuple(entry["target"] for entry in document["entries"]),
+        )
+    except CollectionPlanRecoveryError:
+        raise
+    except Exception as error:
+        raise CollectionPlanRecoveryError(
+            f"Could not inspect interrupted Collection apply: {error}"
+        ) from error
 
 
 def recover_interrupted_collection_apply(data_root: str | Path) -> bool:
@@ -1276,6 +1319,7 @@ __all__ = [
     "COLLECTION_APPLY_JOURNAL_FILENAME",
     "COLLECTION_APPLY_TEMP_MARKER",
     "COLLECTION_STORE_NAME",
+    "CollectionApplyRecoveryInfo",
     "CollectionIdentityReferenceParticipant",
     "CollectionPlanApplyError",
     "CollectionPlanApplyResult",
@@ -1286,5 +1330,6 @@ __all__ = [
     "apply_collection_change_plan",
     "collect_store_preconditions",
     "collection_revision_token",
+    "inspect_interrupted_collection_apply",
     "recover_interrupted_collection_apply",
 ]

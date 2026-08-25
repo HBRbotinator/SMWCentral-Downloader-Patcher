@@ -4,6 +4,15 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Collection transaction startup recovery
+
+- The application now checks for an existing coordinated Collection Apply journal before constructing Collection, Planner, or Save Sync UI/store owners.
+- Journals are inspected and validated read-only first; startup distinguishes `prepared` transactions from already-`committed` cleanup state.
+- Recovery is never automatic because the journal may belong to another still-running application instance. The user must confirm every other instance is closed before recovery runs.
+- Choosing not to recover exits before Collection-dependent features start and leaves the journal, rollback material, and store files untouched.
+- Invalid or unrecoverable journals fail closed and stop startup rather than allowing new Collection edits on uncertain cross-store state.
+- Difficulty/config initialization now occurs after the recovery gate because `config.json` may participate in Collection identity migrations.
+
 <!-- collection-update-discovery:start -->
 ### Collection update/replacement discovery
 

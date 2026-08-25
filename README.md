@@ -78,6 +78,20 @@ The current build contract publishes a native tarball rather than an AppImage. E
 
 ![Multi-BPS Dialog](images/application-5.0-download-multiple-bps.png)
 
+### Interrupted Collection transaction recovery
+
+Collection imports and explicit SMWC replacement migrations can update Collection state together with dependent Save Sync, identity-hint, and optional Planner references. These coordinated writes use a recovery journal.
+
+If the application starts and finds such a journal, it **does not recover automatically**. The journal could still belong to another application instance that is actively applying changes. Startup instead:
+
+1. validates and inspects the journal without changing any store;
+2. tells you whether the transaction is still `prepared` (rollback may be required) or already `committed` (cleanup remains);
+3. asks you to close every other SMWC Downloader & Patcher instance before explicitly choosing recovery;
+4. exits without touching the journal or Collection-dependent stores if you choose not to recover;
+5. blocks startup if the journal is malformed or cannot be recovered safely.
+
+This gate runs before Collection, Planner, and Save Sync UI/store owners are constructed, so normal edits cannot race or overwrite rollback material from an interrupted transaction.
+
 ### Managing Your Collection
 1. **View your collection**: Click the "Collection" tab to see all your downloaded ROMs
 2. **Customize columns**: Click the "⚙ Columns" button to show/hide columns and reorder them via drag-and-drop

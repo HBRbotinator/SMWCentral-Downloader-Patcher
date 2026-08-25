@@ -16,7 +16,7 @@ import platform
 import shutil
 import tempfile
 import requests
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from api_pipeline import run_pipeline
 from ui import setup_ui, update_log_colors
 from utils import resource_path
@@ -867,15 +867,6 @@ def detect_and_handle_duplicates(processed, current_hack_id, current_title, log=
 def main():
     """Main application entry point"""
     try:
-        # Initialize difficulty lookup from SMWC API before starting UI
-        from config_manager import ConfigManager
-        from difficulty_lookup_manager import get_difficulty_lookup
-        from utils import update_difficulty_lookup as set_difficulty_lookup
-
-        config_manager = ConfigManager()
-        difficulty_lookup = get_difficulty_lookup(config_manager)
-        set_difficulty_lookup(difficulty_lookup)
-
         root = tk.Tk()
         root.title(PRODUCT_DISPLAY_NAME)
 
@@ -921,6 +912,73 @@ def main():
 
         # Apply title bar theme immediately after dark theme is set
         apply_theme_to_titlebar(root)
+
+        # A coordinated Collection journal can represent another still-running instance
+        # or an interrupted prior Apply. Resolve it before constructing HackDataManager,
+        # Planner, Save Sync, or any other Collection-dependent UI/store owner.
+        from collection_startup_recovery import ensure_collection_startup_recovery
+        from collection_plan_apply import CollectionPlanRecoveryError
+        from utils import PROCESSED_JSON_PATH
+
+        def confirm_collection_recovery(info):
+            state_description = (
+                "prepared and may need to be rolled back"
+                if info.state == "prepared"
+                else "already committed and needs cleanup to finish"
+            )
+            targets = ", ".join(info.affected_targets)
+            return messagebox.askyesno(
+                "Collection Transaction Recovery Required",
+                (
+                    "A coordinated Collection transaction journal was found before "
+                    "the application UI started. The transaction is "
+                    f"{state_description}.\n\nAffected stores: {targets}\n\n"
+                    "This journal may belong to another SMWC Downloader & Patcher "
+                    "instance that is still applying changes. Close every other "
+                    "application instance first. Only choose Yes after confirming no "
+                    "other instance is applying Collection changes.\n\n"
+                    "Choose Yes to recover/finish cleanup now. Choose No to exit "
+                    "without modifying the journal or Collection-dependent stores."
+                ),
+                icon="warning",
+                default=messagebox.NO,
+                parent=root,
+            )
+
+        try:
+            startup_ready = ensure_collection_startup_recovery(
+                PROCESSED_JSON_PATH,
+                confirm_recovery=confirm_collection_recovery,
+            )
+        except CollectionPlanRecoveryError as recovery_error:
+            messagebox.showerror(
+                "Collection Recovery Failed",
+                (
+                    "The pending Collection transaction could not be inspected or "
+                    "recovered safely. The application will exit before opening "
+                    "Collection-dependent features.\n\n"
+                    f"{recovery_error}\n\n"
+                    "Do not delete transaction files manually unless you have first "
+                    "made a backup and understand the recovery state."
+                ),
+                parent=root,
+            )
+            root.destroy()
+            return
+
+        if not startup_ready:
+            root.destroy()
+            return
+
+        # Initialize difficulty lookup only after coordinated Collection recovery has
+        # been resolved, because config.json may itself be a transaction participant.
+        from config_manager import ConfigManager
+        from difficulty_lookup_manager import get_difficulty_lookup
+        from utils import update_difficulty_lookup as set_difficulty_lookup
+
+        config_manager = ConfigManager()
+        difficulty_lookup = get_difficulty_lookup(config_manager)
+        set_difficulty_lookup(difficulty_lookup)
 
         # Setup UI and run - pass version to setup_ui
         download_button = setup_ui(root, run_pipeline_wrapper, toggle_theme_callback, VERSION)
