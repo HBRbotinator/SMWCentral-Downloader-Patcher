@@ -151,7 +151,9 @@ class CollectionPage:
         self._last_collection_update_merge_decision = None
         self.collection_update_plan_progress_dialog = None
         self.collection_update_plan_preview_dialog = None
+        self.collection_update_apply_progress_dialog = None
         self._collection_update_plan_busy = False
+        self._collection_update_apply_busy = False
         self._collection_update_plan_queue = queue.Queue()
         self._collection_update_plan_poll_id = None
         self._last_collection_update_plan = None
@@ -287,6 +289,9 @@ class CollectionPage:
         if self.collection_update_plan_progress_dialog is not None:
             self.collection_update_plan_progress_dialog.close()
             self.collection_update_plan_progress_dialog = None
+        if self.collection_update_apply_progress_dialog is not None:
+            self.collection_update_apply_progress_dialog.close()
+            self.collection_update_apply_progress_dialog = None
         if self._collection_update_plan_poll_id is not None and self.frame:
             try:
                 self.frame.after_cancel(self._collection_update_plan_poll_id)
@@ -1648,7 +1653,11 @@ class CollectionPage:
 
     def _open_collection_update_discovery(self):
         """Search the current KaizOFF Index for a selected numeric Collection entry."""
-        if self._collection_update_discovery_busy or self._collection_update_plan_busy:
+        if (
+            self._collection_update_discovery_busy
+            or self._collection_update_plan_busy
+            or self._collection_update_apply_busy
+        ):
             return
         if self._collection_ingestion_busy:
             messagebox.showinfo(
@@ -1991,12 +2000,263 @@ class CollectionPage:
         self.collection_update_plan_preview_dialog = CollectionUpdatePlanPreviewDialog(
             self.frame.winfo_toplevel(),
             finalized,
+            on_apply=self._collection_update_apply_requested,
             on_close=self._collection_update_plan_preview_closed,
         )
         self.collection_update_plan_preview_dialog.show()
 
     def _collection_update_plan_preview_closed(self):
         self.collection_update_plan_preview_dialog = None
+        self.collection_update_apply_progress_dialog = None
+
+    def _collection_update_apply_requested(self):
+        """Cross the explicit confirmation boundary for the finalized replacement plan."""
+        if self._collection_update_plan_busy or self._collection_update_apply_busy:
+            return False
+        if self._last_collection_update_plan is None:
+            messagebox.showerror(
+                "SMWC Replacement",
+                "The finalized replacement plan is no longer available.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+        if not self._collection_update_state_is_saved():
+            return False
+
+        from ui.collection_update_plan_preview_dialog import (
+            CollectionUpdateApplyProgressDialog,
+        )
+
+        self._collection_update_apply_busy = True
+        parent = self.frame.winfo_toplevel()
+        self.collection_update_apply_progress_dialog = CollectionUpdateApplyProgressDialog(parent)
+        self.collection_update_apply_progress_dialog.show()
+        self._log(
+            "💾 Applying finalized SMWC replacement plan transactionally",
+            "Information",
+        )
+        # The local coordinated transaction runs on the Tk thread so it serializes
+        # against pending Collection edits on the live HackDataManager instance.
+        self.frame.after(1, self._execute_collection_update_apply)
+        return True
+
+    def _execute_collection_update_apply(self):
+        from collection_plan_apply import (
+            CollectionPlanRecoveryError,
+            CollectionPlanStaleStateError,
+        )
+
+        finalized = self._last_collection_update_plan
+        if finalized is None:
+            self._collection_update_apply_failed(
+                RuntimeError("Finalized SMWC replacement plan is missing.")
+            )
+            return
+
+        try:
+            from collection_update_apply import (
+                apply_finalized_collection_update,
+                collection_update_apply_recovery_pending,
+                recover_collection_update_apply,
+            )
+
+            result = apply_finalized_collection_update(
+                str(self.data_manager.json_path),
+                finalized,
+                manager=self.data_manager,
+            )
+        except CollectionPlanStaleStateError as error:
+            self._collection_update_apply_stale(error)
+            return
+        except CollectionPlanRecoveryError as error:
+            self._collection_update_recovery_required(error)
+            return
+        except Exception as error:
+            self._collection_update_apply_failed(error)
+            return
+
+        cleanup_error = None
+        if collection_update_apply_recovery_pending(self.data_manager.json_path):
+            try:
+                # A successful return means the journal has crossed its committed point;
+                # any remaining journal is cleanup-only for this same application instance.
+                recover_collection_update_apply(self.data_manager.json_path)
+            except Exception as error:
+                cleanup_error = error
+        self._collection_update_apply_succeeded(result, cleanup_error)
+
+    def _close_collection_update_apply_progress(self):
+        if self.collection_update_apply_progress_dialog is not None:
+            self.collection_update_apply_progress_dialog.close()
+        self.collection_update_apply_progress_dialog = None
+
+    def _collection_update_apply_succeeded(self, result, cleanup_error=None):
+        finalized = self._last_collection_update_plan
+        selection = finalized.selection if finalized is not None else None
+        source_id = (
+            selection.source_entry.smwc_submission_id if selection is not None else "source"
+        )
+        target_id = (
+            selection.target_entry.smwc_submission_id if selection is not None else "target"
+        )
+        self._close_collection_update_apply_progress()
+        self._collection_update_apply_busy = False
+        self._reload_collection_ingestion_live_state()
+        self._close_collection_update_plan_preview()
+        self._clear_collection_update_state()
+
+        cleanup_note = ""
+        if cleanup_error is not None:
+            cleanup_note = (
+                "\n\nThe replacement transaction committed successfully, but its "
+                f"journal cleanup failed: {cleanup_error}\n\nDo not start another Collection "
+                "transaction until that journal is recovered."
+            )
+            self._log(
+                f"⚠️ SMWC replacement committed but journal cleanup failed: {cleanup_error}",
+                "Warning",
+            )
+        self._log(
+            f"✅ SMWC replacement applied transactionally: {source_id} -> {target_id}",
+            "Information",
+        )
+        messagebox.showinfo(
+            "SMWC Replacement Applied",
+            (
+                f"The reviewed Collection replacement SMWC {source_id} → SMWC {target_id} "
+                "was applied successfully.\n\n"
+                f"Collection records: {result.collection_record_count}\n"
+                f"Files written transactionally: {len(result.written_files)}\n"
+                f"Identity migrations: {result.identity_migration_count}\n"
+                f"Dependent reference stores participating: {result.reference_participant_count}\n\n"
+                "No ROM/save files were moved, renamed, deleted, downloaded, or patched. "
+                "Retained ROM rows keep the per-ROM SMWC provenance shown in the preview."
+                f"{cleanup_note}"
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _collection_update_apply_stale(self, error):
+        self._close_collection_update_apply_progress()
+        self._collection_update_apply_busy = False
+        self._log(f"⚠️ SMWC replacement plan became stale: {error}", "Warning")
+        self._close_collection_update_plan_preview()
+        self._clear_collection_update_state()
+        messagebox.showerror(
+            "SMWC Replacement Changed",
+            (
+                "The reviewed Collection or dependent state changed before Apply, so the "
+                f"replacement plan was rejected.\n\n{error}\n\nStart update discovery again. "
+                "Nothing from this stale plan was applied."
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _collection_update_apply_failed(self, error):
+        self._close_collection_update_apply_progress()
+        self._collection_update_apply_busy = False
+        if (
+            self.collection_update_plan_preview_dialog is not None
+            and self.collection_update_plan_preview_dialog.is_open
+        ):
+            self.collection_update_plan_preview_dialog.set_applying(False)
+        self._log(f"❌ SMWC replacement Apply failed: {error}", "Error")
+        messagebox.showerror(
+            "SMWC Replacement Failed",
+            (
+                "The transactional replacement could not be committed.\n\n"
+                f"{error}\n\nNo reviewed replacement change was committed; any prepared "
+                "transaction was rolled back. You may close the preview or retry after "
+                "correcting the underlying problem."
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _collection_update_recovery_required(self, error):
+        self._close_collection_update_apply_progress()
+        self._collection_update_apply_busy = False
+        if (
+            self.collection_update_plan_preview_dialog is not None
+            and self.collection_update_plan_preview_dialog.is_open
+        ):
+            self.collection_update_plan_preview_dialog.set_applying(False)
+        self._log(f"⚠️ SMWC replacement recovery required: {error}", "Warning")
+        recover_now = messagebox.askyesno(
+            "Collection Transaction Recovery Required",
+            (
+                "A coordinated Collection transaction journal already exists. This can mean "
+                "another application instance is currently applying changes, or a previous "
+                f"transaction was interrupted.\n\n{error}\n\nClose every other SMWC Downloader "
+                "& Patcher instance first. Only choose Yes after confirming no other instance "
+                "is applying Collection changes. Recovery may roll back a prepared transaction "
+                "or finish cleanup for one already committed.\n\nRecover now?"
+            ),
+            icon="warning",
+            parent=self.frame.winfo_toplevel(),
+        )
+        if recover_now:
+            self._run_collection_update_recovery()
+
+    def _run_collection_update_recovery(self):
+        from collection_update_apply import recover_collection_update_apply
+        from ui.collection_update_plan_preview_dialog import (
+            CollectionUpdateApplyProgressDialog,
+        )
+
+        self._collection_update_apply_busy = True
+        parent = self.frame.winfo_toplevel()
+        self.collection_update_apply_progress_dialog = CollectionUpdateApplyProgressDialog(
+            parent, recovery=True
+        )
+        self.collection_update_apply_progress_dialog.show()
+        try:
+            recovered = recover_collection_update_apply(self.data_manager.json_path)
+        except Exception as error:
+            self._close_collection_update_apply_progress()
+            self._collection_update_apply_busy = False
+            self._log(f"❌ Collection replacement recovery failed: {error}", "Error")
+            messagebox.showerror(
+                "Collection Recovery Failed",
+                (
+                    "The transaction journal could not be recovered safely.\n\n"
+                    f"{error}\n\nDo not start another Collection transaction until the recovery "
+                    "issue has been resolved."
+                ),
+                parent=parent,
+            )
+            return
+
+        self._close_collection_update_apply_progress()
+        self._collection_update_apply_busy = False
+        self._reload_collection_ingestion_live_state()
+        self._close_collection_update_plan_preview()
+        self._clear_collection_update_state()
+        self._log("✅ Collection transaction recovery completed", "Information")
+        messagebox.showinfo(
+            "Collection Recovery Complete",
+            (
+                "The interrupted Collection transaction was recovered and live application "
+                "state was reloaded.\n\n"
+                + (
+                    "Start a new update/replacement discovery before applying anything else."
+                    if recovered
+                    else "No recovery journal remained. Start a new discovery if needed."
+                )
+            ),
+            parent=parent,
+        )
+
+    def _close_collection_update_plan_preview(self):
+        dialog = self.collection_update_plan_preview_dialog
+        self.collection_update_plan_preview_dialog = None
+        if dialog is not None and dialog.is_open:
+            dialog.close()
+
+    def _clear_collection_update_state(self):
+        self._last_collection_update_selection = None
+        self._last_collection_update_merge_review = None
+        self._last_collection_update_merge_decision = None
+        self._last_collection_update_plan = None
 
     def _collection_update_state_is_saved(self):
         parent = self.frame.winfo_toplevel()
@@ -2571,7 +2831,7 @@ class CollectionPage:
                 planner_page.refresh(reload_planner=True)
         except Exception as error:
             self._log(
-                f"⚠️ Collection import transaction completed but a live UI refresh failed: {error}",
+                f"⚠️ Collection transaction completed but a live UI refresh failed: {error}",
                 "Warning",
             )
 

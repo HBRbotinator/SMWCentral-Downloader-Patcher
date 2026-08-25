@@ -36,20 +36,31 @@ class CollectionUpdatePlanWiringTests(unittest.TestCase):
         self.assertIn("unsaved_changes", self.update_plan_wiring)
         self.assertIn("_planner_has_unsaved_changes()", self.update_plan_wiring)
 
-    def test_plan_preview_remains_read_only(self):
-        self.assertIn("read-only preview", self.update_plan_wiring)
+    def test_finalized_preview_exposes_explicit_transactional_apply(self):
+        self.assertIn("on_apply=self._collection_update_apply_requested", self.update_plan_wiring)
+        self.assertIn("apply_finalized_collection_update", self.update_plan_wiring)
+        self.assertIn("collection_update_apply_recovery_pending", self.update_plan_wiring)
+        self.assertIn("recover_collection_update_apply", self.update_plan_wiring)
+        self.assertIn("self.frame.after(1, self._execute_collection_update_apply)", self.update_plan_wiring)
+
+    def test_replacement_apply_does_not_redo_discovery_hydration_or_rom_acquisition(self):
+        apply_start = self.update_plan_wiring.index("    def _collection_update_apply_requested")
+        apply_source = self.update_plan_wiring[apply_start:]
         forbidden = (
-            "apply_collection_update",
-            "apply_collection_change_plan",
-            "apply_collection_ingestion_plan",
-            "recover_interrupted_collection_apply",
+            "KaizOffCatalogueProvider",
+            "get_hack(",
+            "build_collection_update_discovery",
+            "finalize_collection_update_selection_plan",
+            "finalize_collection_update_existing_target_selection_plan",
             "patch_rom",
             "download_and_patch",
-            "os.replace(",
+            "download_url",
+            "shutil.move(",
             "os.remove(",
+            "threading.Thread",
         )
         for token in forbidden:
-            self.assertNotIn(token, self.update_plan_wiring)
+            self.assertNotIn(token, apply_source)
 
 
 if __name__ == "__main__":

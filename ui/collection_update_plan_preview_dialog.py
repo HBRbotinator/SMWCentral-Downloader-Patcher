@@ -3,22 +3,26 @@ from __future__ import annotations
 
 from datetime import datetime
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from collection_ingestion_plan_preview import CollectionIngestionPlanPreviewModel
 from collection_update_plan import FinalizedCollectionUpdatePlan
 
 
 class CollectionUpdatePlanPreviewDialog:
-    """Show the exact replacement plan while deliberately withholding Apply."""
+    """Show the exact replacement plan and require explicit confirmation before Apply."""
 
-    def __init__(self, parent, finalized, *, on_close=None):
+    def __init__(self, parent, finalized, *, on_apply=None, on_close=None):
         if not isinstance(finalized, FinalizedCollectionUpdatePlan):
             raise TypeError("finalized must be FinalizedCollectionUpdatePlan")
         self.parent = parent
         self.finalized = finalized
         self.model = CollectionIngestionPlanPreviewModel(finalized.plan)
+        self.on_apply = on_apply
         self.on_close = on_close
+        self.apply_button = None
+        self.close_button = None
+        self._applying = False
         self.win = None
         self.tree = None
         self.details = None
@@ -86,8 +90,10 @@ class CollectionUpdatePlanPreviewDialog:
         ttk.Label(
             root,
             text=(
-                "Commit 017 remains preview-only. This replacement plan cannot be applied from "
-                "this dialog yet." + merge_text
+                "Apply changes only the reviewed Collection identity/metadata and dependent "
+                "references shown below. It still does not acquire a target ROM. If you do not "
+                "already have a ROM for the target submission, retained older ROMs remain usable "
+                "and keep their original per-ROM SMWC provenance." + merge_text
             ),
             foreground="gray",
             wraplength=1090,
@@ -144,13 +150,23 @@ class CollectionUpdatePlanPreviewDialog:
         ttk.Label(
             footer,
             text=(
-                "No Collection, Planner, Save Sync, identity-hint, ROM, or save data is changed "
-                "by this preview."
+                "Nothing has been applied yet. Apply writes Collection metadata and planned "
+                "dependent references transactionally; ROM/save files are not moved, renamed, "
+                "deleted, downloaded, or patched."
             ),
             foreground="gray",
-            wraplength=880,
+            wraplength=820,
         ).pack(side="left", anchor="w")
-        ttk.Button(footer, text="Close Preview", command=self.close).pack(side="right")
+        self.close_button = ttk.Button(footer, text="Close Preview", command=self.close)
+        self.close_button.pack(side="right")
+        self.apply_button = ttk.Button(
+            footer,
+            text="Apply Replacement...",
+            command=self._request_apply,
+        )
+        self.apply_button.pack(side="right", padx=(0, 8))
+        if self.on_apply is None:
+            self.apply_button.configure(state="disabled")
 
         self._populate()
         self._center()
@@ -173,6 +189,49 @@ class CollectionUpdatePlanPreviewDialog:
         self.win = None
         if self.on_close:
             self.on_close()
+
+    def _request_apply(self):
+        if self._applying or self.on_apply is None:
+            return False
+        selection = self.finalized.selection
+        summary = self.model.summary()
+        source_id = selection.source_entry.smwc_submission_id
+        target_id = selection.target_entry.smwc_submission_id
+        merge_note = (
+            " The existing target record will be merged using the choices already reviewed."
+            if self.finalized.merge_decision is not None
+            else ""
+        )
+        confirmed = messagebox.askyesno(
+            "Apply SMWC Replacement",
+            (
+                f"Make SMWC {target_id} the current Collection identity in place of SMWC "
+                f"{source_id}?\n\n"
+                f"The finalized plan contains {summary.identity_migrations} identity migration(s) "
+                f"and {summary.rom_provenance_updates} ROM provenance update(s)."
+                f"{merge_note}\n\n"
+                "No target ROM will be downloaded or patched. Retained ROM files stay where "
+                "they are and keep the SMWC submission provenance shown in this preview. "
+                "Collection metadata and dependent references are written transactionally.\n\n"
+                "Apply exactly this reviewed replacement plan?"
+            ),
+            icon="warning",
+            parent=self.win or self.parent,
+        )
+        if not confirmed:
+            return False
+        accepted = bool(self.on_apply())
+        if accepted:
+            self.set_applying(True)
+        return accepted
+
+    def set_applying(self, applying=True):
+        self._applying = bool(applying)
+        state = "disabled" if self._applying else "normal"
+        if self.apply_button is not None:
+            self.apply_button.configure(state=state)
+        if self.close_button is not None:
+            self.close_button.configure(state=state)
 
     def _populate(self):
         summary = self.model.summary()
@@ -311,6 +370,81 @@ class CollectionUpdatePlanProgressDialog:
             pass
 
 
+class CollectionUpdateApplyProgressDialog:
+    """Modal local transaction/recovery progress for a finalized replacement plan."""
+
+    def __init__(self, parent, *, recovery=False):
+        self.parent = parent
+        self.recovery = bool(recovery)
+        self.win = None
+
+    def show(self):
+        if self.win:
+            return self.win
+        self.win = tk.Toplevel(self.parent)
+        self.win.title(
+            "Recovering Collection Transaction"
+            if self.recovery
+            else "Applying SMWC Replacement"
+        )
+        self.win.resizable(False, False)
+        self.win.transient(self.parent)
+        self.win.protocol("WM_DELETE_WINDOW", lambda: None)
+        body = ttk.Frame(self.win, padding=18)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text=(
+                "Recovering the coordinated Collection transaction..."
+                if self.recovery
+                else "Applying the reviewed SMWC replacement transaction..."
+            ),
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            body,
+            text=(
+                "Do not close another running application instance into this transaction. "
+                "ROM/save files are not moved, renamed, deleted, downloaded, or patched."
+            ),
+            wraplength=500,
+        ).pack(anchor="w", pady=(5, 10))
+        progress = ttk.Progressbar(body, mode="indeterminate", length=500)
+        progress.pack(fill="x")
+        progress.start(12)
+        try:
+            self.win.grab_set()
+        except tk.TclError:
+            pass
+        self._center()
+        return self.win
+
+    def close(self):
+        try:
+            if self.win and self.win.winfo_exists():
+                try:
+                    self.win.grab_release()
+                except tk.TclError:
+                    pass
+                self.win.destroy()
+        except tk.TclError:
+            pass
+        self.win = None
+
+    def _center(self):
+        try:
+            self.win.update_idletasks()
+            x = self.parent.winfo_rootx() + max(
+                0, (self.parent.winfo_width() - self.win.winfo_width()) // 2
+            )
+            y = self.parent.winfo_rooty() + max(
+                0, (self.parent.winfo_height() - self.win.winfo_height()) // 2
+            )
+            self.win.geometry(f"+{x}+{y}")
+        except (tk.TclError, AttributeError):
+            pass
+
+
 def _provider_freshness(finalized):
     try:
         timestamp = datetime.fromtimestamp(finalized.detail_fetched_at).strftime(
@@ -323,6 +457,7 @@ def _provider_freshness(finalized):
 
 
 __all__ = [
+    "CollectionUpdateApplyProgressDialog",
     "CollectionUpdatePlanPreviewDialog",
     "CollectionUpdatePlanProgressDialog",
 ]

@@ -27,14 +27,20 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
   merge plan for read-only preview.
 - The merge plan records every reviewed user-state choice plus any reviewed primary-ROM selection
   after the structural identity merge, so preview and a later Apply cannot disagree.
-- Commit 016 remains non-applying: it does not download/patch a target ROM, migrate identity,
-  or write Collection/dependent stores.
+- Finalized replacement and reviewed existing-target merge plans can now cross an explicit
+  **Apply Replacement...** confirmation boundary. Apply consumes only the immutable reviewed plan,
+  writes Collection/hints/Save Sync/optional Planner references through the existing coordinated
+  transaction journal, and reloads live application state after commit/recovery.
+- Replacement Apply performs no discovery, KaizOFF hydration, target-ROM download/patching, or
+  filesystem organization. Retained ROM/save files stay in place.
 - Replacement plans now preserve per-ROM SMWC submission provenance explicitly for retained
   modern `files[]` rows before a numeric identity migration. Source-only ROMs with no prior
   provenance are associated with the old/source SMWC ID; existing-target ROMs are associated
   with the target ID, while already explicit provenance is never silently relabeled.
 - Conflicting explicit provenance for the same retained ROM path fails closed, and the exact
-  provenance changes are visible in the immutable replacement preview before any future Apply.
+  provenance changes are visible in the immutable replacement preview before Apply.
+- Replacement Apply shares the Collection transaction recovery journal and stale-state checks used
+  by ingestion; an existing journal is never assumed abandoned without explicit user confirmation.
 
 <!-- collection-update-discovery:end -->
 

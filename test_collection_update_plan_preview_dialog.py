@@ -20,23 +20,22 @@ class CollectionUpdatePlanPreviewDialogContractTests(unittest.TestCase):
         self.assertIn("does not claim that the target submission is newer", self.source)
         self.assertIn("your explicit confirmation", self.source)
 
-    def test_preview_explicitly_says_no_target_rom_was_acquired(self):
-        self.assertIn("does not download or patch the target ROM", self.source)
-        self.assertIn("Existing ROMs remain ", self.source)
-        self.assertIn("attached; no ROM/save files", self.source)
-        self.assertIn("no ROM/save files are moved, renamed, or deleted", self.source)
-        self.assertIn("explicit per-ROM SMWC submission provenance", self.source)
+    def test_apply_confirmation_explicitly_says_no_target_rom_is_acquired(self):
+        self.assertIn("Apply Replacement...", self.source)
+        self.assertIn("Apply SMWC Replacement", self.source)
+        self.assertIn("No target ROM will be downloaded or patched", self.source)
+        self.assertIn("keep the SMWC submission provenance shown", self.source)
+        self.assertIn("ROM/save files are not moved, renamed", self.source)
 
-    def test_commit_017_dialog_has_no_apply_boundary(self):
-        self.assertIn("Commit 017 remains preview-only", self.source)
-        self.assertNotIn("Apply Import", self.source)
-        self.assertNotIn("Apply Replacement", self.source)
+    def test_preview_only_delegates_apply_and_contains_no_transaction_engine(self):
+        self.assertIn("on_apply", self.source)
+        self.assertIn("set_applying", self.source)
         forbidden = (
             "apply_collection_change_plan",
-            "apply_collection_ingestion_plan",
+            "apply_finalized_collection_update",
             "recover_interrupted_collection_apply",
-            "patch_rom",
             "download_url",
+            "patch_rom",
             "os.replace(",
             "shutil.move(",
         )
