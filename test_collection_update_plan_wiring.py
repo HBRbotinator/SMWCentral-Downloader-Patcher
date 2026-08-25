@@ -43,6 +43,24 @@ class CollectionUpdatePlanWiringTests(unittest.TestCase):
         self.assertIn("recover_collection_update_apply", self.update_plan_wiring)
         self.assertIn("self.frame.after(1, self._execute_collection_update_apply)", self.update_plan_wiring)
 
+
+    def test_target_rom_acquisition_is_pre_apply_and_rebuilds_the_immutable_preview(self):
+        self.assertIn("on_acquire=self._collection_update_acquire_target_rom_requested", self.update_plan_wiring)
+        self.assertIn("acquire_collection_update_target_rom", self.update_plan_wiring)
+        self.assertIn("make_multi_patch_callback", self.update_plan_wiring)
+        self.assertIn("collection-update-rom-acquisition", self.update_plan_wiring)
+        self.assertIn("self._last_collection_update_plan = result.finalized", self.update_plan_wiring)
+        self.assertIn("self._show_collection_update_plan_preview(result.finalized)", self.update_plan_wiring)
+        acquisition_start = self.update_plan_wiring.index(
+            "    def _collection_update_acquire_target_rom_requested"
+        )
+        apply_start = self.update_plan_wiring.index(
+            "    def _collection_update_apply_requested", acquisition_start
+        )
+        acquisition_source = self.update_plan_wiring[acquisition_start:apply_start]
+        self.assertNotIn("apply_finalized_collection_update", acquisition_source)
+        self.assertNotIn("apply_collection_change_plan", acquisition_source)
+
     def test_replacement_apply_does_not_redo_discovery_hydration_or_rom_acquisition(self):
         apply_start = self.update_plan_wiring.index("    def _collection_update_apply_requested")
         apply_source = self.update_plan_wiring[apply_start:]

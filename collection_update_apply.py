@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 
 from collection_identity_hints import CollectionIdentityHintsStore
 from collection_plan_apply import (
     COLLECTION_APPLY_JOURNAL_FILENAME,
     CollectionPlanApplyResult,
+    CollectionPlanStaleStateError,
     apply_collection_change_plan,
     recover_interrupted_collection_apply,
 )
 from collection_reconciliation import IdentityMigrationKind
+from collection_ingestion import IngestionSource
 from collection_update_plan import FinalizedCollectionUpdatePlan
 from hack_data_manager import HackDataManager
 
@@ -62,12 +65,40 @@ def apply_finalized_collection_update(
     else:
         runtime_participants = tuple(participants)
 
+    _validate_acquired_target_roms(plan)
     return apply_collection_change_plan(
         plan,
         runtime_manager,
         hints,
         reference_participants=tuple(runtime_participants),
     )
+
+
+def _validate_acquired_target_roms(plan) -> None:
+    """Fail closed if a tool-patched ROM changed after the reviewed preview."""
+
+    for operation in plan.rom_updates:
+        for asset in operation.assets:
+            if IngestionSource.TOOL_PATCH not in asset.sources:
+                continue
+            path = Path(asset.path).expanduser()
+            if not path.is_file():
+                raise CollectionPlanStaleStateError(
+                    f"Reviewed acquired ROM is missing before Apply: {asset.path}"
+                )
+            stat = path.stat()
+            if stat.st_size != asset.size_bytes:
+                raise CollectionPlanStaleStateError(
+                    f"Reviewed acquired ROM changed size before Apply: {asset.path}"
+                )
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != asset.sha256:
+                raise CollectionPlanStaleStateError(
+                    f"Reviewed acquired ROM changed contents before Apply: {asset.path}"
+                )
 
 
 def collection_update_apply_recovery_pending(processed_json_path: str | Path) -> bool:

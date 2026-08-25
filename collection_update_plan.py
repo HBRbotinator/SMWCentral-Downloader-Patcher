@@ -59,7 +59,7 @@ class CollectionUpdateExistingTargetError(CollectionUpdatePlanError):
 
 @dataclass(frozen=True)
 class FinalizedCollectionUpdatePlan:
-    """Read-only finalized replacement plan plus non-semantic provider freshness context."""
+    """Finalized replacement plan plus provider context used before transactional Apply."""
 
     selection: CollectionUpdateSelection
     plan: CollectionChangePlan
@@ -67,6 +67,7 @@ class FinalizedCollectionUpdatePlan:
     detail_source: str
     detail_stale: bool
     merge_decision: CollectionUpdateExistingTargetMergeDecision | None = None
+    target_download_url: str = ""
 
 
 def finalize_collection_update_replacement_plan(
@@ -145,6 +146,7 @@ def finalize_collection_update_replacement_plan(
         detail_fetched_at=float(detail.fetched_at),
         detail_source=str(detail.source or "unknown"),
         detail_stale=bool(detail.stale),
+        target_download_url=str(detail.metadata.download_url or ""),
     )
 
 
@@ -256,6 +258,7 @@ def finalize_collection_update_existing_target_merge_plan(
         detail_source=str(detail.source or "unknown"),
         detail_stale=bool(detail.stale),
         merge_decision=merge_decision,
+        target_download_url=str(detail.metadata.download_url or ""),
     )
 
 

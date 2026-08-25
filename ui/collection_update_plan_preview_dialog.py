@@ -7,22 +7,26 @@ from tkinter import messagebox, ttk
 
 from collection_ingestion_plan_preview import CollectionIngestionPlanPreviewModel
 from collection_update_plan import FinalizedCollectionUpdatePlan
+from collection_update_rom_acquisition import finalized_update_has_acquired_target_rom
 
 
 class CollectionUpdatePlanPreviewDialog:
     """Show the exact replacement plan and require explicit confirmation before Apply."""
 
-    def __init__(self, parent, finalized, *, on_apply=None, on_close=None):
+    def __init__(self, parent, finalized, *, on_acquire=None, on_apply=None, on_close=None):
         if not isinstance(finalized, FinalizedCollectionUpdatePlan):
             raise TypeError("finalized must be FinalizedCollectionUpdatePlan")
         self.parent = parent
         self.finalized = finalized
         self.model = CollectionIngestionPlanPreviewModel(finalized.plan)
+        self.on_acquire = on_acquire
         self.on_apply = on_apply
         self.on_close = on_close
+        self.acquire_button = None
         self.apply_button = None
         self.close_button = None
         self._applying = False
+        self._acquiring = False
         self.win = None
         self.tree = None
         self.details = None
@@ -69,14 +73,26 @@ class CollectionUpdatePlanPreviewDialog:
             ),
             wraplength=1090,
         ).pack(anchor="w", pady=(3, 5))
+        acquired = finalized_update_has_acquired_target_rom(self.finalized)
+        acquisition_text = (
+            "A target ROM has already been downloaded, patched, hashed, and added to this "
+            "immutable plan. Apply will verify those exact bytes again before Collection identity "
+            "changes."
+            if acquired
+            else (
+                "This immutable plan does not yet contain a ROM for the selected target. You may "
+                "apply the identity replacement as-is, or acquire the target ROM first using the "
+                "configured clean base ROM and output directory."
+            )
+        )
         ttk.Label(
             root,
             text=(
                 "This immutable plan refreshes the selected target's durable KaizOFF/SMWC "
                 "metadata, migrates Collection identity, and repoints participating dependent "
-                "references. It does not download or patch the target ROM. Existing ROMs remain "
-                "attached; no ROM/save files are moved, renamed, or deleted. Retained modern ROM "
-                "rows keep explicit per-ROM SMWC submission provenance."
+                "references. " + acquisition_text + " Existing ROMs remain attached; no existing "
+                "ROM/save files are moved, renamed, or deleted. Retained modern ROM rows keep "
+                "explicit per-ROM SMWC submission provenance."
             ),
             foreground="#C47F00",
             wraplength=1090,
@@ -90,10 +106,10 @@ class CollectionUpdatePlanPreviewDialog:
         ttk.Label(
             root,
             text=(
-                "Apply changes only the reviewed Collection identity/metadata and dependent "
-                "references shown below. It still does not acquire a target ROM. If you do not "
-                "already have a ROM for the target submission, retained older ROMs remain usable "
-                "and keep their original per-ROM SMWC provenance." + merge_text
+                "Apply changes only the reviewed Collection identity/metadata, ROM asset rows, and "
+                "dependent references shown below. Apply itself never performs network or patching "
+                "work. If no target ROM is acquired, retained older ROMs remain usable and keep "
+                "their original per-ROM SMWC provenance." + merge_text
             ),
             foreground="gray",
             wraplength=1090,
@@ -150,12 +166,13 @@ class CollectionUpdatePlanPreviewDialog:
         ttk.Label(
             footer,
             text=(
-                "Nothing has been applied yet. Apply writes Collection metadata and planned "
-                "dependent references transactionally; ROM/save files are not moved, renamed, "
-                "deleted, downloaded, or patched."
+                "Nothing has been applied yet. Target-ROM acquisition may create new patched ROM "
+                "files before Apply, but it never overwrites existing files or changes Collection "
+                "metadata. Apply itself is network-free and transactional for Collection/dependent "
+                "stores."
             ),
             foreground="gray",
-            wraplength=820,
+            wraplength=760,
         ).pack(side="left", anchor="w")
         self.close_button = ttk.Button(footer, text="Close Preview", command=self.close)
         self.close_button.pack(side="right")
@@ -167,6 +184,22 @@ class CollectionUpdatePlanPreviewDialog:
         self.apply_button.pack(side="right", padx=(0, 8))
         if self.on_apply is None:
             self.apply_button.configure(state="disabled")
+
+        if self.finalized.merge_decision is None:
+            acquisition_available = bool(self.finalized.target_download_url)
+            acquire_text = (
+                "Target ROM Acquired"
+                if acquired
+                else ("Acquire Target ROM..." if acquisition_available else "Target ROM Unavailable")
+            )
+            self.acquire_button = ttk.Button(
+                footer,
+                text=acquire_text,
+                command=self._request_acquire,
+            )
+            self.acquire_button.pack(side="right", padx=(0, 8))
+            if acquired or not acquisition_available or self.on_acquire is None:
+                self.acquire_button.configure(state="disabled")
 
         self._populate()
         self._center()
@@ -190,6 +223,31 @@ class CollectionUpdatePlanPreviewDialog:
         if self.on_close:
             self.on_close()
 
+    def _request_acquire(self):
+        if self._applying or self._acquiring or self.on_acquire is None:
+            return False
+        target_id = self.finalized.selection.target_entry.smwc_submission_id
+        confirmed = messagebox.askyesno(
+            "Acquire Target ROM",
+            (
+                f"Download and patch a ROM for SMWC {target_id} before applying the reviewed "
+                "Collection replacement?\n\n"
+                "This uses your configured clean base ROM, output directory, and current ROM "
+                "filename policy. Existing files are never overwritten. The new ROM is hashed "
+                "and added to a new immutable preview, but Collection identity is still unchanged.\n\n"
+                "If you later close/cancel the replacement instead of applying it, successfully "
+                "acquired ROM files remain on disk as ordinary user files. Continue?"
+            ),
+            icon="warning",
+            parent=self.win or self.parent,
+        )
+        if not confirmed:
+            return False
+        accepted = bool(self.on_acquire())
+        if accepted:
+            self.set_acquiring(True)
+        return accepted
+
     def _request_apply(self):
         if self._applying or self.on_apply is None:
             return False
@@ -202,6 +260,13 @@ class CollectionUpdatePlanPreviewDialog:
             if self.finalized.merge_decision is not None
             else ""
         )
+        acquired = finalized_update_has_acquired_target_rom(self.finalized)
+        rom_note = (
+            "The target ROM shown in this preview has already been patched and hashed. Apply will "
+            "verify those exact bytes again but performs no network or patching work. "
+            if acquired
+            else "No target ROM will be downloaded or patched during Apply. "
+        )
         confirmed = messagebox.askyesno(
             "Apply SMWC Replacement",
             (
@@ -210,10 +275,10 @@ class CollectionUpdatePlanPreviewDialog:
                 f"The finalized plan contains {summary.identity_migrations} identity migration(s) "
                 f"and {summary.rom_provenance_updates} ROM provenance update(s)."
                 f"{merge_note}\n\n"
-                "No target ROM will be downloaded or patched. Retained ROM files stay where "
-                "they are and keep the SMWC submission provenance shown in this preview. "
-                "Collection metadata and dependent references are written transactionally.\n\n"
-                "Apply exactly this reviewed replacement plan?"
+                + rom_note
+                + "Retained ROM files stay where they are and keep the SMWC submission provenance "
+                "shown in this preview. Collection metadata and dependent references are written "
+                "transactionally.\n\nApply exactly this reviewed replacement plan?"
             ),
             icon="warning",
             parent=self.win or self.parent,
@@ -230,6 +295,18 @@ class CollectionUpdatePlanPreviewDialog:
         state = "disabled" if self._applying else "normal"
         if self.apply_button is not None:
             self.apply_button.configure(state=state)
+        if self.acquire_button is not None:
+            self.acquire_button.configure(state="disabled")
+        if self.close_button is not None:
+            self.close_button.configure(state=state)
+
+    def set_acquiring(self, acquiring=True):
+        self._acquiring = bool(acquiring)
+        state = "disabled" if self._acquiring else "normal"
+        if self.apply_button is not None:
+            self.apply_button.configure(state=state)
+        if self.acquire_button is not None:
+            self.acquire_button.configure(state=state)
         if self.close_button is not None:
             self.close_button.configure(state=state)
 
@@ -370,6 +447,73 @@ class CollectionUpdatePlanProgressDialog:
             pass
 
 
+class CollectionUpdateRomAcquisitionProgressDialog:
+    """Modal progress while a target ROM is downloaded, patched, and hashed."""
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.win = None
+
+    def show(self):
+        if self.win:
+            return self.win
+        self.win = tk.Toplevel(self.parent)
+        self.win.title("Acquiring Replacement ROM")
+        self.win.resizable(False, False)
+        self.win.transient(self.parent)
+        self.win.protocol("WM_DELETE_WINDOW", lambda: None)
+        body = ttk.Frame(self.win, padding=18)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text="Downloading, patching, and validating the selected SMWC target...",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            body,
+            text=(
+                "The replacement Collection identity is not being applied. New ROM output is "
+                "created only after patching succeeds and reviewed store preconditions are still "
+                "current; existing ROM/save files are never overwritten or renamed."
+            ),
+            wraplength=520,
+        ).pack(anchor="w", pady=(5, 10))
+        progress = ttk.Progressbar(body, mode="indeterminate", length=520)
+        progress.pack(fill="x")
+        progress.start(12)
+        try:
+            self.win.grab_set()
+        except tk.TclError:
+            pass
+        self._center()
+        return self.win
+
+    def close(self):
+        try:
+            if self.win and self.win.winfo_exists():
+                try:
+                    self.win.grab_release()
+                except tk.TclError:
+                    pass
+                self.win.destroy()
+        except tk.TclError:
+            pass
+        self.win = None
+
+    def _center(self):
+        try:
+            self.win.update_idletasks()
+            x = self.parent.winfo_rootx() + max(
+                0, (self.parent.winfo_width() - self.win.winfo_width()) // 2
+            )
+            y = self.parent.winfo_rooty() + max(
+                0, (self.parent.winfo_height() - self.win.winfo_height()) // 2
+            )
+            self.win.geometry(f"+{x}+{y}")
+        except (tk.TclError, AttributeError):
+            pass
+
+
 class CollectionUpdateApplyProgressDialog:
     """Modal local transaction/recovery progress for a finalized replacement plan."""
 
@@ -458,6 +602,7 @@ def _provider_freshness(finalized):
 
 __all__ = [
     "CollectionUpdateApplyProgressDialog",
+    "CollectionUpdateRomAcquisitionProgressDialog",
     "CollectionUpdatePlanPreviewDialog",
     "CollectionUpdatePlanProgressDialog",
 ]

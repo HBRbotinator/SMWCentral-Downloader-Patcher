@@ -41,6 +41,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
   provenance changes are visible in the immutable replacement preview before Apply.
 - Replacement Apply shares the Collection transaction recovery journal and stale-state checks used
   by ingestion; an existing journal is never assumed abandoned without explicit user confirmation.
+- Replacement previews for targets that do not already exist in Collection can now **Acquire Target ROM...** before Apply.
+- Acquisition uses the already-hydrated validated SMWCentral download URL, the configured clean base ROM, the normal output directory, and the shared optional SMWC-ID filename policy.
+- Archives are downloaded with bounded response and extracted sizes, patched ROM outputs are size-bounded in staging, and all selected outputs are hashed before the immutable replacement plan is rebuilt.
+- Multi-patch archives reuse the existing explicit patch-selection/default-ROM dialog; acquisition never guesses between multiple patch files.
+- New ROM outputs are published with exclusive-create semantics only after reviewed Collection/hints/Save Sync/Planner preconditions are rechecked, so existing files are never overwritten.
+- The acquired target ROM is recorded with SHA-256, size, `tool_patch` source provenance, and the selected target SMWC submission ID, and becomes the reviewed primary ROM.
+- Apply verifies the acquired ROM bytes again before any Collection write and remains network/patch-free. If acquisition succeeds but the user later cancels the replacement, the newly created ROM remains on disk as an ordinary user file.
+- Existing-target merge reviews do not accept a new acquisition afterward because that would introduce a new primary-ROM decision outside the completed merge review.
 
 <!-- collection-update-discovery:end -->
 

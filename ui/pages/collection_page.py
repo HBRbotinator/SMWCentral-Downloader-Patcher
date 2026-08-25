@@ -152,10 +152,14 @@ class CollectionPage:
         self.collection_update_plan_progress_dialog = None
         self.collection_update_plan_preview_dialog = None
         self.collection_update_apply_progress_dialog = None
+        self.collection_update_rom_acquisition_progress_dialog = None
         self._collection_update_plan_busy = False
         self._collection_update_apply_busy = False
+        self._collection_update_rom_acquisition_busy = False
         self._collection_update_plan_queue = queue.Queue()
         self._collection_update_plan_poll_id = None
+        self._collection_update_rom_acquisition_queue = queue.Queue()
+        self._collection_update_rom_acquisition_poll_id = None
         self._last_collection_update_plan = None
 
         # Debounce timer for scrollbar toggle
@@ -292,12 +296,21 @@ class CollectionPage:
         if self.collection_update_apply_progress_dialog is not None:
             self.collection_update_apply_progress_dialog.close()
             self.collection_update_apply_progress_dialog = None
+        if self.collection_update_rom_acquisition_progress_dialog is not None:
+            self.collection_update_rom_acquisition_progress_dialog.close()
+            self.collection_update_rom_acquisition_progress_dialog = None
         if self._collection_update_plan_poll_id is not None and self.frame:
             try:
                 self.frame.after_cancel(self._collection_update_plan_poll_id)
             except tk.TclError:
                 pass
             self._collection_update_plan_poll_id = None
+        if self._collection_update_rom_acquisition_poll_id is not None and self.frame:
+            try:
+                self.frame.after_cancel(self._collection_update_rom_acquisition_poll_id)
+            except tk.TclError:
+                pass
+            self._collection_update_rom_acquisition_poll_id = None
 
         # Force save any pending changes
         self.data_manager.force_save()
@@ -1657,6 +1670,7 @@ class CollectionPage:
             self._collection_update_discovery_busy
             or self._collection_update_plan_busy
             or self._collection_update_apply_busy
+            or self._collection_update_rom_acquisition_busy
         ):
             return
         if self._collection_ingestion_busy:
@@ -2000,6 +2014,7 @@ class CollectionPage:
         self.collection_update_plan_preview_dialog = CollectionUpdatePlanPreviewDialog(
             self.frame.winfo_toplevel(),
             finalized,
+            on_acquire=self._collection_update_acquire_target_rom_requested,
             on_apply=self._collection_update_apply_requested,
             on_close=self._collection_update_plan_preview_closed,
         )
@@ -2009,9 +2024,171 @@ class CollectionPage:
         self.collection_update_plan_preview_dialog = None
         self.collection_update_apply_progress_dialog = None
 
+    def _collection_update_acquire_target_rom_requested(self):
+        """Acquire a target ROM before Apply without mutating Collection/user metadata."""
+        if (
+            self._collection_update_plan_busy
+            or self._collection_update_apply_busy
+            or self._collection_update_rom_acquisition_busy
+        ):
+            return False
+        finalized = self._last_collection_update_plan
+        if finalized is None:
+            messagebox.showerror(
+                "Acquire Target ROM",
+                "The finalized replacement plan is no longer available.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+        if finalized.merge_decision is not None:
+            messagebox.showinfo(
+                "Acquire Target ROM",
+                "This replacement target already existed in Collection and its ROM state was "
+                "reviewed explicitly. Target-ROM acquisition is not added after that merge review.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+        if not self._collection_update_state_is_saved():
+            return False
+
+        config = ConfigManager()
+        base_rom_path = str(config.get("base_rom_path", "") or "")
+        output_dir = str(config.get("output_dir", "") or "")
+        if not base_rom_path or not os.path.isfile(base_rom_path):
+            messagebox.showerror(
+                "Acquire Target ROM",
+                "Configure a valid clean base ROM in Settings before acquiring the target ROM.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+        if not output_dir or not os.path.isdir(output_dir):
+            messagebox.showerror(
+                "Acquire Target ROM",
+                "Configure a valid ROM output directory in Settings before acquiring the target ROM.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+
+        from ui.collection_update_plan_preview_dialog import (
+            CollectionUpdateRomAcquisitionProgressDialog,
+        )
+        from ui.components.multi_patch_dialog import make_multi_patch_callback
+
+        parent = self.frame.winfo_toplevel()
+        multi_patch_callback = make_multi_patch_callback(parent)
+        self._collection_update_rom_acquisition_busy = True
+        self.collection_update_rom_acquisition_progress_dialog = (
+            CollectionUpdateRomAcquisitionProgressDialog(parent)
+        )
+        self.collection_update_rom_acquisition_progress_dialog.show()
+        self._log(
+            "⬇️ Acquiring and validating the explicitly selected SMWC replacement ROM",
+            "Information",
+        )
+
+        def worker():
+            try:
+                from collection_update_rom_acquisition import (
+                    acquire_collection_update_target_rom,
+                )
+
+                result = acquire_collection_update_target_rom(
+                    str(self.data_manager.json_path),
+                    finalized,
+                    base_rom_path=base_rom_path,
+                    output_dir=output_dir,
+                    include_smwc_id_in_filename=bool(
+                        config.get("include_smwc_id_in_filename", False)
+                    ),
+                    multi_patch_callback=multi_patch_callback,
+                )
+                self._collection_update_rom_acquisition_queue.put(("ready", result))
+            except Exception as error:
+                self._collection_update_rom_acquisition_queue.put(("error", error))
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="collection-update-rom-acquisition",
+        ).start()
+        self._poll_collection_update_rom_acquisition()
+        return True
+
+    def _poll_collection_update_rom_acquisition(self):
+        try:
+            status, payload = self._collection_update_rom_acquisition_queue.get_nowait()
+        except queue.Empty:
+            self._collection_update_rom_acquisition_poll_id = self.frame.after(
+                100,
+                self._poll_collection_update_rom_acquisition,
+            )
+            return
+
+        self._collection_update_rom_acquisition_poll_id = None
+        self._collection_update_rom_acquisition_busy = False
+        if self.collection_update_rom_acquisition_progress_dialog is not None:
+            self.collection_update_rom_acquisition_progress_dialog.close()
+            self.collection_update_rom_acquisition_progress_dialog = None
+
+        if status != "ready":
+            from collection_update_rom_acquisition import (
+                CollectionUpdateRomAcquisitionStaleStateError,
+            )
+
+            if isinstance(payload, CollectionUpdateRomAcquisitionStaleStateError):
+                self._log(f"⚠️ Target-ROM acquisition became stale: {payload}", "Warning")
+                self._close_collection_update_plan_preview()
+                self._clear_collection_update_state()
+                messagebox.showerror(
+                    "Target ROM Acquisition Changed",
+                    f"{payload}\n\nNo Collection replacement was applied. Restart update discovery.",
+                    parent=self.frame.winfo_toplevel(),
+                )
+                return
+            if (
+                self.collection_update_plan_preview_dialog is not None
+                and self.collection_update_plan_preview_dialog.is_open
+            ):
+                self.collection_update_plan_preview_dialog.set_acquiring(False)
+            self._log(f"❌ Target-ROM acquisition failed: {payload}", "Error")
+            messagebox.showerror(
+                "Target ROM Acquisition Failed",
+                (
+                    f"Could not acquire the selected target ROM:\n\n{payload}\n\n"
+                    "Collection identity was not changed. Existing ROM/save files were not "
+                    "overwritten or renamed."
+                ),
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+
+        result = payload
+        self._last_collection_update_plan = result.finalized
+        self._log(
+            f"✅ Target ROM acquired and added to immutable preview: {result.primary_path}",
+            "Information",
+        )
+        self._close_collection_update_plan_preview()
+        self._show_collection_update_plan_preview(result.finalized)
+        messagebox.showinfo(
+            "Target ROM Acquired",
+            (
+                f"Created {len(result.created_paths)} patched target ROM file(s). The selected "
+                "primary ROM is:\n\n"
+                f"{result.primary_path}\n\n"
+                "The Collection replacement is still not applied. Review the updated immutable "
+                "plan before choosing Apply Replacement."
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+
     def _collection_update_apply_requested(self):
         """Cross the explicit confirmation boundary for the finalized replacement plan."""
-        if self._collection_update_plan_busy or self._collection_update_apply_busy:
+        if (
+            self._collection_update_plan_busy
+            or self._collection_update_apply_busy
+            or self._collection_update_rom_acquisition_busy
+        ):
             return False
         if self._last_collection_update_plan is None:
             messagebox.showerror(
@@ -2116,9 +2293,20 @@ class CollectionPage:
                 f"⚠️ SMWC replacement committed but journal cleanup failed: {cleanup_error}",
                 "Warning",
             )
+        from collection_update_rom_acquisition import finalized_update_has_acquired_target_rom
+
+        acquired_target_rom = bool(
+            finalized is not None and finalized_update_has_acquired_target_rom(finalized)
+        )
         self._log(
             f"✅ SMWC replacement applied transactionally: {source_id} -> {target_id}",
             "Information",
+        )
+        rom_status_note = (
+            "The target ROM was acquired and validated before Apply; Apply itself performed "
+            "no network or patching work. "
+            if acquired_target_rom
+            else "No target ROM was acquired for this replacement. "
         )
         messagebox.showinfo(
             "SMWC Replacement Applied",
@@ -2129,7 +2317,8 @@ class CollectionPage:
                 f"Files written transactionally: {len(result.written_files)}\n"
                 f"Identity migrations: {result.identity_migration_count}\n"
                 f"Dependent reference stores participating: {result.reference_participant_count}\n\n"
-                "No ROM/save files were moved, renamed, deleted, downloaded, or patched. "
+                + rom_status_note
+                + "No existing ROM/save files were moved, renamed, deleted, or overwritten. "
                 "Retained ROM rows keep the per-ROM SMWC provenance shown in the preview."
                 f"{cleanup_note}"
             ),

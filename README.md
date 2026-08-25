@@ -102,8 +102,13 @@ The current build contract publishes a native tarball rather than an AppImage. E
    - A different SMWC ID is never automatically treated as a newer version; you must recognize and confirm the relationship yourself
    - After you explicitly confirm a relationship, only that target's rich KaizOFF detail is hydrated and an immutable replacement plan is shown
    - The replacement plan preview now requires an explicit **Apply Replacement...** confirmation before the reviewed numeric identity migration is written transactionally
-   - Apply does not rerun discovery or provider hydration, and it does not download/patch a target ROM; retained ROMs stay in place with the per-ROM SMWC provenance shown in the preview
+   - If the selected target does not already exist in Collection, **Acquire Target ROM...** can download and patch it before Apply using your configured clean base ROM/output directory and the same optional SMWC-ID filename policy as normal downloads
+   - Acquisition bounds both the downloaded archive and its extracted contents, stages and size-checks patched ROMs first, never overwrites an existing ROM filename, hashes the resulting ROM, and rebuilds the immutable preview with that target ROM as the reviewed primary
+   - Multi-patch target archives reuse the normal explicit patch-selection dialog; the app never guesses which of several patches should become the replacement ROM
+   - Apply does not rerun discovery, provider hydration, downloading, or patching. When a target ROM was acquired, Apply verifies its exact size/SHA-256 again before writing Collection state
+   - If you acquire a target ROM and then close/cancel the replacement instead of applying it, the new ROM stays on disk; Collection identity remains unchanged
    - If the target already exists in Collection, the app opens an explicit read-only merge review instead of choosing between independent user-owned state
+   - Post-review target-ROM acquisition is intentionally unavailable for an existing-target merge, because adding a new ROM afterward would create a new primary-ROM choice outside the completed merge review
    - Conflicting notes, rating, time/completion-date/first-clear values and different primary ROMs require explicit source/target choices; safely combinable ROM/history state is retained together
    - Unsupported conflicting state fails closed; after a valid merge review, the app hydrates only the selected target and shows an immutable read-only merge plan containing the exact reviewed choices
    - The reviewed merge plan uses the same explicit transactional Apply boundary; no ROM/save files are downloaded, patched, moved, renamed, or deleted

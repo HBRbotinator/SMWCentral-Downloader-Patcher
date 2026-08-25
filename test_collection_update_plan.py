@@ -347,6 +347,7 @@ class CollectionUpdatePlanTests(unittest.TestCase):
         self.assertEqual(int(SOURCE_ID), provenance.smwc_submission_id)
         self.assertEqual("network", finalized.detail_source)
         self.assertFalse(finalized.detail_stale)
+        self.assertEqual(f"https://dl.smwcentral.net/{TARGET_ID}/hack.zip", finalized.target_download_url)
 
     def test_finalized_plan_is_compatible_with_transactional_apply_without_losing_user_state(self):
         finalized = finalize_collection_update_replacement_plan(

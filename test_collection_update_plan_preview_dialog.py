@@ -20,12 +20,15 @@ class CollectionUpdatePlanPreviewDialogContractTests(unittest.TestCase):
         self.assertIn("does not claim that the target submission is newer", self.source)
         self.assertIn("your explicit confirmation", self.source)
 
-    def test_apply_confirmation_explicitly_says_no_target_rom_is_acquired(self):
+    def test_target_rom_acquisition_is_explicit_and_apply_remains_network_free(self):
+        self.assertIn("Acquire Target ROM...", self.source)
+        self.assertIn("If you later close/cancel", self.source)
+        self.assertIn("Existing files are never overwritten", self.source)
         self.assertIn("Apply Replacement...", self.source)
         self.assertIn("Apply SMWC Replacement", self.source)
-        self.assertIn("No target ROM will be downloaded or patched", self.source)
-        self.assertIn("keep the SMWC submission provenance shown", self.source)
-        self.assertIn("ROM/save files are not moved, renamed", self.source)
+        self.assertIn("No target ROM will be downloaded or patched during Apply", self.source)
+        self.assertIn("performs no network or patching work", self.source)
+        self.assertIn("keep the SMWC submission provenance", self.source)
 
     def test_preview_only_delegates_apply_and_contains_no_transaction_engine(self):
         self.assertIn("on_apply", self.source)
@@ -34,7 +37,6 @@ class CollectionUpdatePlanPreviewDialogContractTests(unittest.TestCase):
             "apply_collection_change_plan",
             "apply_finalized_collection_update",
             "recover_interrupted_collection_apply",
-            "download_url",
             "patch_rom",
             "os.replace(",
             "shutil.move(",
