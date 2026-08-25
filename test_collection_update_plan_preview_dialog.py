@@ -25,9 +25,10 @@ class CollectionUpdatePlanPreviewDialogContractTests(unittest.TestCase):
         self.assertIn("Existing ROMs remain ", self.source)
         self.assertIn("attached; no ROM/save files", self.source)
         self.assertIn("no ROM/save files are moved, renamed, or deleted", self.source)
+        self.assertIn("explicit per-ROM SMWC submission provenance", self.source)
 
-    def test_commit_016_dialog_has_no_apply_boundary(self):
-        self.assertIn("Commit 016 remains preview-only", self.source)
+    def test_commit_017_dialog_has_no_apply_boundary(self):
+        self.assertIn("Commit 017 remains preview-only", self.source)
         self.assertNotIn("Apply Import", self.source)
         self.assertNotIn("Apply Replacement", self.source)
         forbidden = (

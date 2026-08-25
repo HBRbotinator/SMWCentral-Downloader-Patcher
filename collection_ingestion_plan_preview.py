@@ -17,6 +17,7 @@ class CollectionPlanPreviewSummary:
     updates: int
     identity_migrations: int
     rom_assets: int
+    rom_provenance_updates: int
     primary_rom_selections: int
     imported_playthroughs: int
     user_state_changes: int
@@ -54,6 +55,7 @@ class CollectionIngestionPlanPreviewModel:
             updates=len(self.plan.updates),
             identity_migrations=len(self.plan.identity_migrations),
             rom_assets=sum(len(item.assets) for item in self.plan.rom_updates),
+            rom_provenance_updates=len(self.plan.rom_submission_provenance_updates),
             primary_rom_selections=len(self.plan.primary_rom_selections),
             imported_playthroughs=sum(
                 len(item.playthroughs) for item in self.plan.user_history_updates
@@ -209,6 +211,18 @@ class CollectionIngestionPlanPreviewModel:
                         details="No new primary path was selected.",
                     )
                 )
+
+        for item in self.plan.rom_submission_provenance_updates:
+            rows.append(
+                CollectionPlanPreviewRow(
+                    category="ROM",
+                    target=self._target_label(item.target_key),
+                    change="Preserve SMWC submission provenance",
+                    details=(
+                        f"{item.path} · SMWC {item.smwc_submission_id} · {item.reason}"
+                    ),
+                )
+            )
 
         for item in self.plan.user_history_updates:
             first_clear = "None / unknown"

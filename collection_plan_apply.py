@@ -21,6 +21,7 @@ from collection_change_plan import (
     RecordIntentKind,
     ReferenceMigrationOperation,
     RomAssetsOperation,
+    RomSubmissionProvenanceOperation,
     StorePrecondition,
     UserHistoryOperation,
 )
@@ -400,6 +401,9 @@ def _apply_plan_to_collection(
     for operation in plan.rom_updates:
         record = _require_record(staged, operation.target_key)
         _apply_rom_assets(record, operation)
+    for operation in plan.rom_submission_provenance_updates:
+        record = _require_record(staged, operation.target_key)
+        _apply_rom_submission_provenance(record, operation)
     for operation in plan.user_history_updates:
         record = _require_record(staged, operation.target_key)
         _apply_user_history(record, operation)
@@ -659,6 +663,47 @@ def _apply_rom_assets(record: dict[str, Any], operation: RomAssetsOperation) -> 
         result.append(row)
     record["files"] = result
     record["file_path"] = primary
+
+
+def _apply_rom_submission_provenance(
+    record: dict[str, Any],
+    operation: RomSubmissionProvenanceOperation,
+) -> None:
+    rows = record.get("files")
+    if not isinstance(rows, list):
+        raise CollectionPlanApplyError(
+            "Reviewed ROM provenance requires Collection files[] state."
+        )
+    found = False
+    result = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            result.append(copy.deepcopy(raw))
+            continue
+        row = copy.deepcopy(raw)
+        if row.get("path") == operation.path:
+            found = True
+            existing = row.get("smwc_submission_id")
+            if existing in (None, ""):
+                row["smwc_submission_id"] = operation.smwc_submission_id
+            elif (
+                not isinstance(existing, int)
+                or isinstance(existing, bool)
+                or existing <= 0
+            ):
+                raise CollectionPlanApplyError(
+                    "Existing ROM submission provenance is invalid."
+                )
+            elif existing != operation.smwc_submission_id:
+                raise CollectionPlanApplyError(
+                    "Existing ROM submission provenance conflicts with the reviewed plan."
+                )
+        result.append(row)
+    if not found:
+        raise CollectionPlanApplyError(
+            "Reviewed ROM provenance path is no longer present after Collection merge."
+        )
+    record["files"] = result
 
 
 def _apply_primary_rom_selection(record: dict[str, Any], primary_path: str) -> None:

@@ -16,6 +16,7 @@ from collection_change_plan import (
     ReferenceMigrationOperation,
     RememberedAssociationOperation,
     RomAssetsOperation,
+    RomSubmissionProvenanceOperation,
     StorePrecondition,
     UserHistoryOperation,
     UserStateOperation,
@@ -94,6 +95,14 @@ def _plan():
                 primary_path="C:/ROMs/Super Dram World 3.sfc",
             ),
         ),
+        rom_submission_provenance_updates=(
+            RomSubmissionProvenanceOperation(
+                target_key=TARGET_ID,
+                path="C:/ROMs/Super Dram World 3.sfc",
+                smwc_submission_id=41022,
+                reason="preserve reviewed numeric submission provenance",
+            ),
+        ),
         user_history_updates=(
             UserHistoryOperation(
                 target_key=TARGET_ID,
@@ -148,6 +157,7 @@ class CollectionIngestionPlanPreviewModelTest(unittest.TestCase):
         self.assertEqual(1, summary.updates)
         self.assertEqual(1, summary.identity_migrations)
         self.assertEqual(1, summary.rom_assets)
+        self.assertEqual(1, summary.rom_provenance_updates)
         self.assertEqual(1, summary.imported_playthroughs)
         self.assertEqual(1, summary.user_state_changes)
         self.assertEqual(1, summary.ignored_roms)
@@ -172,6 +182,8 @@ class CollectionIngestionPlanPreviewModelTest(unittest.TestCase):
         self.assertIn("SA-1: no", joined)
         self.assertIn("Local Hack", joined)
         self.assertIn("C:/ROMs/Super Dram World 3.sfc", joined)
+        self.assertIn("Preserve SMWC submission provenance", joined)
+        self.assertIn("SMWC 41022", joined)
         self.assertIn("usr_1111111111111111 → 41022", joined)
         self.assertIn("planner_state, save_sync_config", joined)
         self.assertIn("Selected first clear: giganticbucket:gb:1", joined)

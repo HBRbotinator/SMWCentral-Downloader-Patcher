@@ -71,7 +71,8 @@ class CollectionUpdatePlanPreviewDialog:
                 "This immutable plan refreshes the selected target's durable KaizOFF/SMWC "
                 "metadata, migrates Collection identity, and repoints participating dependent "
                 "references. It does not download or patch the target ROM. Existing ROMs remain "
-                "attached; no ROM/save files are moved, renamed, or deleted."
+                "attached; no ROM/save files are moved, renamed, or deleted. Retained modern ROM "
+                "rows keep explicit per-ROM SMWC submission provenance."
             ),
             foreground="#C47F00",
             wraplength=1090,
@@ -85,7 +86,7 @@ class CollectionUpdatePlanPreviewDialog:
         ttk.Label(
             root,
             text=(
-                "Commit 016 remains preview-only. This replacement plan cannot be applied from "
+                "Commit 017 remains preview-only. This replacement plan cannot be applied from "
                 "this dialog yet." + merge_text
             ),
             foreground="gray",
@@ -181,6 +182,7 @@ class CollectionUpdatePlanPreviewDialog:
                 f"{summary.creates} create(s) · {summary.updates} update(s) · "
                 f"{summary.identity_migrations} identity migration(s) · "
                 f"{summary.rom_assets} ROM asset operation(s) · "
+                f"{summary.rom_provenance_updates} ROM provenance update(s) · "
                 f"{summary.primary_rom_selections} primary-ROM selection(s) · "
                 f"dependent stores: {stores}"
             )

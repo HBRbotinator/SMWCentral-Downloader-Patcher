@@ -14,6 +14,7 @@ from collection_change_plan import (
     CollectionChangePlan,
     FirstClearSelectionOperation,
     PrimaryRomSelectionOperation,
+    RomSubmissionProvenanceOperation,
     StorePrecondition,
     UserStateOperation,
     finalize_collection_change_plan,
@@ -125,6 +126,12 @@ def finalize_collection_update_replacement_plan(
         existing_collection_keys=tuple(str(key) for key in manager.data),
         preconditions=expected_preconditions,
     )
+    plan = _overlay_replacement_rom_submission_provenance(
+        plan,
+        source_key=source_key,
+        target_key=target_key,
+        source_record=source_record,
+    )
     _preflight_reference_participants(plan, participant_tuple)
     _require_preconditions_unchanged(
         expected_preconditions,
@@ -227,6 +234,13 @@ def finalize_collection_update_existing_target_merge_plan(
         merge_decision,
         source_record,
         target_record,
+    )
+    plan = _overlay_replacement_rom_submission_provenance(
+        plan,
+        source_key=source_key,
+        target_key=target_key,
+        source_record=source_record,
+        target_record=target_record,
     )
     _preflight_reference_participants(plan, participant_tuple)
     _require_preconditions_unchanged(
@@ -381,6 +395,114 @@ def _require_legacy_paths_representable(source: Mapping[str, Any], target: Mappi
             "The reviewed merge still contains legacy ROM paths that the current files[] merge "
             "cannot preserve safely: " + ", ".join(missing) + "."
         )
+
+
+def _overlay_replacement_rom_submission_provenance(
+    plan: CollectionChangePlan,
+    *,
+    source_key: str,
+    target_key: str,
+    source_record: Mapping[str, Any],
+    target_record: Mapping[str, Any] | None = None,
+) -> CollectionChangePlan:
+    """Make retained modern ROM provenance explicit before a numeric identity migration."""
+
+    source_rows = _rom_provenance_by_path(source_record, "source")
+    target_rows = (
+        _rom_provenance_by_path(target_record, "target")
+        if target_record is not None
+        else {}
+    )
+    operations = list(plan.rom_submission_provenance_updates)
+    for path in sorted(set(source_rows) | set(target_rows)):
+        source_provenance = source_rows.get(path)
+        target_provenance = target_rows.get(path)
+        if (
+            source_provenance is not None
+            and target_provenance is not None
+            and source_provenance != target_provenance
+        ):
+            raise CollectionUpdatePlanError(
+                "The same retained ROM path has conflicting explicit SMWC submission "
+                f"provenance across the replacement records: {path!r}."
+            )
+
+        if target_provenance is not None:
+            continue
+        if source_provenance is not None:
+            if path in target_rows:
+                operations.append(
+                    RomSubmissionProvenanceOperation(
+                        target_key=target_key,
+                        path=path,
+                        smwc_submission_id=source_provenance,
+                        reason=(
+                            "Preserve explicit source-ROM submission provenance while merging "
+                            "the reviewed numeric replacement."
+                        ),
+                    )
+                )
+            continue
+
+        if path in target_rows:
+            provenance_id = int(target_key)
+            reason = (
+                "The retained ROM belonged to the existing target Collection record before "
+                "the reviewed replacement merge."
+            )
+        else:
+            provenance_id = int(source_key)
+            reason = (
+                "The retained ROM belonged to the source Collection record before its "
+                "reviewed numeric replacement."
+            )
+        operations.append(
+            RomSubmissionProvenanceOperation(
+                target_key=target_key,
+                path=path,
+                smwc_submission_id=provenance_id,
+                reason=reason,
+            )
+        )
+
+    return replace(
+        plan,
+        rom_submission_provenance_updates=tuple(operations),
+    )
+
+
+def _rom_provenance_by_path(
+    record: Mapping[str, Any] | None,
+    label: str,
+) -> dict[str, int | None]:
+    if record is None:
+        return {}
+    rows = record.get("files")
+    if not isinstance(rows, list):
+        return {}
+    result: dict[str, int | None] = {}
+    for raw in rows:
+        if not isinstance(raw, Mapping):
+            continue
+        path = raw.get("path")
+        if not isinstance(path, str) or not path:
+            continue
+        value = raw.get("smwc_submission_id")
+        if value in (None, ""):
+            provenance = None
+        elif isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            provenance = value
+        else:
+            raise CollectionUpdatePlanError(
+                f"The {label} ROM {path!r} has invalid SMWC submission provenance."
+            )
+        if path in result and result[path] != provenance:
+            raise CollectionUpdatePlanError(
+                f"The {label} Collection record repeats ROM path {path!r} with conflicting "
+                "SMWC submission provenance."
+            )
+        result[path] = provenance
+    return result
 
 
 def _overlay_existing_target_merge_choices(

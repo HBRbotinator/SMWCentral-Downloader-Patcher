@@ -240,6 +240,29 @@ class FirstClearSelectionOperation:
 
 
 @dataclass(frozen=True)
+class RomSubmissionProvenanceOperation:
+    """Attach known SMWC submission provenance to one already-retained ROM path."""
+
+    target_key: str
+    path: str
+    smwc_submission_id: int
+    reason: str
+
+    def __post_init__(self) -> None:
+        validate_collection_key(self.target_key)
+        if not isinstance(self.path, str) or not self.path:
+            raise PlanFinalizationError("ROM provenance requires a retained path.")
+        if (
+            not isinstance(self.smwc_submission_id, int)
+            or isinstance(self.smwc_submission_id, bool)
+            or self.smwc_submission_id <= 0
+        ):
+            raise PlanFinalizationError("ROM provenance requires a positive SMWC submission ID.")
+        if not isinstance(self.reason, str) or not self.reason.strip():
+            raise PlanFinalizationError("ROM provenance requires review provenance.")
+
+
+@dataclass(frozen=True)
 class PrimaryRomSelectionOperation:
     """Select one already-retained ROM path as primary after reconciliation/merge."""
 
@@ -348,6 +371,7 @@ class CollectionChangePlan:
     ignored_candidate_ids: tuple[str, ...]
     primary_rom_selections: tuple[PrimaryRomSelectionOperation, ...] = ()
     first_clear_selections: tuple[FirstClearSelectionOperation, ...] = ()
+    rom_submission_provenance_updates: tuple[RomSubmissionProvenanceOperation, ...] = ()
 
     @property
     def creates(self) -> tuple[RecordIntent, ...]:
@@ -961,6 +985,7 @@ __all__ = [
     "ReferenceMigrationOperation",
     "RememberedAssociationOperation",
     "RomAssetsOperation",
+    "RomSubmissionProvenanceOperation",
     "StorePrecondition",
     "UserHistoryOperation",
     "UserStateOperation",

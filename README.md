@@ -104,6 +104,8 @@ The current build contract publishes a native tarball rather than an AppImage. E
    - Conflicting notes, rating, time/completion-date/first-clear values and different primary ROMs require explicit source/target choices; safely combinable ROM/history state is retained together
    - Unsupported conflicting state fails closed; after a valid merge review, the app hydrates only the selected target and shows an immutable read-only merge plan containing the exact reviewed choices
    - The merge plan still does not apply the identity migration or download/patch/move/delete ROM or save files
+   - Retained modern ROM rows preserve explicit SMWC submission provenance in the plan, so an old/source ROM does not silently become attributed to the newly selected numeric submission after a future migration
+   - Existing explicit per-ROM provenance is preserved; contradictory provenance for the same retained path fails closed instead of being guessed
 
 ![Collection Page](images/application-5.0-collection.png)
 

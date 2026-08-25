@@ -29,6 +29,12 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
   after the structural identity merge, so preview and a later Apply cannot disagree.
 - Commit 016 remains non-applying: it does not download/patch a target ROM, migrate identity,
   or write Collection/dependent stores.
+- Replacement plans now preserve per-ROM SMWC submission provenance explicitly for retained
+  modern `files[]` rows before a numeric identity migration. Source-only ROMs with no prior
+  provenance are associated with the old/source SMWC ID; existing-target ROMs are associated
+  with the target ID, while already explicit provenance is never silently relabeled.
+- Conflicting explicit provenance for the same retained ROM path fails closed, and the exact
+  provenance changes are visible in the immutable replacement preview before any future Apply.
 
 <!-- collection-update-discovery:end -->
 

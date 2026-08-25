@@ -235,6 +235,17 @@ class CollectionUpdatePlanTests(unittest.TestCase):
         )
         self.assertEqual(1, len(finalized.plan.catalogue_updates))
         self.assertEqual((), finalized.plan.rom_updates)
+        provenance = {
+            item.path: item.smwc_submission_id
+            for item in finalized.plan.rom_submission_provenance_updates
+        }
+        self.assertEqual(
+            {
+                "C:/ROMs/Super Dram World 3.sfc": int(SOURCE_ID),
+                "C:/ROMs/Super Dram World 3 Updated.sfc": int(TARGET_ID),
+            },
+            provenance,
+        )
 
     def test_reviewed_existing_target_plan_applies_exact_review_choices_and_unions_safe_state(self):
         review, decision = self._existing_target_fixture()
@@ -266,6 +277,9 @@ class CollectionUpdatePlanTests(unittest.TestCase):
         )
         self.assertEqual("C:/ROMs/Super Dram World 3.sfc", record["file_path"])
         self.assertEqual(2, len(record["files"]))
+        provenance = {row["path"]: row.get("smwc_submission_id") for row in record["files"]}
+        self.assertEqual(int(SOURCE_ID), provenance["C:/ROMs/Super Dram World 3.sfc"])
+        self.assertEqual(int(TARGET_ID), provenance["C:/ROMs/Super Dram World 3 Updated.sfc"])
         self.assertEqual(2, len(record["playthroughs"]))
         self.assertIn(int(SOURCE_ID), record["prior_smwc_submission_ids"])
 
@@ -327,6 +341,10 @@ class CollectionUpdatePlanTests(unittest.TestCase):
         self.assertEqual(1, len(finalized.plan.catalogue_updates))
         self.assertEqual("Super Dram World 3 Updated", finalized.plan.catalogue_updates[0].metadata.title)
         self.assertEqual((), finalized.plan.rom_updates)
+        self.assertEqual(1, len(finalized.plan.rom_submission_provenance_updates))
+        provenance = finalized.plan.rom_submission_provenance_updates[0]
+        self.assertEqual("C:/ROMs/Super Dram World 3.sfc", provenance.path)
+        self.assertEqual(int(SOURCE_ID), provenance.smwc_submission_id)
         self.assertEqual("network", finalized.detail_source)
         self.assertFalse(finalized.detail_stale)
 
@@ -353,6 +371,7 @@ class CollectionUpdatePlanTests(unittest.TestCase):
         self.assertEqual("keep me", record["notes"])
         self.assertEqual(5, record["personal_rating"])
         self.assertEqual("C:/ROMs/Super Dram World 3.sfc", record["file_path"])
+        self.assertEqual(int(SOURCE_ID), record["files"][0]["smwc_submission_id"])
         self.assertEqual([39000, int(SOURCE_ID)], record["prior_smwc_submission_ids"])
         self.assertEqual(SOURCE_ID, record["identity_migration_history"][-1]["source_key"])
         self.assertEqual(TARGET_ID, record["identity_migration_history"][-1]["target_key"])
@@ -391,6 +410,67 @@ class CollectionUpdatePlanTests(unittest.TestCase):
         with self.assertRaisesRegex(CollectionUpdateExistingTargetError, "explicit review"):
             finalize_collection_update_replacement_plan(
                 _selection(target_already_in_collection=True),
+                self.fixture.manager,
+                self.fixture.hints,
+                _Provider(_detail()),
+                participants=(),
+            )
+
+    def test_existing_explicit_rom_provenance_is_preserved_without_relabeling(self):
+        self.fixture.manager.data[SOURCE_ID]["files"][0]["smwc_submission_id"] = 39000
+
+        finalized = finalize_collection_update_replacement_plan(
+            _selection(),
+            self.fixture.manager,
+            self.fixture.hints,
+            _Provider(_detail()),
+            participants=(),
+        )
+
+        self.assertEqual((), finalized.plan.rom_submission_provenance_updates)
+        apply_collection_change_plan(
+            finalized.plan,
+            self.fixture.manager,
+            self.fixture.hints,
+            reference_participants=(),
+        )
+        self.assertEqual(39000, self.fixture.manager.data[TARGET_ID]["files"][0]["smwc_submission_id"])
+
+    def test_existing_target_same_path_with_conflicting_explicit_provenance_fails_closed(self):
+        source = dict(self.fixture.manager.data[SOURCE_ID])
+        source["files"] = [dict(source["files"][0], smwc_submission_id=int(SOURCE_ID))]
+        target = {
+            "title": "Existing Target",
+            "completed": False,
+            "notes": "",
+            "file_path": "C:/ROMs/Super Dram World 3.sfc",
+            "files": [
+                {
+                    "path": "C:/ROMs/Super Dram World 3.sfc",
+                    "name": "Super Dram World 3.sfc",
+                    "sha256": "a" * 64,
+                    "size_bytes": 100,
+                    "primary": True,
+                    "smwc_submission_id": int(TARGET_ID),
+                }
+            ],
+        }
+        self.fixture.close()
+        self.fixture = _Fixture({SOURCE_ID: source, TARGET_ID: target})
+        self.addCleanup(self.fixture.close)
+        review = build_collection_update_existing_target_merge_review(
+            _selection(target_already_in_collection=True),
+            self.fixture.manager,
+        )
+        decision = finalize_collection_update_existing_target_merge_decision(
+            review,
+            field_origins={},
+        )
+
+        with self.assertRaisesRegex(CollectionUpdatePlanError, "conflicting explicit SMWC"):
+            finalize_collection_update_existing_target_merge_plan(
+                review,
+                decision,
                 self.fixture.manager,
                 self.fixture.hints,
                 _Provider(_detail()),
