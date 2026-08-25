@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 
@@ -27,7 +28,7 @@ def build_tool_patch_rom_asset(
     ):
         raise RomAssetMetadataError("Patched ROM requires a positive SMWC submission ID.")
 
-    normalized_path = os.path.abspath(os.path.expanduser(path))
+    normalized_path = str(Path(path).expanduser().resolve())
     before = _stable_stat(normalized_path)
     digest = hashlib.sha256()
     try:

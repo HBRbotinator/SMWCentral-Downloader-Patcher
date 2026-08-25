@@ -34,6 +34,27 @@ class RomAssetMetadataTest(unittest.TestCase):
             self.assertEqual(41022, row["smwc_submission_id"])
             self.assertEqual(["tool_patch"], row["ingestion_sources"])
 
+    def test_build_tool_patch_asset_resolves_filesystem_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real_dir = root / "real"
+            alias_dir = root / "alias"
+            real_dir.mkdir()
+            path = real_dir / "Example.sfc"
+            path.write_bytes(b"patched-rom-bytes")
+            try:
+                alias_dir.symlink_to(real_dir, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("Filesystem symlinks are unavailable on this runner.")
+
+            row = build_tool_patch_rom_asset(
+                str(alias_dir / "Example.sfc"),
+                smwc_submission_id=41022,
+                primary=True,
+            )
+
+            self.assertEqual(str(path.resolve()), row["path"])
+
     def test_merge_preserves_existing_rows_and_promotes_new_primary(self):
         existing = [
             {
