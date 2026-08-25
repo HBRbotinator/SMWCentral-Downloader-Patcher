@@ -15,6 +15,7 @@
   },
   "auto_check_updates": true,
   "show_planner": true,
+  "include_smwc_id_in_filename": false,
   "emulator_path": "",
   "emulator_args": "",
   "emulator_args_enabled": false

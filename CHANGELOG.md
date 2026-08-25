@@ -44,6 +44,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 <!-- collection-update-discovery:end -->
 
+### Optional SMWC-ID ROM filenames
+
+- Added a **Settings → ROM File Naming** option to include the known SMWC submission ID in newly patched ROM filenames.
+- The option defaults OFF and uses the portable form `Hack [SMWC-ID-43123].sfc` when enabled.
+- Existing ROMs and save files are never renamed or moved when the setting changes.
+- Normal single-patch and multi-patch download paths share one filename policy so future replacement-ROM acquisition can use the same rule.
+- The application warns that emulator save associations commonly depend on ROM basename, which is why the setting is opt-in.
+
 <!-- collection-wheel:start -->
 ### Collection Wheel
 

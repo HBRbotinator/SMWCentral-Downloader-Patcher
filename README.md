@@ -66,6 +66,8 @@ The current build contract publishes a native tarball rather than an AppImage. E
    - **Tip**: Click the column header to select ALL hacks at once
    - **Already downloaded hacks** are shown in italic with muted colors to help you identify what you already own
 6. **Start downloading**: Click "Download & Patch" to begin downloading and patching your selected hacks
+   - Optional: Settings → ROM File Naming can add portable `[SMWC-ID-<id>]` evidence to **new** patched ROM filenames. This is OFF by default.
+   - Enabling it does not rename existing ROMs or saves; many emulators associate saves by ROM basename, so existing save-name behavior is intentionally left untouched.
 7. **Multi-BPS dialog**: If a hack contains multiple patch files (e.g. different versions), a dialog will appear letting you choose which files to download and which is the default
 8. **Wait for completion**: The app will automatically download each hack and apply it to your base ROM
 9. **Play**: Your patched ROMs will be saved to your chosen folder, ready to play in any emulator

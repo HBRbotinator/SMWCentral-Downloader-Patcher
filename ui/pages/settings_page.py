@@ -291,6 +291,37 @@ class SettingsPage:
         ).pack(anchor="w", padx=(22, 0), pady=(4, 0))
         self._load_planner_visibility_setting()
 
+        # ROM filename metadata is optional portable evidence for newly generated
+        # patched ROMs. It never renames existing ROM/save files.
+        rom_naming_frame = ttk.LabelFrame(
+            content, text="ROM File Naming", padding=(15, 10, 15, 15)
+        )
+        rom_naming_frame.pack(fill="x", pady=(0, 20))
+
+        self.include_smwc_id_in_filename_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            rom_naming_frame,
+            text="Include SMWC ID in new patched ROM filenames",
+            variable=self.include_smwc_id_in_filename_var,
+            style="Custom.TCheckbutton",
+            command=self._save_rom_filename_setting,
+        ).pack(anchor="w")
+        ttk.Label(
+            rom_naming_frame,
+            text=(
+                "Default: off. When enabled, newly patched files use names like "
+                "Hack [SMWC-ID-43123].sfc. "
+                "Existing ROMs and save files are never renamed. "
+                "Because many emulators match saves by ROM basename, changing "
+                "this setting only affects future patched output."
+            ),
+            style="Custom.TLabel",
+            foreground="gray",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w", padx=(22, 0), pady=(4, 0))
+        self._load_rom_filename_setting()
+
         # Second row: Emulator and Difficulty Migration side by side
         second_row_frame = ttk.Frame(content)
         second_row_frame.pack(fill="x", pady=(5, 20))
@@ -717,6 +748,25 @@ class SettingsPage:
             self.setup_section.config.set("show_planner", visible)
         except Exception as error:
             print(f"Error saving Planner visibility setting: {error}")
+
+    def _load_rom_filename_setting(self):
+        """Load optional SMWC-ID suffix policy for newly patched ROMs."""
+        try:
+            enabled = self.setup_section.config.get("include_smwc_id_in_filename", False)
+            self.include_smwc_id_in_filename_var.set(bool(enabled))
+        except Exception as error:
+            print(f"Error loading ROM filename setting: {error}")
+            self.include_smwc_id_in_filename_var.set(False)
+
+    def _save_rom_filename_setting(self):
+        """Persist future-output filename policy without touching existing files."""
+        try:
+            self.setup_section.config.set(
+                "include_smwc_id_in_filename",
+                bool(self.include_smwc_id_in_filename_var.get()),
+            )
+        except Exception as error:
+            print(f"Error saving ROM filename setting: {error}")
 
     def _check_for_updates(self):
         """Check for updates manually"""

@@ -21,6 +21,7 @@ from utils import (
 )
 from smwc_api_proxy import smwc_api_get, get_api_delay
 from patch_handler import PatchHandler
+from rom_filename_policy import build_patched_rom_filename
 
 # Global cancellation flag
 _cancel_operation = False
@@ -402,6 +403,10 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
         log("🧪 Starting patching...")
 
     base_rom_ext = os.path.splitext(base_rom_path)[1]
+    from config_manager import ConfigManager
+    include_smwc_id_in_filename = bool(
+        ConfigManager().get("include_smwc_id_in_filename", False)
+    )
 
     # Normalize to internal key, NOT display name
     raw_type = filter_payload["type"][0]
@@ -550,7 +555,12 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
 
                 for sel in selections:
                     clean_name = safe_filename(sel['output_name'])
-                    out_filename = f"{clean_name}{base_rom_ext}"
+                    out_filename = build_patched_rom_filename(
+                        clean_name,
+                        base_rom_ext,
+                        smwc_id=hack_id,
+                        include_smwc_id=include_smwc_id_in_filename,
+                    )
                     out_path = os.path.join(
                         make_output_path(output_dir, normalized_type, folder_name),
                         out_filename
@@ -581,7 +591,12 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
             else:
                 # ── Single-patch path (original behaviour) ──────────────
                 patch_path = _select_best_patch(patch_files, title_clean)
-                output_filename = f"{title_clean}{base_rom_ext}"
+                output_filename = build_patched_rom_filename(
+                    title_clean,
+                    base_rom_ext,
+                    smwc_id=hack_id,
+                    include_smwc_id=include_smwc_id_in_filename,
+                )
                 output_path = os.path.join(make_output_path(output_dir, normalized_type, folder_name), output_filename)
                 success = PatchHandler.apply_patch(patch_path, base_rom_path, output_path, log)
                 if not success:
@@ -791,8 +806,15 @@ def download_and_patch_hack(hack_data, patch_handler, processed, log=None):
         type_name = TYPE_DISPLAY_LOOKUP.get(hack_type, "Unknown")
 
         # Generate safe filename
-        safe_name = safe_filename(hack_name)
-        output_filename = f"{safe_name}.smc"
+        from config_manager import ConfigManager
+        output_filename = build_patched_rom_filename(
+            hack_name,
+            ".smc",
+            smwc_id=hack_id,
+            include_smwc_id=bool(
+                ConfigManager().get("include_smwc_id_in_filename", False)
+            ),
+        )
 
         # Download the hack file
         if log: log(f"⬇️ Downloading {hack_name}...")

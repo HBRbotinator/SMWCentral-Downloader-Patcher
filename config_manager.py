@@ -76,6 +76,7 @@ class ConfigManager:
             "multi_type_download_mode": "primary_only",
             "auto_check_updates": True,  # Auto-check for updates on startup
             "show_planner": True,  # Optional Planner UI visibility
+            "include_smwc_id_in_filename": False,  # New patched ROM filenames only
             # Emulator settings
             "emulator_path": "",
             "emulator_args": "",
@@ -109,7 +110,7 @@ class ConfigManager:
         allowed_keys = {"base_rom_path", "output_dir", "api_delay", "flips_path",
                         "multi_type_enabled", "multi_type_download_mode", "difficulty_lookup",
                         "emulator_path", "emulator_args", "emulator_args_enabled", "auto_check_updates",
-                        "show_planner",
+                        "show_planner", "include_smwc_id_in_filename",
                         "column_order", "visible_columns", "show_rom_picker",
                         "save_sync_dir", "save_sync_dirs", "save_sync_mark_all",
                         "save_sync_auto_scan", "save_sync_periodic_scan",
@@ -121,7 +122,7 @@ class ConfigManager:
             # Skip None values (except for explicitly optional keys)
             if value is None and key in {"column_order"}:
                 continue  # Don't include None values for these optional keys
-            if key == "show_planner" and not isinstance(value, bool):
+            if key in {"show_planner", "include_smwc_id_in_filename"} and not isinstance(value, bool):
                 continue
             if key in allowed_keys and self._is_serializable(value):
                 cleaned[key] = value

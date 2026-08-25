@@ -22,6 +22,7 @@ from ui import setup_ui, update_log_colors
 from utils import resource_path
 from product_identity import PRODUCT_DISPLAY_NAME, VERSION
 from update_policy import current_update_policy
+from rom_filename_policy import build_patched_rom_filename
 import sv_ttk
 
 # Multiple approaches to suppress threading cleanup errors
@@ -258,6 +259,9 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
     errored_hacks = 0
     total_hacks = len(selected_hacks)
     base_rom_ext = os.path.splitext(base_rom_path)[1]
+    include_smwc_id_in_filename = bool(
+        config.get("include_smwc_id_in_filename", False)
+    )
 
     for i, hack in enumerate(selected_hacks, 1):
         # Check for cancellation
@@ -608,7 +612,12 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                     patched_list = []
 
                     for sel in selections:
-                        out_filename = f"{sel['output_name']}{base_rom_ext}"
+                        out_filename = build_patched_rom_filename(
+                            sel['output_name'],
+                            base_rom_ext,
+                            smwc_id=hack_id,
+                            include_smwc_id=include_smwc_id_in_filename,
+                        )
                         out_path = os.path.join(
                             make_output_path(output_dir, primary_type, folder_name),
                             out_filename
@@ -646,7 +655,12 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                         break
 
                     # Create primary output path
-                    output_filename = f"{title_clean}{base_rom_ext}"
+                    output_filename = build_patched_rom_filename(
+                        title_clean,
+                        base_rom_ext,
+                        smwc_id=hack_id,
+                        include_smwc_id=include_smwc_id_in_filename,
+                    )
                     primary_output_path = os.path.join(make_output_path(output_dir, primary_type, folder_name), output_filename)
 
                     # Apply the patch to primary location
