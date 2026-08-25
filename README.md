@@ -282,9 +282,11 @@ If clicking the play icon doesn't work:
   - All selected files are patched and saved; your Collection tracks all of them
 
 **ROM Files in Edit Hack Dialog**
-- **See and change the default ROM**: For hacks with multiple patch files, the Edit Hack dialog now shows a "ROM Files" section
-  - Lists every patched ROM for that hack
-  - Select a new default via radio button and click Update to save
+- **Inspect modern Collection ROM assets**: Any entry with modern `files[]` data—downloaded SMWC entries or local/manual imports—shows a "ROM Files" section
+  - Shows each recorded ROM's path, on-disk availability, size, abbreviated SHA-256, acquisition source, and per-ROM SMWC submission provenance when known
+  - For multi-ROM entries, select a new primary via radio button and click Update; `files[].primary` and compatibility `file_path` are updated together
+  - Changing the primary never moves, renames, deletes, or re-hashes ROM files
+  - Local/manual entries with modern `files[]` use that asset list as the source of truth instead of exposing a second editable `file_path` that could drift out of sync
 
 **Multi-ROM Picker**
 - **Smart launch behavior**: Clicking the play icon (▶) on a hack with multiple versions immediately opens the default version — no extra clicks needed

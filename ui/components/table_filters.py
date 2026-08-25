@@ -2,6 +2,13 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
 from utils import resource_path, get_hack_types
+from collection_rom_assets import (
+    CollectionRomAssetError,
+    build_primary_rom_updates,
+    collection_rom_asset_views,
+    current_primary_rom_path,
+    format_rom_asset_size,
+)
 
 class TableFilters:
     """Handles filter UI and state for the collection table"""
@@ -421,6 +428,8 @@ class AddHackDialog:
         self.primary_path_var = None
         self._stats_frame = None
         self._has_multi_files = False
+        self._has_modern_files = False
+        self._primary_selection_dirty = False
 
     def show(self):
         """Show the add/edit hack dialog"""
@@ -786,16 +795,20 @@ class AddHackDialog:
         # File path - show file path if available
         self.file_path_var.set(self.hack_data.get("file_path", ""))
 
-        # Show ROM files section for multi-file downloaded hacks
+        # Show the modern ROM asset section for any Collection record that owns files[].
+        # Local/manual identities may also have modern files[] after folder ingestion.
         files = self.hack_data.get("files", [])
-        if len(files) >= 2 and not self.is_user_hack:
+        if files:
             self._build_files_section(files)
 
     def _apply_field_restrictions(self):
         """Apply field restrictions based on hack type (user vs downloaded)"""
         if self.is_user_hack:
-            # User hack - all fields editable (already default state)
-            # File path frame is visible
+            # Local/manual records keep catalogue fields editable. Once modern files[] exists,
+            # however, file_path is only a compatibility projection of the selected primary
+            # asset and must not be edited independently from files[].
+            if self._has_modern_files and hasattr(self, "file_path_frame"):
+                self.file_path_frame.grid_remove()
             return
 
         # Downloaded hack - disable hack information fields, keep personal stats editable
@@ -823,37 +836,130 @@ class AddHackDialog:
             widget.configure(state="disabled")
 
     def _build_files_section(self, files):
-        """Build and display the ROM files section for multi-file hacks."""
-        # Clear any leftover widgets (defensive)
+        """Build a non-destructive modern ROM asset view and primary selector."""
+        self._has_modern_files = True
         for widget in self.files_section.winfo_children():
             widget.destroy()
 
-        self._has_multi_files = True
+        try:
+            views = collection_rom_asset_views(self.hack_data or {"files": files})
+            current_primary = current_primary_rom_path(self.hack_data or {"files": files})
+        except CollectionRomAssetError as error:
+            ttk.Label(
+                self.files_section,
+                text=f"ROM asset metadata could not be interpreted safely: {error}",
+                foreground="#B00020",
+                wraplength=660,
+                justify="left",
+            ).pack(anchor="w")
+            self.files_section.pack(fill="x", pady=(0, 15), before=self._stats_frame)
+            return
 
-        # Set the current default
-        primary_path = next((f["path"] for f in files if f.get("primary")), files[0]["path"])
-        self.primary_path_var.set(primary_path)
+        if not views:
+            return
 
-        # Description
+        self._has_multi_files = len(views) >= 2
+        if current_primary is None:
+            current_primary = views[0].path
+        self.primary_path_var.set(current_primary)
+        self._primary_selection_dirty = False
+
         ttk.Label(
             self.files_section,
-            text="Select which file opens by default when launching from your collection.",
+            text=(
+                "Recorded Collection ROM assets. This dialog only changes which existing "
+                "asset is primary; it never moves, renames, deletes, or re-hashes ROM files."
+            ),
             font=("Segoe UI", 9),
+            wraplength=660,
+            justify="left",
         ).pack(anchor="w", pady=(0, 10))
 
-        # One row per file
-        for f in files:
+        def mark_primary_dirty():
+            self._primary_selection_dirty = True
+
+        for view in views:
             row = ttk.Frame(self.files_section)
-            row.pack(fill="x", pady=2)
-            ttk.Radiobutton(
-                row,
-                text=f.get("name", f["path"]),
-                variable=self.primary_path_var,
-                value=f["path"],
+            row.pack(fill="x", pady=(2, 8))
+
+            title_row = ttk.Frame(row)
+            title_row.pack(fill="x")
+            if self._has_multi_files:
+                ttk.Radiobutton(
+                    title_row,
+                    variable=self.primary_path_var,
+                    value=view.path,
+                    command=mark_primary_dirty,
+                ).pack(side="left", padx=(0, 6))
+            else:
+                ttk.Label(title_row, text="★", width=2).pack(side="left", padx=(0, 6))
+
+            ttk.Label(
+                title_row,
+                text=view.name,
+                font=("Segoe UI", 9, "bold"),
             ).pack(side="left")
 
-        # Insert before Personal Stats so order is: Hack Info → ROM Files → Personal Stats
+            status_text = "Available" if view.exists else "Missing on disk"
+            provenance = (
+                f"SMWC {view.smwc_submission_id}"
+                if view.smwc_submission_id is not None
+                else "SMWC provenance not recorded"
+            )
+            source_text = (
+                ", ".join(view.ingestion_sources)
+                if view.ingestion_sources
+                else "source not recorded"
+            )
+            sha_text = f"SHA-256 {view.sha256[:12]}…" if view.sha256 else "SHA-256 not recorded"
+            ttk.Label(
+                row,
+                text=(
+                    f"{status_text} • {format_rom_asset_size(view.size_bytes)} • "
+                    f"{provenance} • {source_text} • {sha_text}"
+                ),
+                font=("Segoe UI", 8),
+                wraplength=640,
+                justify="left",
+            ).pack(anchor="w", padx=(28, 0), pady=(2, 0))
+            ttk.Label(
+                row,
+                text=view.path,
+                font=("Segoe UI", 8),
+                wraplength=640,
+                justify="left",
+            ).pack(anchor="w", padx=(28, 0), pady=(2, 0))
+
         self.files_section.pack(fill="x", pady=(0, 15), before=self._stats_frame)
+
+    def _save_primary_rom_selection(self, success):
+        """Persist an explicitly changed primary ROM without changing any filesystem data."""
+        if (
+            not success
+            or not self._has_multi_files
+            or not self._primary_selection_dirty
+            or not self.primary_path_var
+        ):
+            return success
+
+        selected_path = self.primary_path_var.get()
+        raw_record = self.data_manager.data.get(str(self.hack_id), {})
+        try:
+            updated_files, primary_path = build_primary_rom_updates(
+                raw_record,
+                selected_path,
+            )
+        except CollectionRomAssetError as error:
+            messagebox.showerror("ROM Selection Error", str(error))
+            return False
+
+        if not self.data_manager.update_hack(str(self.hack_id), "files", updated_files):
+            return False
+        if not self.data_manager.update_hack(str(self.hack_id), "file_path", primary_path):
+            return False
+
+        self._primary_selection_dirty = False
+        return True
 
     def _browse_file(self):
         """Open file picker to select ROM file (.smc or .sfc)"""
@@ -1181,8 +1287,9 @@ class AddHackDialog:
                     "notes": self.notes_var.get().strip(),
                     "date": release_date_str,
                     "time": release_timestamp,  # Store calculated timestamp
-                    "file_path": self.file_path_var.get().strip()
                 }
+                if not self._has_modern_files:
+                    updates["file_path"] = self.file_path_var.get().strip()
 
                 success = True
                 for field, value in updates.items():
@@ -1206,19 +1313,8 @@ class AddHackDialog:
                         success = False
                         break
 
-                # Update default file if multi-file section is visible
-                if success and self._has_multi_files and self.primary_path_var:
-                    new_primary_path = self.primary_path_var.get()
-                    raw_files = self.data_manager.data.get(str(self.hack_id), {}).get("files", [])
-                    if raw_files and new_primary_path:
-                        updated_files = [
-                            dict(f, primary=(f["path"] == new_primary_path))
-                            for f in raw_files
-                        ]
-                        if not self.data_manager.update_hack(str(self.hack_id), "files", updated_files):
-                            success = False
-                        if success and not self.data_manager.update_hack(str(self.hack_id), "file_path", new_primary_path):
-                            success = False
+
+            success = self._save_primary_rom_selection(success)
 
             if success:
                 # Success - just close dialog and refresh, no popup needed

@@ -52,6 +52,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 <!-- collection-update-discovery:end -->
 
+### Collection ROM asset visibility and primary selection
+
+- The Edit Hack dialog now shows modern `files[]` ROM assets for both numeric SMWC entries and local/manual `usr_*` entries.
+- ROM rows expose availability, recorded size, abbreviated SHA-256, per-ROM SMWC provenance, ingestion source, and full path without changing filesystem data.
+- Multi-ROM Collection entries can explicitly change the primary ROM; saving updates `files[].primary` and the compatibility `file_path` projection together.
+- Local/manual entries that already own modern `files[]` no longer expose a separate editable `file_path` field that could diverge from the authoritative asset list.
+- Unknown per-ROM fields are preserved when primary selection changes, and malformed/duplicate ROM asset state fails closed in the UI helper layer.
+
 ### Modern ROM asset persistence
 
 - Newly patched normal-download ROMs now enter Collection `files[]` with SHA-256, exact byte size, `tool_patch` source provenance, and their known SMWC submission ID.
