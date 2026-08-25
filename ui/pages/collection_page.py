@@ -146,6 +146,9 @@ class CollectionPage:
         self._collection_update_discovery_queue = queue.Queue()
         self._collection_update_discovery_poll_id = None
         self._last_collection_update_selection = None
+        self.collection_update_merge_review_dialog = None
+        self._last_collection_update_merge_review = None
+        self._last_collection_update_merge_decision = None
         self.collection_update_plan_progress_dialog = None
         self.collection_update_plan_preview_dialog = None
         self._collection_update_plan_busy = False
@@ -275,6 +278,9 @@ class CollectionPage:
             except tk.TclError:
                 pass
             self._collection_update_discovery_poll_id = None
+        if self.collection_update_merge_review_dialog is not None:
+            self.collection_update_merge_review_dialog.close()
+            self.collection_update_merge_review_dialog = None
         if self.collection_update_plan_preview_dialog is not None:
             self.collection_update_plan_preview_dialog.close()
             self.collection_update_plan_preview_dialog = None
@@ -1801,21 +1807,90 @@ class CollectionPage:
             "Information",
         )
         if selection.target_already_in_collection:
-            messagebox.showinfo(
-                "Existing Replacement Target Needs Merge Review",
-                (
-                    f"SMWC {target.smwc_submission_id} — {target.title} already exists in "
-                    "Collection.\n\nSafely replacing another numeric Collection identity with an "
-                    "existing target requires explicit review of conflicting user-owned state. "
-                    "This read-only planning slice intentionally refuses to invent those merge "
-                    "choices.\n\nNothing was downloaded, patched, migrated, or written."
-                ),
-                parent=self.frame.winfo_toplevel(),
-            )
-            return True
+            if getattr(self.data_manager, "unsaved_changes", False):
+                messagebox.showinfo(
+                    "Review Existing Collection Merge",
+                    "Collection changes are still waiting for the normal delayed save. Wait for "
+                    "them to save before comparing two existing Collection records.",
+                    parent=self.frame.winfo_toplevel(),
+                )
+                return False
+            return self._prepare_collection_update_existing_target_merge_review(selection)
         if not self._collection_update_state_is_saved():
             return False
         return self._start_collection_update_plan_preview(selection)
+
+    def _prepare_collection_update_existing_target_merge_review(self, selection):
+        """Freeze two existing Collection records for explicit user/local merge review."""
+        try:
+            from collection_update_merge_review import (
+                build_collection_update_existing_target_merge_review,
+            )
+
+            review = build_collection_update_existing_target_merge_review(
+                selection,
+                self.data_manager,
+            )
+        except Exception as error:
+            self._last_collection_update_merge_review = None
+            self._last_collection_update_merge_decision = None
+            self._log(f"❌ Existing-target merge review could not be prepared: {error}", "Error")
+            messagebox.showerror(
+                "Review Existing Collection Merge",
+                f"Could not prepare the merge review:\n\n{error}\n\nNothing was changed.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+
+        self._last_collection_update_merge_review = review
+        self._last_collection_update_merge_decision = None
+        self._log(
+            "📋 Existing numeric replacement target requires explicit Collection merge review",
+            "Information",
+        )
+        # The discovery dialog currently owns the modal grab. Open the merge review on the
+        # next Tk turn so discovery can close and release its grab first.
+        self.frame.after(0, lambda: self._show_collection_update_existing_target_merge_review(review))
+        return True
+
+    def _show_collection_update_existing_target_merge_review(self, review):
+        from ui.collection_update_merge_review_dialog import CollectionUpdateMergeReviewDialog
+
+        if (
+            self.collection_update_merge_review_dialog is not None
+            and self.collection_update_merge_review_dialog.is_open
+        ):
+            self.collection_update_merge_review_dialog.lift()
+            return
+        self.collection_update_merge_review_dialog = CollectionUpdateMergeReviewDialog(
+            self.frame.winfo_toplevel(),
+            review,
+            on_save=self._collection_update_existing_target_merge_review_saved,
+            on_close=self._collection_update_existing_target_merge_review_closed,
+        )
+        self.collection_update_merge_review_dialog.show()
+
+    def _collection_update_existing_target_merge_review_saved(self, review, decision):
+        self._last_collection_update_merge_review = review
+        self._last_collection_update_merge_decision = decision
+        self._log(
+            "✅ Existing-target Collection merge review completed without applying changes",
+            "Information",
+        )
+        messagebox.showinfo(
+            "Merge Review Complete",
+            (
+                "The conflicting Collection state has been reviewed and the choices are retained "
+                "only in memory for the next planning boundary.\n\nNothing was hydrated, "
+                "migrated, downloaded, patched, or written."
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+        return True
+
+    def _collection_update_existing_target_merge_review_closed(self):
+        self.collection_update_merge_review_dialog = None
+
 
     def _start_collection_update_plan_preview(self, selection):
         if self._collection_update_plan_busy:

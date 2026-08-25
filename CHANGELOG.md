@@ -16,8 +16,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
   detail and builds an immutable numeric-to-numeric replacement plan for read-only preview.
 - The replacement preview shows the exact Collection identity/catalogue/reference changes while
   remaining non-applying; no target ROM is downloaded or patched and no filesystem data moves.
-- Existing numeric targets fail closed before planning because merging independent user-owned
-  Collection state requires a separate explicit conflict-review boundary.
+- Existing numeric targets now open a separate read-only merge review before any replacement
+  plan is built. The review requires explicit choices for conflicting user-owned fields, first-clear
+  references, and competing primary ROMs while preserving safely combinable ROM/history state.
+- Unknown conflicting fields, conflicting imported playthrough identities, the same ROM path
+  carrying different SHA-256 values, and distinct legacy file_path-only primaries fail closed instead
+  of falling through to generic merge rules that could lose local state.
+- Commit 015 retains only a detached in-memory merge decision; it does not hydrate rich detail,
+  build/apply a replacement plan, or modify Collection/dependent stores.
 
 <!-- collection-update-discovery:end -->
 

@@ -100,7 +100,9 @@ The current build contract publishes a native tarball rather than an AppImage. E
    - A different SMWC ID is never automatically treated as a newer version; you must recognize and confirm the relationship yourself
    - After you explicitly confirm a relationship, only that target's rich KaizOFF detail is hydrated and an immutable replacement plan is shown
    - The replacement plan preview is still read-only: it does not apply the identity migration or download/patch a target ROM
-   - If the target already exists in Collection, planning stops because conflicting user-owned state needs its own explicit merge review
+   - If the target already exists in Collection, the app opens an explicit read-only merge review instead of choosing between independent user-owned state
+   - Conflicting notes, rating, time/completion-date/first-clear values and different primary ROMs require explicit source/target choices; safely combinable ROM/history state is retained together
+   - Unsupported conflicting state fails closed, and saving the merge review only retains a detached in-memory decision for the next planning boundary
 
 ![Collection Page](images/application-5.0-collection.png)
 
