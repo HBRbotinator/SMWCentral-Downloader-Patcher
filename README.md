@@ -92,6 +92,18 @@ If the application starts and finds such a journal, it **does not recover automa
 
 This gate runs before Collection, Planner, and Save Sync UI/store owners are constructed, so normal edits cannot race or overwrite rollback material from an interrupted transaction.
 
+### ROM title matcher calibration
+
+ROM-folder ingestion intentionally prefers review over a risky automatic identity decision. The developer tool `tools/rom_match_calibration.py` can compare numeric Collection entries with recorded ROM paths against a lightweight KaizOFF/SMWC catalogue and report aggregate matching outcomes. It is read-only and does not print local filesystem paths.
+
+Example:
+
+```bash
+python tools/rom_match_calibration.py processed.json KaizOFF-API-Public-v1-Hacks-Index.json
+```
+
+The current matcher was calibrated against a legacy real-world Collection snapshot and the supplied 2,820-entry KaizOFF Index. Of 152 eligible known-ROM records, 140 were safely auto-selected and the remaining 12 were held for review; all 152 still had the correct known submission as the top suggestion, with zero wrong automatic matches. Because the held cases were ambiguous abbreviations, short/partial titles, or sequel-sensitive names, the thresholds remain deliberately conservative.
+
 ### Managing Your Collection
 1. **View your collection**: Click the "Collection" tab to see all your downloaded ROMs
 2. **Customize columns**: Click the "⚙ Columns" button to show/hide columns and reorder them via drag-and-drop

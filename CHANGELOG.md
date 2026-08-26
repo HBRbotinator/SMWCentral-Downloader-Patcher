@@ -4,6 +4,12 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### ROM matcher calibration hardening
+
+- Added a read-only developer calibration tool for comparing known numeric Collection ROM filenames against a lightweight KaizOFF/SMWC catalogue without printing local filesystem paths.
+- Calibrated the current conservative matcher against the supplied legacy Collection snapshot and current 2,820-entry KaizOFF Index: 152 eligible known-ROM cases produced 140 correct automatic matches, 12 review cases with the correct top suggestion, zero wrong automatic matches, and zero wrong top suggestions.
+- Added regression cases for the ambiguous, abbreviated, partial-title, and sequel-sensitive filenames that correctly remained review-only; matcher thresholds were intentionally left unchanged.
+
 ### Collection transaction startup recovery
 
 - The application now checks for an existing coordinated Collection Apply journal before constructing Collection, Planner, or Save Sync UI/store owners.
