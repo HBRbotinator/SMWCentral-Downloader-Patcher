@@ -149,11 +149,13 @@ The current matcher was calibrated against a legacy real-world Collection snapsh
    - A ROM becomes **Would move** only when modern `files[]` contains exact SHA-256 + byte-size identity and the current non-symlink source still matches its recorded size
    - Click **Preview Safe Move Plan...** to freeze only those safe rows into an immutable read-only plan bound to the current Collection revision and exact source/target preconditions
    - The plan records source and destination paths, SHA-256, byte size, source modification time, primary selection, and per-ROM SMWC provenance; it still exposes no Apply/Execute action
-   - Click **Review Save Impact...** to inspect plausible `.srm`/`.sav` relationships before any move execution exists. Same-basename saves beside a planned ROM are shown with a hypothetical colocated destination and target-conflict state; matching or explicitly associated saves in configured Save Sync folders are shown as external evidence with no proposed migration path
-   - Save Sync configuration does not prove where the emulator actually stores saves. Even a review with no detected save is not treated as proof that moving the ROM has no save impact
+   - Click **Review Save Dispositions...** to inspect plausible `.srm`/`.sav` relationships and record explicit detached choices before any move execution exists. Same-basename saves beside a planned ROM must be marked **Migrate with ROM**, **Leave in place**, or **Block this ROM move**
+   - A colocated save whose hypothetical destination is already occupied cannot be selected for migration; configured or explicitly associated Save Sync files remain external evidence with no proposed migration path or disposition
+   - If no colocated save is detected for a planned ROM, explicitly acknowledge that result before saving the review. This means only that the known review found no colocated `.srm`/`.sav`; it does not prove emulator save state is absent elsewhere
+   - Saved dispositions are bound to a fingerprint of the exact immutable ROM plan and discovered save evidence so a later execution-plan boundary can fail closed if the review becomes stale
    - Retained ROMs whose per-file SMWC provenance belongs to a different submission are intentionally review-only rather than inheriting the current record's catalogue layout
    - Numeric modern ROMs with missing provenance and legacy `file_path`-only entries are also review-only; the app does not invent migration semantics for them
-   - Save-file migration remains outside this plan. The save-impact review discovers evidence only; a later boundary must require explicit disposition for colocated companions before ROM filesystem execution
+   - Save-file execution remains outside this plan. The disposition review records detached intent only; a later boundary must re-discover/revalidate save evidence before turning any choice into a filesystem operation
 
 ![Collection Page](images/application-5.0-collection.png)
 

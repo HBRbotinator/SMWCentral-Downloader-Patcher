@@ -51,6 +51,8 @@ class CollectionRomOrganizationPlanDialogContractTests(unittest.TestCase):
         self.assertNotIn('text="Apply', source)
         self.assertNotIn('text="Execute', source)
         self.assertIn("Read-only immutable preview", source)
+        self.assertIn('text="Review Save Dispositions..."', source)
+        self.assertIn("Save dispositions: not reviewed", source)
         self.assertIn('text="Close"', source)
 
     def test_plan_model_contains_no_mutating_filesystem_calls(self):

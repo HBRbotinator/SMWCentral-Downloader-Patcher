@@ -4,6 +4,16 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Explicit save dispositions for ROM organization
+
+- The immutable ROM organization preview now opens **Review Save Dispositions...** and requires explicit user choices before save-aware filesystem planning can continue.
+- Every detected colocated `.srm`/`.sav` companion must be marked **Migrate with ROM**, **Leave in place**, or **Block this ROM move**.
+- A colocated save whose possible target is already occupied cannot be selected for migration; leaving it or blocking the ROM move remain explicit options.
+- ROM moves with no detected colocated companion require an acknowledgement that the review found no colocated save but cannot prove emulator save state is absent elsewhere.
+- Matching/associated saves in configured Save Sync folders remain informational evidence only and cannot receive migration dispositions because the emulator storage policy is unknown.
+- Saved choices are detached and immutable, bound to a fingerprint of the exact organization plan and save-impact evidence so a later planning boundary can reject stale review state.
+- This boundary still performs no ROM/save filesystem mutation, Collection rewrite, Save Sync persistence, or Apply/Execute action.
+
 ### Read-only ROM organization save-impact review
 
 - The immutable ROM organization move preview now exposes **Review Save Impact...** before any filesystem execution exists.

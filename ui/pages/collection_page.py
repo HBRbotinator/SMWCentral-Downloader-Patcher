@@ -60,6 +60,9 @@ class CollectionPage:
         self.collection_wheel_dialog = None
         self.collection_rom_organization_audit_dialog = None
         self.collection_rom_organization_plan_dialog = None
+        self.collection_rom_save_impact_dialog = None
+        self._last_collection_rom_save_disposition_review = None
+        self._last_collection_rom_save_disposition_decision = None
 
         # v3.1 NEW: Pagination state
         self.current_page = 1
@@ -289,6 +292,10 @@ class CollectionPage:
         if self.collection_rom_organization_audit_dialog is not None:
             self.collection_rom_organization_audit_dialog.close()
             self.collection_rom_organization_audit_dialog = None
+
+        if self.collection_rom_save_impact_dialog is not None:
+            self.collection_rom_save_impact_dialog.close()
+            self.collection_rom_save_impact_dialog = None
 
         if self.collection_rom_organization_plan_dialog is not None:
             self.collection_rom_organization_plan_dialog.close()
@@ -3170,6 +3177,8 @@ class CollectionPage:
         if self.collection_rom_organization_audit_dialog is not None:
             self.collection_rom_organization_audit_dialog.close()
 
+        self._last_collection_rom_save_disposition_review = None
+        self._last_collection_rom_save_disposition_decision = None
         dialog = CollectionRomOrganizationPlanDialog(
             self.frame,
             plan,
@@ -3179,7 +3188,15 @@ class CollectionPage:
         self.collection_rom_organization_plan_dialog = dialog
 
     def _review_collection_rom_save_impact(self, plan, parent_dialog):
-        """Show read-only save relationships for an immutable ROM move plan."""
+        """Review and explicitly disposition save evidence for an immutable ROM move plan."""
+        if self.collection_rom_save_impact_dialog is not None:
+            try:
+                self.collection_rom_save_impact_dialog.dialog.lift()
+                self.collection_rom_save_impact_dialog.dialog.focus_force()
+                return
+            except tk.TclError:
+                self.collection_rom_save_impact_dialog = None
+
         try:
             from save_sync import clean_save_associations, clean_save_directories
 
@@ -3200,15 +3217,46 @@ class CollectionPage:
         except (CollectionRomSaveImpactError, OSError, ValueError) as error:
             self._log(f"ROM organization save-impact review failed: {error}", "Error")
             messagebox.showerror(
-                "ROM Organization Save Impact",
+                "ROM Organization Save Dispositions",
                 f"Save impact could not be reviewed safely:\n\n{error}",
                 parent=parent_dialog,
             )
             return
 
-        CollectionRomSaveImpactDialog(parent_dialog, review)
+        dialog = CollectionRomSaveImpactDialog(
+            parent_dialog,
+            review,
+            on_save=self._collection_rom_save_dispositions_saved,
+            on_close=self._collection_rom_save_impact_closed,
+        )
+        self.collection_rom_save_impact_dialog = dialog
+
+    def _collection_rom_save_dispositions_saved(self, review, decision):
+        """Retain detached save choices for the next bounded organization planning step."""
+        if self.collection_rom_organization_plan_dialog is None:
+            return False
+        if review.plan != self.collection_rom_organization_plan_dialog.plan:
+            messagebox.showerror(
+                "ROM Organization Save Dispositions",
+                "The ROM organization plan changed while save dispositions were open. "
+                "Review save impact again.",
+                parent=self.frame,
+            )
+            return False
+        self._last_collection_rom_save_disposition_review = review
+        self._last_collection_rom_save_disposition_decision = decision
+        self.collection_rom_organization_plan_dialog.set_save_disposition_decision(decision)
+        return True
+
+    def _collection_rom_save_impact_closed(self):
+        self.collection_rom_save_impact_dialog = None
 
     def _collection_rom_organization_plan_closed(self):
+        if self.collection_rom_save_impact_dialog is not None:
+            self.collection_rom_save_impact_dialog.close()
+            self.collection_rom_save_impact_dialog = None
+        self._last_collection_rom_save_disposition_review = None
+        self._last_collection_rom_save_disposition_decision = None
         self.collection_rom_organization_plan_dialog = None
 
     def _collection_rom_organization_audit_closed(self):

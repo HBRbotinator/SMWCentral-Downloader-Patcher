@@ -1,9 +1,15 @@
-"""Read-only save-impact review for Collection ROM organization plans."""
+"""Explicit save-disposition review for Collection ROM organization plans."""
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
+from collection_rom_save_disposition import (
+    CollectionRomSaveDispositionError,
+    SaveDisposition,
+    companion_disposition_key,
+    finalize_collection_rom_save_disposition_decision,
+)
 from collection_rom_save_impact import (
     CollectionRomSaveImpactReview,
     SOURCE_COLOCATED,
@@ -20,16 +26,20 @@ _SOURCE_LABELS = {
 
 
 class CollectionRomSaveImpactDialog:
-    """Modal read-only presentation of plausible save impact."""
+    """Modal review that records detached save dispositions but performs no mutation."""
 
-    def __init__(self, parent, review: CollectionRomSaveImpactReview):
+    def __init__(self, parent, review: CollectionRomSaveImpactReview, on_save=None, on_close=None):
         self.review = review
         self._parent = parent
+        self._on_save = on_save
+        self._on_close = on_close
         self._closed = False
+        self._companion_vars: dict[str, tk.StringVar] = {}
+        self._ack_vars: dict[str, tk.BooleanVar] = {}
         self.dialog = tk.Toplevel(parent)
-        self.dialog.title("Collection ROM Organization — Save Impact")
-        self.dialog.geometry("1180x680")
-        self.dialog.minsize(900, 520)
+        self.dialog.title("Collection ROM Organization — Save Dispositions")
+        self.dialog.geometry("1180x760")
+        self.dialog.minsize(900, 560)
         self.dialog.transient(parent)
 
         self._build()
@@ -42,15 +52,15 @@ class CollectionRomSaveImpactDialog:
 
         ttk.Label(
             outer,
-            text="ROM Organization Save Impact",
+            text="ROM Organization Save Dispositions",
             font=("Segoe UI", 14, "bold"),
         ).pack(anchor="w")
         ttk.Label(
             outer,
             text=(
-                "Read-only relationship review. The application cannot infer an emulator's "
-                "save-location policy from Save Sync settings, so this screen reports evidence "
-                "only and performs no save or ROM migration."
+                "Review-only decision boundary. Choose what should happen to detected saves if "
+                "a later execution plan is created. Saving this review does not move any ROM or "
+                "save file and does not modify Collection or Save Sync settings."
             ),
             wraplength=1080,
             justify="left",
@@ -67,107 +77,167 @@ class CollectionRomSaveImpactDialog:
             anchor="w", pady=(0, 10)
         )
 
-        if not self.review.rows:
+        canvas_frame = ttk.Frame(outer)
+        canvas_frame.pack(fill="both", expand=True)
+        canvas = tk.Canvas(canvas_frame, highlightthickness=0, borderwidth=0)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+        body = ttk.Frame(canvas)
+        window_id = canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        body.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window_id, width=event.width))
+
+        rows_by_move: dict[tuple[str, str], list] = {}
+        for row in self.review.rows:
+            rows_by_move.setdefault((row.collection_id, row.rom_source_path), []).append(row)
+
+        for move in self.review.plan.moves:
+            frame = ttk.LabelFrame(body, text=f"{move.title} — {move.asset_name}", padding=10)
+            frame.pack(fill="x", pady=(0, 10))
             ttk.Label(
-                outer,
-                text=(
-                    "No same-basename save beside a planned ROM and no matching or explicitly "
-                    "associated save in the configured Save Sync folders was detected. This does "
-                    "not prove that the emulator has no save state elsewhere."
-                ),
-                wraplength=1080,
+                frame,
+                text=f"ROM: {move.source_path}\nPlanned target: {move.target_path}",
+                wraplength=1030,
                 justify="left",
-            ).pack(anchor="w", pady=(4, 12))
-        else:
-            table_frame = ttk.Frame(outer)
-            table_frame.pack(fill="both", expand=True)
-            columns = ("hack", "save", "relationship", "current", "possible_target", "target")
-            tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=18)
-            tree.heading("hack", text="Collection Hack")
-            tree.heading("save", text="Save File")
-            tree.heading("relationship", text="Relationship Evidence")
-            tree.heading("current", text="Current Save Location")
-            tree.heading("possible_target", text="Possible Colocated Target")
-            tree.heading("target", text="Target State")
-            tree.column("hack", width=180, minwidth=130, anchor="w")
-            tree.column("save", width=130, minwidth=100, anchor="w")
-            tree.column("relationship", width=160, minwidth=130, anchor="w")
-            tree.column("current", width=270, minwidth=180, anchor="w")
-            tree.column("possible_target", width=270, minwidth=180, anchor="w")
-            tree.column("target", width=110, minwidth=90, anchor="w")
+            ).pack(anchor="w", pady=(0, 8))
 
-            y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-            x_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
-            tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
-            tree.grid(row=0, column=0, sticky="nsew")
-            y_scroll.grid(row=0, column=1, sticky="ns")
-            x_scroll.grid(row=1, column=0, sticky="ew")
-            table_frame.grid_rowconfigure(0, weight=1)
-            table_frame.grid_columnconfigure(0, weight=1)
+            move_rows = rows_by_move.get((move.collection_id, move.source_path), [])
+            colocated = [row for row in move_rows if row.source_kind == SOURCE_COLOCATED]
+            external = [row for row in move_rows if row.source_kind != SOURCE_COLOCATED]
 
-            self._rows_by_item = {}
-            for row in self.review.rows:
-                target_state = (
-                    "Occupied"
-                    if row.target_occupied
-                    else ("Available" if row.possible_target_path else "Not proposed")
-                )
-                item = tree.insert(
-                    "",
-                    "end",
-                    values=(
-                        row.title,
-                        row.save_name,
-                        _SOURCE_LABELS.get(row.source_kind, row.source_kind),
+            if colocated:
+                ttk.Label(
+                    frame,
+                    text="Detected colocated save companions — choose one disposition for each:",
+                    font=("Segoe UI", 9, "bold"),
+                ).pack(anchor="w", pady=(0, 5))
+                for row in colocated:
+                    save_frame = ttk.Frame(frame, padding=(10, 4))
+                    save_frame.pack(fill="x", pady=(0, 6))
+                    target_state = "occupied" if row.target_occupied else "available"
+                    ttk.Label(
+                        save_frame,
+                        text=(
+                            f"{row.save_name}: {row.save_path}\n"
+                            f"Possible colocated target ({target_state}): {row.possible_target_path}"
+                        ),
+                        wraplength=990,
+                        justify="left",
+                    ).pack(anchor="w")
+                    key = companion_disposition_key(
+                        row.collection_id,
+                        row.rom_source_path,
                         row.save_path,
-                        row.possible_target_path or "—",
-                        target_state,
+                    )
+                    var = tk.StringVar(value="")
+                    self._companion_vars[key] = var
+                    migrate = ttk.Radiobutton(
+                        save_frame,
+                        text="Migrate this save with the ROM",
+                        value=SaveDisposition.MIGRATE_WITH_ROM.value,
+                        variable=var,
+                    )
+                    migrate.pack(anchor="w", padx=(14, 0), pady=(3, 1))
+                    if row.target_occupied:
+                        migrate.state(["disabled"])
+                    ttk.Radiobutton(
+                        save_frame,
+                        text="Leave this save in its current location",
+                        value=SaveDisposition.LEAVE_IN_PLACE.value,
+                        variable=var,
+                    ).pack(anchor="w", padx=(14, 0), pady=1)
+                    ttk.Radiobutton(
+                        save_frame,
+                        text="Block this ROM move",
+                        value=SaveDisposition.BLOCK_ROM_MOVE.value,
+                        variable=var,
+                    ).pack(anchor="w", padx=(14, 0), pady=1)
+                    if row.target_occupied:
+                        ttk.Label(
+                            save_frame,
+                            text="Migration is unavailable because the reviewed save target is occupied.",
+                            foreground="#B00020",
+                            wraplength=960,
+                        ).pack(anchor="w", padx=(14, 0), pady=(2, 0))
+            else:
+                var = tk.BooleanVar(value=False)
+                self._ack_vars[move.source_path] = var
+                ttk.Checkbutton(
+                    frame,
+                    text=(
+                        "Proceed with this ROM move in the next planning step after acknowledging "
+                        "that no colocated .srm/.sav companion was detected. This does not prove "
+                        "that emulator save state is absent elsewhere."
                     ),
-                )
-                self._rows_by_item[item] = row
+                    variable=var,
+                ).pack(anchor="w", pady=(2, 6))
 
-            detail_var = tk.StringVar(
-                value="Select a save to inspect why it was related to the planned ROM move."
-            )
-            ttk.Label(
-                outer,
-                textvariable=detail_var,
-                wraplength=1080,
-                justify="left",
-            ).pack(fill="x", pady=(10, 8))
-
-            def show_detail(_event=None):
-                selected = tree.selection()
-                if not selected:
-                    return
-                row = self._rows_by_item.get(selected[0])
-                if row is None:
-                    return
-                conflict = (
-                    " The possible colocated destination is already occupied."
-                    if row.target_occupied
-                    else ""
-                )
-                detail_var.set(
-                    f"{row.source_detail} Size: {row.size_bytes:,} bytes. "
-                    f"mtime_ns: {row.mtime_ns}.{conflict}"
-                )
-
-            tree.bind("<<TreeviewSelect>>", show_detail)
+            if external:
+                ttk.Label(
+                    frame,
+                    text="Configured/associated Save Sync evidence (informational only):",
+                    font=("Segoe UI", 9, "bold"),
+                ).pack(anchor="w", pady=(4, 3))
+                for row in external:
+                    ttk.Label(
+                        frame,
+                        text=(
+                            f"• {_SOURCE_LABELS.get(row.source_kind, row.source_kind)}: "
+                            f"{row.save_path}"
+                        ),
+                        wraplength=1000,
+                        justify="left",
+                    ).pack(anchor="w", padx=(10, 0), pady=1)
+                ttk.Label(
+                    frame,
+                    text=(
+                        "No move disposition is available for configured/external evidence because "
+                        "Save Sync folders do not establish the emulator's storage policy."
+                    ),
+                    foreground="gray",
+                    wraplength=1000,
+                ).pack(anchor="w", padx=(10, 0), pady=(2, 0))
 
         ttk.Label(
             outer,
             text=(
-                "No save action is selected by this review. A later boundary must require an "
-                "explicit disposition for any colocated companion before ROM filesystem execution."
+                "Saving these choices retains only a detached immutable decision bound to this exact "
+                "save-impact review. A later plan must rediscover and revalidate the evidence before "
+                "any filesystem action can exist."
             ),
             wraplength=1080,
             justify="left",
-        ).pack(anchor="w", pady=(8, 10))
+        ).pack(anchor="w", pady=(10, 8))
 
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        ttk.Button(
+            buttons,
+            text="Save Disposition Review",
+            command=self._save,
+        ).pack(side="right", padx=(0, 8))
+
+    def _save(self):
+        dispositions = {key: var.get().strip() for key, var in self._companion_vars.items()}
+        acknowledgements = [path for path, var in self._ack_vars.items() if bool(var.get())]
+        try:
+            decision = finalize_collection_rom_save_disposition_decision(
+                self.review,
+                companion_dispositions=dispositions,
+                rom_only_acknowledgements=acknowledgements,
+            )
+        except CollectionRomSaveDispositionError as error:
+            messagebox.showinfo("Complete Save Review", str(error), parent=self.dialog)
+            return
+
+        accepted = True
+        if self._on_save is not None:
+            accepted = self._on_save(self.review, decision) is not False
+        if accepted:
+            self.close()
 
     def close(self):
         if self._closed:
@@ -178,6 +248,8 @@ class CollectionRomSaveImpactDialog:
                 self.dialog.grab_release()
                 self.dialog.destroy()
         finally:
+            if self._on_close is not None:
+                self._on_close()
             try:
                 if self._parent.winfo_exists():
                     self._parent.grab_set()

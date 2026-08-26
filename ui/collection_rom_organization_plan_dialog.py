@@ -21,6 +21,8 @@ class CollectionRomOrganizationPlanDialog:
         self._on_close = on_close
         self._on_review_save_impact = on_review_save_impact
         self._closed = False
+        self._save_disposition_decision = None
+        self._save_disposition_status_var = None
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Collection ROM Organization Plan")
         self.dialog.geometry("1180x680")
@@ -144,13 +146,12 @@ class CollectionRomOrganizationPlanDialog:
 
         tree.bind("<<TreeviewSelect>>", show_detail)
 
+        self._save_disposition_status_var = tk.StringVar(
+            value="Save dispositions: not reviewed. Filesystem execution remains unavailable."
+        )
         ttk.Label(
             outer,
-            text=(
-                "No save migration is planned here. Because organization can change ROM "
-                "directories, save behavior must be reviewed explicitly before filesystem "
-                "execution is introduced."
-            ),
+            textvariable=self._save_disposition_status_var,
             wraplength=1080,
             justify="left",
         ).pack(anchor="w", pady=(0, 10))
@@ -161,7 +162,7 @@ class CollectionRomOrganizationPlanDialog:
         if self._on_review_save_impact is not None:
             ttk.Button(
                 buttons,
-                text="Review Save Impact...",
+                text="Review Save Dispositions...",
                 command=self._review_save_impact,
             ).pack(side="right", padx=(0, 8))
 
@@ -169,6 +170,18 @@ class CollectionRomOrganizationPlanDialog:
         if self._on_review_save_impact is None:
             return
         self._on_review_save_impact(self.plan, self.dialog)
+
+    def set_save_disposition_decision(self, decision):
+        """Reflect a detached reviewed decision without enabling execution."""
+        self._save_disposition_decision = decision
+        if self._save_disposition_status_var is None:
+            return
+        self._save_disposition_status_var.set(
+            f"Save dispositions reviewed: {decision.approved_move_count} ROM move(s) may proceed "
+            f"to the next planning step; {decision.blocked_move_count} blocked. "
+            f"Save migrations selected: {decision.migrate_save_count}; "
+            f"leave in place: {decision.leave_save_count}. No filesystem action exists yet."
+        )
 
     def close(self):
         if self._closed:
