@@ -8,6 +8,7 @@ files or Collection state.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
@@ -23,6 +24,9 @@ STATUS_TARGET_COLLISION = "target_collision"
 STATUS_REVIEW_PROVENANCE = "review_provenance"
 STATUS_LEGACY_PATH = "legacy_path"
 STATUS_REVIEW_METADATA = "review_metadata"
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
 
 BLOCKING_STATUSES = {
     STATUS_MISSING_SOURCE,
@@ -57,6 +61,8 @@ class CollectionRomOrganizationRow:
     detail: str
     primary: bool
     smwc_submission_id: int | None
+    sha256: str = ""
+    size_bytes: int | None = None
 
     @property
     def blocking(self) -> bool:
@@ -172,6 +178,8 @@ def _modern_asset_rows(
             "name": view.name,
             "primary": view.primary,
             "smwc_submission_id": view.smwc_submission_id,
+            "sha256": view.sha256,
+            "size_bytes": view.size_bytes,
             "collection_id": collection_id,
         }
         for view in views
@@ -190,6 +198,8 @@ def _legacy_file_path_row(
         "name": os.path.basename(path),
         "primary": True,
         "smwc_submission_id": None,
+        "sha256": "",
+        "size_bytes": None,
         "collection_id": collection_id,
     }
 
@@ -251,6 +261,8 @@ def _initial_rows(
                     detail=f"Modern Collection ROM metadata requires review: {error}",
                     primary=False,
                     smwc_submission_id=None,
+                    sha256="",
+                    size_bytes=None,
                 )
             )
             continue
@@ -285,6 +297,8 @@ def _initial_rows(
                         ),
                         primary=True,
                         smwc_submission_id=None,
+                        sha256="",
+                        size_bytes=None,
                     )
                 )
                 continue
@@ -307,10 +321,14 @@ def _initial_rows(
                         detail=provenance_review,
                         primary=bool(asset["primary"]),
                         smwc_submission_id=provenance_value,
+                        sha256=str(asset.get("sha256", "") or ""),
+                        size_bytes=asset.get("size_bytes"),
                     )
                 )
                 continue
 
+            sha256 = str(asset.get("sha256", "") or "")
+            size_bytes = asset.get("size_bytes")
             same_path = _path_identity(current_path) == _path_identity(expected_path)
             if not exists:
                 status = STATUS_MISSING_SOURCE
@@ -318,6 +336,22 @@ def _initial_rows(
             elif same_path:
                 status = STATUS_IN_PLACE
                 detail = "Already in the configured Collection ROM layout."
+            elif os.path.islink(current_path):
+                status = STATUS_REVIEW_METADATA
+                detail = (
+                    "Symbolic-link ROM assets require explicit review before organization."
+                )
+            elif _SHA256_RE.fullmatch(sha256) is None or size_bytes is None:
+                status = STATUS_REVIEW_METADATA
+                detail = (
+                    "Exact recorded ROM SHA-256 and byte size are required before a filesystem "
+                    "move can become an immutable organization plan."
+                )
+            elif os.path.getsize(current_path) != size_bytes:
+                status = STATUS_REVIEW_METADATA
+                detail = (
+                    "The current ROM byte size no longer matches its recorded files[] identity."
+                )
             elif os.path.exists(expected_path):
                 status = STATUS_TARGET_OCCUPIED
                 detail = (
@@ -339,6 +373,8 @@ def _initial_rows(
                     detail=detail,
                     primary=bool(asset["primary"]),
                     smwc_submission_id=provenance_value,
+                    sha256=str(asset.get("sha256", "") or ""),
+                    size_bytes=asset.get("size_bytes"),
                 )
             )
     return rows
@@ -382,6 +418,8 @@ def _mark_target_collisions(
                 ),
                 primary=row.primary,
                 smwc_submission_id=row.smwc_submission_id,
+                sha256=row.sha256,
+                size_bytes=row.size_bytes,
             )
         )
     return tuple(updated)

@@ -29,6 +29,8 @@ class CollectionRomOrganizationTests(unittest.TestCase):
                 {
                     "path": str(path),
                     "name": Path(path).name,
+                    "sha256": "a" * 64,
+                    "size_bytes": Path(path).stat().st_size if Path(path).exists() else 3,
                     "primary": primary,
                     "smwc_submission_id": smwc_id,
                 }
@@ -96,6 +98,28 @@ class CollectionRomOrganizationTests(unittest.TestCase):
 
             self.assertEqual(audit.in_place_count, 1)
             self.assertEqual(audit.rows[0].status, STATUS_IN_PLACE)
+
+    def test_in_place_asset_does_not_require_move_preconditions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "library"
+            current = Path(
+                expected_collection_rom_path(
+                    str(output), "kaizo", "Advanced", "Hack.sfc"
+                )
+            )
+            current.parent.mkdir(parents=True)
+            current.write_bytes(b"rom")
+            record = self._record(current)
+            record["files"][0]["sha256"] = ""
+            record["files"][0]["size_bytes"] = None
+
+            audit = build_collection_rom_organization_audit(
+                {"123": record}, str(output)
+            )
+
+            self.assertEqual(audit.rows[0].status, STATUS_IN_PLACE)
+            self.assertEqual(audit.blocking_count, 0)
 
     def test_audit_marks_missing_source_as_blocking(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -237,6 +261,23 @@ class CollectionRomOrganizationTests(unittest.TestCase):
             self.assertEqual(audit.rows[0].status, STATUS_REVIEW_METADATA)
             self.assertEqual(audit.rows[0].expected_path, "")
             self.assertEqual(audit.blocking_count, 1)
+
+    def test_audit_requires_exact_modern_byte_identity_before_move_candidate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            current = root / "elsewhere" / "Hack.sfc"
+            current.parent.mkdir()
+            current.write_bytes(b"rom")
+            record = self._record(current)
+            record["files"][0]["sha256"] = ""
+
+            audit = build_collection_rom_organization_audit(
+                {"123": record}, str(root / "library")
+            )
+
+            self.assertEqual(audit.rows[0].status, STATUS_REVIEW_METADATA)
+            self.assertIn("SHA-256", audit.rows[0].detail)
+            self.assertEqual(audit.move_candidate_count, 0)
 
     def test_empty_output_dir_fails_before_filesystem_work(self):
         with self.assertRaisesRegex(ValueError, "output directory"):

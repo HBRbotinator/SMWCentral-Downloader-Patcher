@@ -143,12 +143,15 @@ The current matcher was calibrated against a legacy real-world Collection snapsh
    - The reviewed merge plan uses the same explicit transactional Apply boundary; no ROM/save files are downloaded, patched, moved, renamed, or deleted
    - Retained modern ROM rows preserve explicit SMWC submission provenance in the plan, so an old/source ROM does not silently become attributed to the newly selected numeric submission after a future migration
    - Existing explicit per-ROM provenance is preserved; contradictory provenance for the same retained path fails closed instead of being guessed
-12. **Audit ROM library organization**: Click **Audit ROM Layout...** to compare recorded modern ROM assets with the configured output directory and type/difficulty folder layout
+12. **Audit and preview ROM library organization**: Click **Audit ROM Layout...** to compare recorded modern ROM assets with the configured output directory and type/difficulty folder layout
    - The audit is read-only: it does not move, rename, copy, delete, hash, or modify ROM/save files or Collection metadata
-   - Assets already in place and safe future move candidates are shown separately from missing files, occupied targets, and target collisions
+   - Assets already in place and safe future move candidates are shown separately from missing files, occupied targets, target collisions, and metadata/provenance review states
+   - A ROM becomes **Would move** only when modern `files[]` contains exact SHA-256 + byte-size identity and the current non-symlink source still matches its recorded size
+   - Click **Preview Safe Move Plan...** to freeze only those safe rows into an immutable read-only plan bound to the current Collection revision and exact source/target preconditions
+   - The plan records source and destination paths, SHA-256, byte size, source modification time, primary selection, and per-ROM SMWC provenance; it still exposes no Apply/Execute action
    - Retained ROMs whose per-file SMWC provenance belongs to a different submission are intentionally review-only rather than inheriting the current record's catalogue layout
    - Numeric modern ROMs with missing provenance and legacy `file_path`-only entries are also review-only; the app does not invent migration semantics for them
-   - Save-file migration is outside this audit and must be reviewed explicitly before a later organization execution boundary can change filesystem paths
+   - Save-file migration remains outside this plan and must be reviewed explicitly before a later organization execution boundary can change filesystem paths
 
 ![Collection Page](images/application-5.0-collection.png)
 

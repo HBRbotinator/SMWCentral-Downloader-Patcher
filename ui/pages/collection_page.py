@@ -21,6 +21,11 @@ from collection_wheel_model import CollectionWheelModel
 from ui.collection_wheel_dialog import CollectionWheelDialog
 from collection_rom_organization import build_collection_rom_organization_audit
 from ui.collection_rom_organization_dialog import CollectionRomOrganizationAuditDialog
+from collection_rom_organization_plan import (
+    CollectionRomOrganizationPlanError,
+    build_collection_rom_organization_plan,
+)
+from ui.collection_rom_organization_plan_dialog import CollectionRomOrganizationPlanDialog
 
 # Info icon unicode (using standard info symbol)
 INFO_ICON = "ℹ"
@@ -49,6 +54,7 @@ class CollectionPage:
         self.collection_wheel_model = CollectionWheelModel()
         self.collection_wheel_dialog = None
         self.collection_rom_organization_audit_dialog = None
+        self.collection_rom_organization_plan_dialog = None
 
         # v3.1 NEW: Pagination state
         self.current_page = 1
@@ -278,6 +284,10 @@ class CollectionPage:
         if self.collection_rom_organization_audit_dialog is not None:
             self.collection_rom_organization_audit_dialog.close()
             self.collection_rom_organization_audit_dialog = None
+
+        if self.collection_rom_organization_plan_dialog is not None:
+            self.collection_rom_organization_plan_dialog.close()
+            self.collection_rom_organization_plan_dialog = None
 
         if self.collection_update_discovery_dialog is not None:
             self.collection_update_discovery_dialog.close()
@@ -3120,8 +3130,50 @@ class CollectionPage:
             self.frame,
             audit,
             on_close=self._collection_rom_organization_audit_closed,
+            on_preview_plan=self._preview_collection_rom_organization_plan,
         )
         self.collection_rom_organization_audit_dialog = dialog
+
+    def _preview_collection_rom_organization_plan(self, audit):
+        """Freeze the audit's safe move rows into an immutable read-only plan."""
+        if self.collection_rom_organization_plan_dialog is not None:
+            try:
+                self.collection_rom_organization_plan_dialog.dialog.lift()
+                self.collection_rom_organization_plan_dialog.dialog.focus_force()
+                return
+            except tk.TclError:
+                self.collection_rom_organization_plan_dialog = None
+
+        try:
+            from collection_plan_apply import collection_revision_token
+
+            revision = collection_revision_token(self.data_manager)
+            plan = build_collection_rom_organization_plan(
+                audit,
+                copy.deepcopy(self.data_manager.data),
+                revision,
+            )
+        except (CollectionRomOrganizationPlanError, OSError, ValueError) as error:
+            self._log(f"ROM organization plan preview failed: {error}", "Error")
+            messagebox.showerror(
+                "ROM Organization Plan",
+                f"The safe ROM move plan could not be frozen:\n\n{error}",
+                parent=self.frame,
+            )
+            return
+
+        if self.collection_rom_organization_audit_dialog is not None:
+            self.collection_rom_organization_audit_dialog.close()
+
+        dialog = CollectionRomOrganizationPlanDialog(
+            self.frame,
+            plan,
+            on_close=self._collection_rom_organization_plan_closed,
+        )
+        self.collection_rom_organization_plan_dialog = dialog
+
+    def _collection_rom_organization_plan_closed(self):
+        self.collection_rom_organization_plan_dialog = None
 
     def _collection_rom_organization_audit_closed(self):
         self.collection_rom_organization_audit_dialog = None

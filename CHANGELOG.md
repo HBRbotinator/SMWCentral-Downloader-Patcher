@@ -4,6 +4,15 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Immutable Collection ROM organization move preview
+
+- The read-only ROM layout audit can now freeze its safe **Would move** rows into an immutable move plan without touching ROM/save files or Collection metadata.
+- Move candidates now require exact modern `files[]` byte identity: a lowercase SHA-256, recorded byte size, a present non-symlink source, and a current source size that still matches Collection state.
+- The move plan captures the current Collection revision plus each source path, target path, SHA-256, byte size, source modification time, primary flag, and per-ROM SMWC provenance.
+- Plan finalization rechecks that Collection layout metadata still resolves to the audited destination and that the target path is still absent; stale audit state fails closed and must be audited again.
+- Audit blockers remain explicitly excluded from the safe move plan rather than being silently converted into filesystem actions.
+- The plan preview has no Apply/Execute action. Save migration and filesystem execution remain separate later boundaries.
+
 ### Read-only Collection ROM organization audit
 
 - Added **Audit ROM Layout...** to the Collection page for comparing recorded ROM assets with the configured type/difficulty output layout without changing disk or Collection state.

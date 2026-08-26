@@ -33,9 +33,16 @@ _STATUS_LABELS = {
 class CollectionRomOrganizationAuditDialog:
     """Modal, read-only presentation of a Collection ROM organization audit."""
 
-    def __init__(self, parent, audit: CollectionRomOrganizationAudit, on_close=None):
+    def __init__(
+        self,
+        parent,
+        audit: CollectionRomOrganizationAudit,
+        on_close=None,
+        on_preview_plan=None,
+    ):
         self.audit = audit
         self._on_close = on_close
+        self._on_preview_plan = on_preview_plan
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Collection ROM Organization Audit")
@@ -167,6 +174,17 @@ class CollectionRomOrganizationAuditDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_preview_plan is not None and self.audit.move_candidate_count:
+            ttk.Button(
+                buttons,
+                text="Preview Safe Move Plan...",
+                command=self._preview_plan,
+            ).pack(side="right", padx=(0, 8))
+
+    def _preview_plan(self):
+        if self._on_preview_plan is None:
+            return
+        self._on_preview_plan(self.audit)
 
     def close(self):
         if self._closed:
