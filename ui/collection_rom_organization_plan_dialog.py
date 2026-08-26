@@ -10,9 +10,16 @@ from collection_rom_organization_plan import CollectionRomOrganizationPlan
 class CollectionRomOrganizationPlanDialog:
     """Modal preview of frozen safe ROM moves; no execution action is exposed."""
 
-    def __init__(self, parent, plan: CollectionRomOrganizationPlan, on_close=None):
+    def __init__(
+        self,
+        parent,
+        plan: CollectionRomOrganizationPlan,
+        on_close=None,
+        on_review_save_impact=None,
+    ):
         self.plan = plan
         self._on_close = on_close
+        self._on_review_save_impact = on_review_save_impact
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Collection ROM Organization Plan")
@@ -151,6 +158,17 @@ class CollectionRomOrganizationPlanDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_review_save_impact is not None:
+            ttk.Button(
+                buttons,
+                text="Review Save Impact...",
+                command=self._review_save_impact,
+            ).pack(side="right", padx=(0, 8))
+
+    def _review_save_impact(self):
+        if self._on_review_save_impact is None:
+            return
+        self._on_review_save_impact(self.plan, self.dialog)
 
     def close(self):
         if self._closed:

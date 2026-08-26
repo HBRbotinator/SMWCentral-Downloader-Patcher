@@ -4,6 +4,15 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Read-only ROM organization save-impact review
+
+- The immutable ROM organization move preview now exposes **Review Save Impact...** before any filesystem execution exists.
+- Save-impact discovery reports same-basename `.srm`/`.sav` files beside planned ROM sources, plus matching or explicitly associated saves found in configured Save Sync folders.
+- Colocated saves receive only a hypothetical same-directory target beside the planned ROM destination; occupied targets are reported as conflicts rather than overwritten or merged.
+- Configured/associated Save Sync files are treated as external/central evidence and are never assigned a migration destination because emulator save-location policy cannot be inferred from Save Sync settings.
+- A review with no detected save still warns that emulator-specific save state may exist elsewhere.
+- This boundary performs no ROM/save move, rename, copy, delete, directory creation, Collection rewrite, or config persistence.
+
 ### Immutable Collection ROM organization move preview
 
 - The read-only ROM layout audit can now freeze its safe **Would move** rows into an immutable move plan without touching ROM/save files or Collection metadata.

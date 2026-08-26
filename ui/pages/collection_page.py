@@ -26,6 +26,11 @@ from collection_rom_organization_plan import (
     build_collection_rom_organization_plan,
 )
 from ui.collection_rom_organization_plan_dialog import CollectionRomOrganizationPlanDialog
+from collection_rom_save_impact import (
+    CollectionRomSaveImpactError,
+    build_collection_rom_save_impact_review,
+)
+from ui.collection_rom_save_impact_dialog import CollectionRomSaveImpactDialog
 
 # Info icon unicode (using standard info symbol)
 INFO_ICON = "ℹ"
@@ -3169,8 +3174,39 @@ class CollectionPage:
             self.frame,
             plan,
             on_close=self._collection_rom_organization_plan_closed,
+            on_review_save_impact=self._review_collection_rom_save_impact,
         )
         self.collection_rom_organization_plan_dialog = dialog
+
+    def _review_collection_rom_save_impact(self, plan, parent_dialog):
+        """Show read-only save relationships for an immutable ROM move plan."""
+        try:
+            from save_sync import clean_save_associations, clean_save_directories
+
+            stored_directories = self.config_manager.get("save_sync_dirs", [])
+            legacy_directory = self.config_manager.get("save_sync_dir", "")
+            directories = clean_save_directories(
+                stored_directories,
+                legacy_directory=legacy_directory,
+            )
+            associations = clean_save_associations(
+                self.config_manager.get("save_sync_associations", {})
+            )
+            review = build_collection_rom_save_impact_review(
+                plan,
+                configured_save_directories=directories,
+                save_associations=associations,
+            )
+        except (CollectionRomSaveImpactError, OSError, ValueError) as error:
+            self._log(f"ROM organization save-impact review failed: {error}", "Error")
+            messagebox.showerror(
+                "ROM Organization Save Impact",
+                f"Save impact could not be reviewed safely:\n\n{error}",
+                parent=parent_dialog,
+            )
+            return
+
+        CollectionRomSaveImpactDialog(parent_dialog, review)
 
     def _collection_rom_organization_plan_closed(self):
         self.collection_rom_organization_plan_dialog = None
