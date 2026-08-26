@@ -19,6 +19,8 @@ from ui_constants import get_page_padding, get_section_padding
 from file_explorer_utils import open_file_in_explorer, get_file_icon_unicode
 from collection_wheel_model import CollectionWheelModel
 from ui.collection_wheel_dialog import CollectionWheelDialog
+from collection_rom_organization import build_collection_rom_organization_audit
+from ui.collection_rom_organization_dialog import CollectionRomOrganizationAuditDialog
 
 # Info icon unicode (using standard info symbol)
 INFO_ICON = "ℹ"
@@ -46,6 +48,7 @@ class CollectionPage:
         self.data_manager = HackDataManager(logger=logger)
         self.collection_wheel_model = CollectionWheelModel()
         self.collection_wheel_dialog = None
+        self.collection_rom_organization_audit_dialog = None
 
         # v3.1 NEW: Pagination state
         self.current_page = 1
@@ -271,6 +274,10 @@ class CollectionPage:
         if self.collection_wheel_dialog:
             self.collection_wheel_dialog.close()
             self.collection_wheel_dialog = None
+
+        if self.collection_rom_organization_audit_dialog is not None:
+            self.collection_rom_organization_audit_dialog.close()
+            self.collection_rom_organization_audit_dialog = None
 
         if self.collection_update_discovery_dialog is not None:
             self.collection_update_discovery_dialog.close()
@@ -3075,6 +3082,50 @@ class CollectionPage:
         except (tk.TclError, AttributeError):
             return False
 
+    def _open_collection_rom_organization_audit(self):
+        """Show a read-only audit of Collection ROM layout drift."""
+        if self.collection_rom_organization_audit_dialog is not None:
+            try:
+                self.collection_rom_organization_audit_dialog.dialog.lift()
+                self.collection_rom_organization_audit_dialog.dialog.focus_force()
+                return
+            except tk.TclError:
+                self.collection_rom_organization_audit_dialog = None
+
+        output_dir = str(self.config_manager.get("output_dir", "") or "").strip()
+        if not output_dir:
+            messagebox.showinfo(
+                "ROM Organization Audit",
+                "Configure the ROM output directory in Settings before auditing the "
+                "Collection library layout.",
+                parent=self.frame,
+            )
+            return
+
+        try:
+            audit = build_collection_rom_organization_audit(
+                copy.deepcopy(self.data_manager.data),
+                output_dir,
+            )
+        except (TypeError, ValueError, OSError) as error:
+            self._log(f"ROM organization audit failed: {error}", "Error")
+            messagebox.showerror(
+                "ROM Organization Audit",
+                f"The Collection ROM layout could not be audited safely:\n\n{error}",
+                parent=self.frame,
+            )
+            return
+
+        dialog = CollectionRomOrganizationAuditDialog(
+            self.frame,
+            audit,
+            on_close=self._collection_rom_organization_audit_closed,
+        )
+        self.collection_rom_organization_audit_dialog = dialog
+
+    def _collection_rom_organization_audit_closed(self):
+        self.collection_rom_organization_audit_dialog = None
+
     def _create_pagination_controls(self):
         """Create pagination controls"""
         pagination_frame = ttk.Frame(self.frame)
@@ -3108,7 +3159,14 @@ class CollectionPage:
             text="Find Update...",
             command=self._open_collection_update_discovery,
         )
-        self.collection_update_button.pack(side="left", padx=(0, 10))
+        self.collection_update_button.pack(side="left", padx=(0, 8))
+
+        self.collection_rom_audit_button = ttk.Button(
+            left_frame,
+            text="Audit ROM Layout...",
+            command=self._open_collection_rom_organization_audit,
+        )
+        self.collection_rom_audit_button.pack(side="left", padx=(0, 10))
 
         # Add Columns button
         ttk.Button(left_frame, text="⚙ Columns", command=self._show_column_config).pack(side="left", padx=(0, 15))

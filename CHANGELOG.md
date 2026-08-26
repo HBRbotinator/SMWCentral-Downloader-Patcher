@@ -4,6 +4,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Read-only Collection ROM organization audit
+
+- Added **Audit ROM Layout...** to the Collection page for comparing recorded ROM assets with the configured type/difficulty output layout without changing disk or Collection state.
+- The audit shows already-organized assets, safe future move candidates, missing sources, occupied targets, target collisions, malformed modern ROM metadata, and legacy references that require review.
+- Numeric Collection assets are only given a move candidate when per-ROM SMWC provenance matches the current numeric Collection identity; retained historical-submission ROMs remain review-only.
+- Local `usr_*` modern assets can be assessed from their user-owned type/difficulty metadata, while legacy `file_path`-only entries remain visible but are not promoted into move candidates.
+- No ROM/save move, rename, copy, delete, hashing, directory creation, metadata rewrite, or save migration is performed by this audit.
+
 ### Non-destructive ROM metadata refresh
 
 - Refreshing an already-downloaded hack no longer moves its existing ROM when SMWCentral difficulty metadata points at a different configured output folder.
