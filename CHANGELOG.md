@@ -4,6 +4,13 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Non-destructive ROM metadata refresh
+
+- Refreshing an already-downloaded hack no longer moves its existing ROM when SMWCentral difficulty metadata points at a different configured output folder.
+- The refresh updates catalogue metadata while leaving `file_path`, modern `files[]`, `additional_paths`, ROM bytes, and save files in place.
+- A new read-only ROM-location assessment reports configured layout drift without creating directories or changing Collection state.
+- Explicit ROM organization/consolidation remains a separate workflow; metadata refresh never performs a hidden relocation.
+
 ### ROM matcher calibration hardening
 
 - Added a read-only developer calibration tool for comparing known numeric Collection ROM filenames against a lightweight KaizOFF/SMWC catalogue without printing local filesystem paths.
