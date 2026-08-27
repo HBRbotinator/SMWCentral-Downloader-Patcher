@@ -16,13 +16,16 @@ class CollectionRomOrganizationPlanDialog:
         plan: CollectionRomOrganizationPlan,
         on_close=None,
         on_review_save_impact=None,
+        on_preview_execution_plan=None,
     ):
         self.plan = plan
         self._on_close = on_close
         self._on_review_save_impact = on_review_save_impact
+        self._on_preview_execution_plan = on_preview_execution_plan
         self._closed = False
         self._save_disposition_decision = None
         self._save_disposition_status_var = None
+        self._preview_execution_plan_button = None
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Collection ROM Organization Plan")
         self.dialog.geometry("1180x680")
@@ -159,6 +162,14 @@ class CollectionRomOrganizationPlanDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_preview_execution_plan is not None:
+            self._preview_execution_plan_button = ttk.Button(
+                buttons,
+                text="Preview Final Execution Plan...",
+                command=self._preview_execution_plan,
+                state="disabled",
+            )
+            self._preview_execution_plan_button.pack(side="right", padx=(0, 8))
         if self._on_review_save_impact is not None:
             ttk.Button(
                 buttons,
@@ -172,15 +183,27 @@ class CollectionRomOrganizationPlanDialog:
         self._on_review_save_impact(self.plan, self.dialog)
 
     def set_save_disposition_decision(self, decision):
-        """Reflect a detached reviewed decision without enabling execution."""
+        """Reflect detached review intent and enable only final read-only planning."""
         self._save_disposition_decision = decision
         if self._save_disposition_status_var is None:
             return
         self._save_disposition_status_var.set(
             f"Save dispositions reviewed: {decision.approved_move_count} ROM move(s) may proceed "
-            f"to the next planning step; {decision.blocked_move_count} blocked. "
+            f"to final execution-plan preview; {decision.blocked_move_count} blocked. "
             f"Save migrations selected: {decision.migrate_save_count}; "
             f"leave in place: {decision.leave_save_count}. No filesystem action exists yet."
+        )
+        if self._preview_execution_plan_button is not None:
+            state = "normal" if decision.approved_move_count > 0 else "disabled"
+            self._preview_execution_plan_button.configure(state=state)
+
+    def _preview_execution_plan(self):
+        if self._on_preview_execution_plan is None or self._save_disposition_decision is None:
+            return
+        self._on_preview_execution_plan(
+            self.plan,
+            self._save_disposition_decision,
+            self.dialog,
         )
 
     def close(self):

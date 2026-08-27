@@ -4,6 +4,16 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Final immutable ROM/save organization execution preview
+
+- Reviewed ROM organization plans can now produce a **Preview Final Execution Plan...** after save dispositions are complete.
+- Final planning rechecks the exact Collection revision and rebuilds the save-impact review; changed save evidence invalidates the saved disposition fingerprint and must be reviewed again.
+- Every approved ROM source is SHA-256 verified against its recorded modern `files[]` hash in addition to its recorded size and source modification time.
+- Every colocated save selected for migration is SHA-256 hashed and frozen with exact source/target, size, and modification-time preconditions.
+- Explicit **Leave in place** save choices are retained in the final preview, while ROM moves blocked during save review and all associated save actions are excluded.
+- ROM and save targets are required to remain absent and inside the configured ROM output root; duplicate execution targets fail closed.
+- The final preview contains no Apply/Execute action and performs no move, copy, rename, delete, directory creation, Collection rewrite, or Save Sync persistence.
+
 ### Explicit save dispositions for ROM organization
 
 - The immutable ROM organization preview now opens **Review Save Dispositions...** and requires explicit user choices before save-aware filesystem planning can continue.

@@ -31,6 +31,13 @@ from collection_rom_save_impact import (
     build_collection_rom_save_impact_review,
 )
 from ui.collection_rom_save_impact_dialog import CollectionRomSaveImpactDialog
+from collection_rom_organization_execution_plan import (
+    CollectionRomOrganizationExecutionPlanError,
+    build_collection_rom_organization_execution_plan,
+)
+from ui.collection_rom_organization_execution_plan_dialog import (
+    CollectionRomOrganizationExecutionPlanDialog,
+)
 
 # Info icon unicode (using standard info symbol)
 INFO_ICON = "ℹ"
@@ -61,6 +68,7 @@ class CollectionPage:
         self.collection_rom_organization_audit_dialog = None
         self.collection_rom_organization_plan_dialog = None
         self.collection_rom_save_impact_dialog = None
+        self.collection_rom_organization_execution_plan_dialog = None
         self._last_collection_rom_save_disposition_review = None
         self._last_collection_rom_save_disposition_decision = None
 
@@ -296,6 +304,10 @@ class CollectionPage:
         if self.collection_rom_save_impact_dialog is not None:
             self.collection_rom_save_impact_dialog.close()
             self.collection_rom_save_impact_dialog = None
+
+        if self.collection_rom_organization_execution_plan_dialog is not None:
+            self.collection_rom_organization_execution_plan_dialog.close()
+            self.collection_rom_organization_execution_plan_dialog = None
 
         if self.collection_rom_organization_plan_dialog is not None:
             self.collection_rom_organization_plan_dialog.close()
@@ -3184,6 +3196,7 @@ class CollectionPage:
             plan,
             on_close=self._collection_rom_organization_plan_closed,
             on_review_save_impact=self._review_collection_rom_save_impact,
+            on_preview_execution_plan=self._preview_collection_rom_organization_execution_plan,
         )
         self.collection_rom_organization_plan_dialog = dialog
 
@@ -3243,15 +3256,93 @@ class CollectionPage:
                 parent=self.frame,
             )
             return False
+        if self.collection_rom_organization_execution_plan_dialog is not None:
+            self.collection_rom_organization_execution_plan_dialog.close()
+            self.collection_rom_organization_execution_plan_dialog = None
         self._last_collection_rom_save_disposition_review = review
         self._last_collection_rom_save_disposition_decision = decision
         self.collection_rom_organization_plan_dialog.set_save_disposition_decision(decision)
         return True
 
+    def _preview_collection_rom_organization_execution_plan(
+        self,
+        plan,
+        decision,
+        parent_dialog,
+    ):
+        """Revalidate review evidence and show the final immutable execution preview."""
+        if self.collection_rom_organization_execution_plan_dialog is not None:
+            try:
+                self.collection_rom_organization_execution_plan_dialog.dialog.lift()
+                self.collection_rom_organization_execution_plan_dialog.dialog.focus_force()
+                return
+            except tk.TclError:
+                self.collection_rom_organization_execution_plan_dialog = None
+
+        if (
+            self.collection_rom_organization_plan_dialog is None
+            or self.collection_rom_organization_plan_dialog.plan != plan
+            or self._last_collection_rom_save_disposition_decision != decision
+        ):
+            messagebox.showerror(
+                "Final ROM Organization Plan",
+                "The reviewed ROM/save decisions no longer belong to the current move plan. "
+                "Review save dispositions again.",
+                parent=parent_dialog,
+            )
+            return
+
+        try:
+            from collection_plan_apply import collection_revision_token
+            from save_sync import clean_save_associations, clean_save_directories
+
+            stored_directories = self.config_manager.get("save_sync_dirs", [])
+            legacy_directory = self.config_manager.get("save_sync_dir", "")
+            directories = clean_save_directories(
+                stored_directories,
+                legacy_directory=legacy_directory,
+            )
+            associations = clean_save_associations(
+                self.config_manager.get("save_sync_associations", {})
+            )
+            execution_plan = build_collection_rom_organization_execution_plan(
+                plan,
+                decision,
+                current_collection_revision_token=collection_revision_token(self.data_manager),
+                configured_save_directories=directories,
+                save_associations=associations,
+            )
+        except (
+            CollectionRomOrganizationExecutionPlanError,
+            OSError,
+            ValueError,
+        ) as error:
+            self._log(f"Final ROM organization plan failed: {error}", "Error")
+            messagebox.showerror(
+                "Final ROM Organization Plan",
+                f"The reviewed ROM/save plan is stale or unsafe:\n\n{error}",
+                parent=parent_dialog,
+            )
+            return
+
+        self.collection_rom_organization_execution_plan_dialog = (
+            CollectionRomOrganizationExecutionPlanDialog(
+                parent_dialog,
+                execution_plan,
+                on_close=self._collection_rom_organization_execution_plan_closed,
+            )
+        )
+
+    def _collection_rom_organization_execution_plan_closed(self):
+        self.collection_rom_organization_execution_plan_dialog = None
+
     def _collection_rom_save_impact_closed(self):
         self.collection_rom_save_impact_dialog = None
 
     def _collection_rom_organization_plan_closed(self):
+        if self.collection_rom_organization_execution_plan_dialog is not None:
+            self.collection_rom_organization_execution_plan_dialog.close()
+            self.collection_rom_organization_execution_plan_dialog = None
         if self.collection_rom_save_impact_dialog is not None:
             self.collection_rom_save_impact_dialog.close()
             self.collection_rom_save_impact_dialog = None
