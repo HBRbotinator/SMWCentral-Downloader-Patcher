@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 class CollectionRomOrganizationExecutionPlanDialogContractTests(unittest.TestCase):
-    def test_final_preview_is_read_only_and_has_no_apply_action(self):
+    def test_final_preview_exposes_transactional_apply_without_mutating_itself(self):
         path = ROOT / "ui" / "collection_rom_organization_execution_plan_dialog.py"
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -32,9 +32,10 @@ class CollectionRomOrganizationExecutionPlanDialogContractTests(unittest.TestCas
             elif isinstance(func, ast.Attribute):
                 called.add(func.attr)
         self.assertTrue(forbidden_names.isdisjoint(called), sorted(called))
-        self.assertNotIn('text="Apply', source)
+        self.assertIn('text="Apply Organization..."', source)
         self.assertNotIn('text="Execute', source)
-        self.assertIn("Read-only final execution preview", source)
+        self.assertIn("Final reviewed execution preview", source)
+        self.assertIn("self._on_apply(self.plan, self.dialog)", source)
         self.assertIn('text="Close"', source)
 
     def test_reviewed_plan_dialog_enables_only_final_preview_after_dispositions(self):
@@ -54,6 +55,8 @@ class CollectionRomOrganizationExecutionPlanDialogContractTests(unittest.TestCas
         self.assertIn("build_collection_rom_organization_execution_plan(", source)
         self.assertIn("current_collection_revision_token=collection_revision_token", source)
         self.assertIn("CollectionRomOrganizationExecutionPlanDialog", source)
+        self.assertIn("apply_collection_rom_organization_execution_plan", source)
+        self.assertIn("on_apply=self._apply_collection_rom_organization_execution_plan", source)
 
     def test_final_plan_model_contains_no_mutating_filesystem_calls(self):
         source = (ROOT / "collection_rom_organization_execution_plan.py").read_text(

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 from collection_rom_organization_execution_plan import (
     CollectionRomOrganizationExecutionPlan,
@@ -10,12 +10,19 @@ from collection_rom_organization_execution_plan import (
 
 
 class CollectionRomOrganizationExecutionPlanDialog:
-    """Modal final execution-plan preview; no filesystem execution exists here."""
+    """Modal final execution-plan preview with explicit transactional Apply."""
 
-    def __init__(self, parent, plan: CollectionRomOrganizationExecutionPlan, on_close=None):
+    def __init__(
+        self,
+        parent,
+        plan: CollectionRomOrganizationExecutionPlan,
+        on_close=None,
+        on_apply=None,
+    ):
         self.plan = plan
         self._parent = parent
         self._on_close = on_close
+        self._on_apply = on_apply
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Final ROM Organization Execution Plan")
@@ -39,9 +46,10 @@ class CollectionRomOrganizationExecutionPlanDialog:
         ttk.Label(
             outer,
             text=(
-                "Read-only final execution preview. ROM and selected colocated-save bytes have "
-                "been revalidated and frozen into exact source → target operations. No filesystem "
-                "or Collection mutation is performed by this dialog."
+                "Final reviewed execution preview. ROM and selected colocated-save bytes have "
+                "been revalidated and frozen into exact source → target operations. Apply copies "
+                "to new targets first, commits Collection paths second, and deletes old reviewed "
+                "sources only after the transaction reaches its commit point."
             ),
             wraplength=1120,
             justify="left",
@@ -77,9 +85,10 @@ class CollectionRomOrganizationExecutionPlanDialog:
         ttk.Label(
             outer,
             text=(
-                "A later Apply boundary must consume only this immutable plan and verify the same "
-                "Collection revision, source hashes/sizes/mtimes, and target absence again. It must "
-                "not re-run organization or save-disposition decisions."
+                "Apply consumes only this immutable plan and verifies the same Collection revision, "
+                "source hashes/sizes/mtimes, target absence, and colocated-save set again. Existing "
+                "targets are never overwritten, and Apply does not re-run organization or "
+                "save-disposition decisions."
             ),
             wraplength=1120,
             justify="left",
@@ -88,6 +97,38 @@ class CollectionRomOrganizationExecutionPlanDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_apply is not None:
+            ttk.Button(
+                buttons,
+                text="Apply Organization...",
+                command=self._confirm_apply,
+            ).pack(side="right", padx=(0, 8))
+
+
+    def _confirm_apply(self):
+        if self._on_apply is None:
+            return
+        save_text = (
+            f" and {len(self.plan.save_moves)} reviewed colocated save(s)"
+            if self.plan.save_moves
+            else ""
+        )
+        confirmed = messagebox.askyesno(
+            "Apply ROM Organization",
+            (
+                f"Move {len(self.plan.rom_moves)} reviewed ROM(s){save_text}?\n\n"
+                "The transaction will never overwrite an existing target. It copies and "
+                "verifies every target first, atomically updates Collection paths, then "
+                "removes only the reviewed old source files after the commit point.\n\n"
+                "Saves explicitly marked Leave in place will not be moved. Apply exactly "
+                "this finalized plan?"
+            ),
+            icon="warning",
+            default=messagebox.NO,
+            parent=self.dialog,
+        )
+        if confirmed:
+            self._on_apply(self.plan, self.dialog)
 
     def _build_move_table(self, notebook, title, rows, *, is_save):
         frame = ttk.Frame(notebook, padding=8)

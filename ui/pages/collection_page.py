@@ -3330,8 +3330,125 @@ class CollectionPage:
                 parent_dialog,
                 execution_plan,
                 on_close=self._collection_rom_organization_execution_plan_closed,
+                on_apply=self._apply_collection_rom_organization_execution_plan,
             )
         )
+
+    def _apply_collection_rom_organization_execution_plan(
+        self,
+        execution_plan,
+        parent_dialog,
+    ):
+        """Execute only the already-finalized ROM/save organization plan."""
+        dialog = self.collection_rom_organization_execution_plan_dialog
+        if dialog is None or dialog.plan != execution_plan:
+            messagebox.showerror(
+                "Apply ROM Organization",
+                "The final organization preview is no longer active. Run the audit again.",
+                parent=parent_dialog,
+            )
+            return
+
+        try:
+            from download_state_manager import is_download_active
+
+            if is_download_active():
+                messagebox.showwarning(
+                    "Download in Progress",
+                    "ROM organization cannot run while a download/patch operation is active.",
+                    parent=parent_dialog,
+                )
+                return
+        except ImportError:
+            pass
+
+        from collection_rom_organization_apply import (
+            CollectionRomOrganizationApplyError,
+            CollectionRomOrganizationRecoveryError,
+            CollectionRomOrganizationRecoveryRequiredError,
+            CollectionRomOrganizationStaleStateError,
+            apply_collection_rom_organization_execution_plan,
+        )
+
+        try:
+            parent_dialog.configure(cursor="wait")
+            parent_dialog.update_idletasks()
+            result = apply_collection_rom_organization_execution_plan(
+                execution_plan,
+                self.data_manager,
+            )
+        except CollectionRomOrganizationRecoveryRequiredError as error:
+            self._reload_collection_ingestion_live_state()
+            self._close_collection_rom_organization_workflow()
+            self._log(f"ROM organization committed but cleanup requires recovery: {error}", "Error")
+            messagebox.showerror(
+                "ROM Organization Recovery Required",
+                (
+                    "The reviewed Collection path changes were committed, but cleanup of "
+                    "the old source files did not finish. A recovery journal remains.\n\n"
+                    f"{error}\n\nClose the application and resolve the prompted startup "
+                    "recovery before making further Collection changes."
+                ),
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+        except (
+            CollectionRomOrganizationStaleStateError,
+            CollectionRomOrganizationRecoveryError,
+            CollectionRomOrganizationApplyError,
+            OSError,
+        ) as error:
+            self._log(f"ROM organization Apply failed: {error}", "Error")
+            messagebox.showerror(
+                "ROM Organization Not Applied",
+                (
+                    "The finalized ROM/save organization plan could not be applied safely. "
+                    "Any pre-commit filesystem changes were rolled back when possible.\n\n"
+                    f"{error}\n\nRun the ROM layout audit again before retrying."
+                ),
+                parent=parent_dialog,
+            )
+            return
+        finally:
+            try:
+                if parent_dialog.winfo_exists():
+                    parent_dialog.configure(cursor="")
+            except tk.TclError:
+                pass
+
+        self._reload_collection_ingestion_live_state()
+        self._close_collection_rom_organization_workflow()
+        self._log(
+            f"Organized {result.rom_move_count} ROM(s) and {result.save_move_count} save(s)",
+            "Information",
+        )
+        messagebox.showinfo(
+            "ROM Organization Complete",
+            (
+                f"Moved {result.rom_move_count} ROM(s) and {result.save_move_count} "
+                "reviewed save(s). Collection paths now reference the verified targets.\n\n"
+                "Saves explicitly left in place were not changed."
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _close_collection_rom_organization_workflow(self):
+        """Close all detached organizer dialogs/review state after Apply or recovery."""
+        for attr in (
+            "collection_rom_organization_execution_plan_dialog",
+            "collection_rom_save_impact_dialog",
+            "collection_rom_organization_plan_dialog",
+            "collection_rom_organization_audit_dialog",
+        ):
+            dialog = getattr(self, attr, None)
+            setattr(self, attr, None)
+            if dialog is not None:
+                try:
+                    dialog.close()
+                except tk.TclError:
+                    pass
+        self._last_collection_rom_save_disposition_review = None
+        self._last_collection_rom_save_disposition_decision = None
 
     def _collection_rom_organization_execution_plan_closed(self):
         self.collection_rom_organization_execution_plan_dialog = None

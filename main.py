@@ -898,13 +898,14 @@ def main():
                 if info.state == "prepared"
                 else "already committed and needs cleanup to finish"
             )
+            transaction_kind = getattr(info, "transaction_kind", "Collection metadata")
             targets = ", ".join(info.affected_targets)
             return messagebox.askyesno(
                 "Collection Transaction Recovery Required",
                 (
-                    "A coordinated Collection transaction journal was found before "
+                    f"A coordinated {transaction_kind} transaction journal was found before "
                     "the application UI started. The transaction is "
-                    f"{state_description}.\n\nAffected stores: {targets}\n\n"
+                    f"{state_description}.\n\nAffected targets: {targets}\n\n"
                     "This journal may belong to another SMWC Downloader & Patcher "
                     "instance that is still applying changes. Close every other "
                     "application instance first. Only choose Yes after confirming no "

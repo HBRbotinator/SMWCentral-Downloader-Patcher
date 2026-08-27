@@ -4,6 +4,17 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Transactional ROM/save organization Apply
+
+- The finalized ROM/save organization preview now exposes an explicit **Apply Organization...** confirmation boundary.
+- Apply consumes only the immutable final execution plan; it does not rerun layout decisions or save-disposition semantics.
+- Reviewed ROM/save bytes are revalidated immediately before mutation, target paths must still be absent, and the current colocated `.srm`/`.sav` set must still match the reviewed plan.
+- Files are copied to exclusively-created targets and verified first; Collection `files[]` paths and the primary `file_path` projection are committed only after all target copies are ready.
+- Existing targets are never overwritten, and a finalized ROM destination already referenced elsewhere in Collection metadata fails closed.
+- Old reviewed ROM/save sources are deleted only after a journaled commit point. Prepared interruptions roll back Collection/targets; committed interruptions keep the new state and finish source cleanup during recovery.
+- Startup recovery now recognizes both Collection metadata Apply journals and ROM-organization journals, requires the same explicit other-instance confirmation, and refuses to guess recovery order if both journal types somehow exist.
+- Collection metadata Apply also refuses to start while a ROM-organization journal is pending.
+
 ### Final immutable ROM/save organization execution preview
 
 - Reviewed ROM organization plans can now produce a **Preview Final Execution Plan...** after save dispositions are complete.

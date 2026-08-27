@@ -696,6 +696,21 @@ class CollectionPlanApplyTest(unittest.TestCase):
             )
         self.assertFalse((outside_dir / "refs.json").exists())
 
+    def test_collection_apply_refuses_pending_rom_organization_journal(self):
+        root, _, manager, hints = self._fixture()
+        plan = self._plan(collect_store_preconditions(manager, hints))
+        (root / ".collection-rom-organization.journal.json").write_text(
+            "{}",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            CollectionPlanApplyError,
+            "ROM organization transaction journal",
+        ):
+            apply_collection_change_plan(plan, manager, hints)
+
+
 
 if __name__ == "__main__":
     unittest.main()

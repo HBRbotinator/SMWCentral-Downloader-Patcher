@@ -154,10 +154,13 @@ The current matcher was calibrated against a legacy real-world Collection snapsh
    - If no colocated save is detected for a planned ROM, explicitly acknowledge that result before saving the review. This means only that the known review found no colocated `.srm`/`.sav`; it does not prove emulator save state is absent elsewhere
    - Saved dispositions are bound to a fingerprint of the exact immutable ROM plan and discovered save evidence so a later execution-plan boundary can fail closed if the review becomes stale
    - After a complete review, **Preview Final Execution Plan...** re-discovers save evidence, rechecks the live Collection revision, SHA-256 verifies every approved ROM, and hashes every colocated save selected for migration before freezing the exact ROM/save source → target operations
-   - The final preview retains explicit saves that will be left in place and excludes ROM moves blocked during review; it still has no Apply/Execute action and performs no filesystem or Collection mutation
+   - The final preview retains explicit saves that will be left in place and excludes ROM moves blocked during review; use **Apply Organization...** only after reviewing those exact final operations
+   - Apply rechecks the Collection revision, exact ROM/save hashes/sizes/mtimes, target absence, and the colocated `.srm`/`.sav` set. A new or changed companion save makes the plan stale instead of being ignored
+   - Organization uses a journaled copy → Collection commit → old-source cleanup sequence. Targets are created exclusively and never overwrite existing files; pre-commit failures roll back target copies and Collection state
+   - After the commit marker, Collection points at the verified targets and recovery only finishes deleting the reviewed old sources. Startup detects an interrupted organization journal and requires explicit confirmation that every other application instance is closed before recovery
    - Retained ROMs whose per-file SMWC provenance belongs to a different submission are intentionally review-only rather than inheriting the current record's catalogue layout
    - Numeric modern ROMs with missing provenance and legacy `file_path`-only entries are also review-only; the app does not invent migration semantics for them
-   - Save-file execution remains outside this plan. The disposition review records detached intent only; a later boundary must re-discover/revalidate save evidence before turning any choice into a filesystem operation
+   - Only colocated saves explicitly marked **Migrate with ROM** become filesystem operations. **Leave in place** saves and configured/associated Save Sync evidence are not moved or rewritten
 
 ![Collection Page](images/application-5.0-collection.png)
 
