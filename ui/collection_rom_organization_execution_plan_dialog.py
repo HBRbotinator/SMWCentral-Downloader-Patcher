@@ -64,6 +64,18 @@ class CollectionRomOrganizationExecutionPlanDialog:
         ttk.Label(outer, text=summary, font=("Segoe UI", 9, "bold")).pack(
             anchor="w", pady=(0, 4)
         )
+        if self.plan.save_sync_coverage_loss_count:
+            ttk.Label(
+                outer,
+                text=(
+                    f"Save Sync warning: {self.plan.save_sync_coverage_loss_count} migrated save(s) "
+                    "will leave configured Save Sync scan coverage. This was explicitly acknowledged "
+                    "during save review; Save Sync folders will not be changed automatically."
+                ),
+                foreground="#B00020",
+                wraplength=1120,
+                justify="left",
+            ).pack(anchor="w", pady=(0, 6))
         ttk.Label(
             outer,
             text=(
@@ -113,6 +125,12 @@ class CollectionRomOrganizationExecutionPlanDialog:
             if self.plan.save_moves
             else ""
         )
+        coverage_text = (
+            f"\n\nWarning: {self.plan.save_sync_coverage_loss_count} migrated save(s) will leave "
+            "configured Save Sync scan coverage. Save Sync folders will remain unchanged."
+            if self.plan.save_sync_coverage_loss_count
+            else ""
+        )
         confirmed = messagebox.askyesno(
             "Apply ROM Organization",
             (
@@ -120,8 +138,8 @@ class CollectionRomOrganizationExecutionPlanDialog:
                 "The transaction will never overwrite an existing target. It copies and "
                 "verifies every target first, atomically updates Collection paths, then "
                 "removes only the reviewed old source files after the commit point.\n\n"
-                "Saves explicitly marked Leave in place will not be moved. Apply exactly "
-                "this finalized plan?"
+                "Saves explicitly marked Leave in place will not be moved."
+                f"{coverage_text}\n\nApply exactly this finalized plan?"
             ),
             icon="warning",
             default=messagebox.NO,

@@ -37,6 +37,8 @@ class CollectionRomOrganizationExecutionPlanDialogContractTests(unittest.TestCas
         self.assertIn("Final reviewed execution preview", source)
         self.assertIn("self._on_apply(self.plan, self.dialog)", source)
         self.assertIn('text="Close"', source)
+        self.assertIn("Save Sync warning:", source)
+        self.assertIn("Save Sync folders will remain unchanged", source)
 
     def test_reviewed_plan_dialog_enables_only_final_preview_after_dispositions(self):
         source = (ROOT / "ui" / "collection_rom_organization_plan_dialog.py").read_text(

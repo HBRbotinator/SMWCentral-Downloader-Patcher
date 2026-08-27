@@ -43,10 +43,24 @@ class CollectionRomSaveImpactRow:
     mtime_ns: int
     possible_target_path: str = ""
     target_occupied: bool = False
+    save_sync_source_covered: bool = False
+    save_sync_target_covered: bool = False
 
     @property
     def colocated(self) -> bool:
         return self.source_kind == SOURCE_COLOCATED
+
+    @property
+    def save_sync_coverage_lost(self) -> bool:
+        return self.colocated and self.save_sync_source_covered and not self.save_sync_target_covered
+
+    @property
+    def save_sync_coverage_gained(self) -> bool:
+        return self.colocated and not self.save_sync_source_covered and self.save_sync_target_covered
+
+    @property
+    def save_sync_coverage_retained(self) -> bool:
+        return self.colocated and self.save_sync_source_covered and self.save_sync_target_covered
 
 
 @dataclass(frozen=True)
@@ -68,6 +82,10 @@ class CollectionRomSaveImpactReview:
     @property
     def target_conflict_count(self) -> int:
         return sum(row.target_occupied for row in self.rows)
+
+    @property
+    def save_sync_coverage_loss_count(self) -> int:
+        return sum(row.save_sync_coverage_lost for row in self.rows)
 
 
 def _absolute(path: str) -> str:
@@ -119,9 +137,15 @@ def _stat_save(path: str) -> tuple[int, int]:
     return stat.st_size, stat.st_mtime_ns
 
 
-def _colocated_rows(move: CollectionRomMoveOperation) -> list[CollectionRomSaveImpactRow]:
+def _colocated_rows(
+    move: CollectionRomMoveOperation,
+    configured_directories: Iterable[str],
+) -> list[CollectionRomSaveImpactRow]:
     source_dir = os.path.dirname(move.source_path)
     target_dir = os.path.dirname(move.target_path)
+    configured_identities = {_path_identity(path) for path in configured_directories}
+    source_covered = _path_identity(source_dir) in configured_identities
+    target_covered = _path_identity(target_dir) in configured_identities
     stem = os.path.splitext(os.path.basename(move.source_path))[0]
     rows: list[CollectionRomSaveImpactRow] = []
 
@@ -151,6 +175,8 @@ def _colocated_rows(move: CollectionRomMoveOperation) -> list[CollectionRomSaveI
                 mtime_ns=mtime_ns,
                 possible_target_path=possible_target,
                 target_occupied=target_occupied,
+                save_sync_source_covered=source_covered,
+                save_sync_target_covered=target_covered,
             )
         )
     return rows
@@ -227,7 +253,7 @@ def build_collection_rom_save_impact_review(
     seen_configured_collection_paths: set[tuple[str, str]] = set()
 
     for move in plan.moves:
-        colocated = _colocated_rows(move)
+        colocated = _colocated_rows(move, directories)
         rows.extend(colocated)
         seen = {_path_identity(row.save_path) for row in colocated}
         rows.extend(

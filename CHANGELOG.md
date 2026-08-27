@@ -4,6 +4,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Save Sync coverage-aware ROM organization
+
+- Colocated save review now distinguishes whether the save's current directory and planned destination directory are configured Save Sync scan sources.
+- Because Save Sync scans configured folders non-recursively, migrating a colocated save out of its configured source may remove it from later Save Sync discovery.
+- A **Migrate with ROM** choice that would leave configured Save Sync coverage now requires a second explicit acknowledgement; **Leave in place** and **Block this ROM move** remain available without that acknowledgement.
+- Save Sync coverage-loss acknowledgement is frozen into the detached review decision and final execution plan, and stale/configuration-changed evidence fails closed during final planning.
+- The final execution preview repeats the coverage-loss warning. Save Sync folders are never added, removed, or rewritten automatically by ROM organization.
+
 ### Transactional ROM/save organization Apply
 
 - The finalized ROM/save organization preview now exposes an explicit **Apply Organization...** confirmation boundary.

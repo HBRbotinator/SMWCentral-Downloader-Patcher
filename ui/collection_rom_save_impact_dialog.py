@@ -36,6 +36,7 @@ class CollectionRomSaveImpactDialog:
         self._closed = False
         self._companion_vars: dict[str, tk.StringVar] = {}
         self._ack_vars: dict[str, tk.BooleanVar] = {}
+        self._save_sync_coverage_ack_vars: dict[str, tk.BooleanVar] = {}
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Collection ROM Organization — Save Dispositions")
         self.dialog.geometry("1180x760")
@@ -71,7 +72,8 @@ class CollectionRomSaveImpactDialog:
             f"Related saves detected: {len(self.review.rows)}    "
             f"Beside ROM: {self.review.colocated_count}    "
             f"Configured/external: {self.review.external_count}    "
-            f"Possible target conflicts: {self.review.target_conflict_count}"
+            f"Possible target conflicts: {self.review.target_conflict_count}    "
+            f"Save Sync coverage loss warnings: {self.review.save_sync_coverage_loss_count}"
         )
         ttk.Label(outer, text=summary, font=("Segoe UI", 9, "bold")).pack(
             anchor="w", pady=(0, 10)
@@ -161,6 +163,42 @@ class CollectionRomSaveImpactDialog:
                             foreground="#B00020",
                             wraplength=960,
                         ).pack(anchor="w", padx=(14, 0), pady=(2, 0))
+                    if row.save_sync_coverage_lost:
+                        ttk.Label(
+                            save_frame,
+                            text=(
+                                "Save Sync coverage warning: this save currently lives directly in a "
+                                "configured Save Sync directory, but the planned destination directory is "
+                                "not configured. Migrating it may stop Save Sync from discovering this file."
+                            ),
+                            foreground="#B00020",
+                            wraplength=960,
+                            justify="left",
+                        ).pack(anchor="w", padx=(14, 0), pady=(4, 1))
+                        coverage_var = tk.BooleanVar(value=False)
+                        self._save_sync_coverage_ack_vars[key] = coverage_var
+                        ttk.Checkbutton(
+                            save_frame,
+                            text=(
+                                "I understand that migrating this save will move it out of configured "
+                                "Save Sync coverage. Do not change my Save Sync folders automatically."
+                            ),
+                            variable=coverage_var,
+                        ).pack(anchor="w", padx=(14, 0), pady=(1, 2))
+                    elif row.save_sync_coverage_retained:
+                        ttk.Label(
+                            save_frame,
+                            text="Save Sync coverage is retained because the destination directory is also configured.",
+                            foreground="gray",
+                            wraplength=960,
+                        ).pack(anchor="w", padx=(14, 0), pady=(2, 0))
+                    elif row.save_sync_coverage_gained:
+                        ttk.Label(
+                            save_frame,
+                            text="The planned destination directory is configured in Save Sync; migration would add scan coverage for this save.",
+                            foreground="gray",
+                            wraplength=960,
+                        ).pack(anchor="w", padx=(14, 0), pady=(2, 0))
             else:
                 var = tk.BooleanVar(value=False)
                 self._ack_vars[move.source_path] = var
@@ -223,11 +261,15 @@ class CollectionRomSaveImpactDialog:
     def _save(self):
         dispositions = {key: var.get().strip() for key, var in self._companion_vars.items()}
         acknowledgements = [path for path, var in self._ack_vars.items() if bool(var.get())]
+        coverage_acknowledgements = [
+            key for key, var in self._save_sync_coverage_ack_vars.items() if bool(var.get())
+        ]
         try:
             decision = finalize_collection_rom_save_disposition_decision(
                 self.review,
                 companion_dispositions=dispositions,
                 rom_only_acknowledgements=acknowledgements,
+                save_sync_coverage_loss_acknowledgements=coverage_acknowledgements,
             )
         except CollectionRomSaveDispositionError as error:
             messagebox.showinfo("Complete Save Review", str(error), parent=self.dialog)

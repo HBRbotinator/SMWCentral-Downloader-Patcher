@@ -69,6 +69,8 @@ class CollectionRomSaveImpactDialogContractTests(unittest.TestCase):
         self.assertIn('text="Leave this save in its current location"', source)
         self.assertIn('text="Block this ROM move"', source)
         self.assertIn('text="Save Disposition Review"', source)
+        self.assertIn("Save Sync coverage warning", source)
+        self.assertIn("save_sync_coverage_loss_acknowledgements=coverage_acknowledgements", source)
         self.assertIn("no colocated .srm/.sav companion was detected", source)
         self.assertNotIn('text="Apply', source)
         self.assertNotIn('text="Execute', source)

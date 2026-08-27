@@ -208,6 +208,77 @@ class CollectionRomSaveDispositionTests(unittest.TestCase):
                     rom_only_acknowledgements=[plan.moves[0].source_path],
                 )
 
+
+    def test_migrating_colocated_save_out_of_save_sync_coverage_requires_acknowledgement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = self._plan(root)
+            save = Path(plan.moves[0].source_path).with_suffix(".srm")
+            save.write_bytes(b"save")
+            review = build_collection_rom_save_impact_review(
+                plan,
+                [str(save.parent.resolve())],
+            )
+            row = review.rows[0]
+            key = self._key(row)
+            self.assertTrue(row.save_sync_coverage_lost)
+
+            with self.assertRaisesRegex(CollectionRomSaveDispositionError, "out of configured Save Sync coverage"):
+                finalize_collection_rom_save_disposition_decision(
+                    review,
+                    companion_dispositions={key: "migrate_with_rom"},
+                )
+
+            decision = finalize_collection_rom_save_disposition_decision(
+                review,
+                companion_dispositions={key: "migrate_with_rom"},
+                save_sync_coverage_loss_acknowledgements=[key],
+            )
+            companion = decision.move_decisions[0].companions[0]
+            self.assertTrue(companion.save_sync_coverage_loss_acknowledged)
+            self.assertEqual(1, decision.migrate_save_count)
+
+    def test_leave_or_block_does_not_require_save_sync_coverage_loss_acknowledgement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = self._plan(root)
+            save = Path(plan.moves[0].source_path).with_suffix(".srm")
+            save.write_bytes(b"save")
+            review = build_collection_rom_save_impact_review(
+                plan,
+                [str(save.parent.resolve())],
+            )
+            row = review.rows[0]
+            key = self._key(row)
+
+            leave = finalize_collection_rom_save_disposition_decision(
+                review,
+                companion_dispositions={key: "leave_in_place"},
+            )
+            blocked = finalize_collection_rom_save_disposition_decision(
+                review,
+                companion_dispositions={key: "block_rom_move"},
+            )
+            self.assertFalse(leave.move_decisions[0].companions[0].save_sync_coverage_loss_acknowledged)
+            self.assertEqual(1, blocked.blocked_move_count)
+
+    def test_save_sync_coverage_acknowledgement_rejects_non_loss_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = self._plan(root)
+            save = Path(plan.moves[0].source_path).with_suffix(".srm")
+            save.write_bytes(b"save")
+            review = build_collection_rom_save_impact_review(plan)
+            row = review.rows[0]
+            key = self._key(row)
+
+            with self.assertRaisesRegex(CollectionRomSaveDispositionError, "do not lose configured coverage"):
+                finalize_collection_rom_save_disposition_decision(
+                    review,
+                    companion_dispositions={key: "leave_in_place"},
+                    save_sync_coverage_loss_acknowledgements=[key],
+                )
+
     def test_review_fingerprint_changes_when_save_evidence_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -49,8 +49,13 @@ class CollectionRomSaveMoveOperation:
     sha256: str
     size_bytes: int
     source_mtime_ns: int
+    save_sync_coverage_loss_acknowledged: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.save_sync_coverage_loss_acknowledged, bool):
+            raise CollectionRomOrganizationExecutionPlanError(
+                "Save move Save Sync coverage acknowledgement must be boolean."
+            )
         if not self.collection_id.strip():
             raise CollectionRomOrganizationExecutionPlanError(
                 "Save move requires Collection identity."
@@ -106,6 +111,10 @@ class CollectionRomOrganizationExecutionPlan:
     blocked_move_count: int
     external_save_evidence_count: int
     rom_only_acknowledgement_count: int
+
+    @property
+    def save_sync_coverage_loss_count(self) -> int:
+        return sum(item.save_sync_coverage_loss_acknowledged for item in self.save_moves)
 
     def __post_init__(self) -> None:
         if not self.output_dir:
@@ -385,6 +394,17 @@ def build_collection_rom_organization_execution_plan(
         for companion in move_decision.companions:
             row = current_rows[_path_identity(companion.save_path)]
             if companion.disposition is SaveDisposition.MIGRATE_WITH_ROM:
+                if row.save_sync_coverage_lost and not companion.save_sync_coverage_loss_acknowledged:
+                    raise CollectionRomOrganizationExecutionPlanError(
+                        "Reviewed save migration would leave configured Save Sync coverage without explicit acknowledgement."
+                    )
+                if (
+                    not row.save_sync_coverage_lost
+                    and companion.save_sync_coverage_loss_acknowledged
+                ):
+                    raise CollectionRomOrganizationExecutionPlanError(
+                        "Reviewed Save Sync coverage-loss acknowledgement no longer matches current save evidence."
+                    )
                 target_save = _canonical(companion.possible_target_path)
                 if _path_identity(target_save) != _path_identity(row.possible_target_path):
                     raise CollectionRomOrganizationExecutionPlanError(
@@ -413,6 +433,9 @@ def build_collection_rom_organization_execution_plan(
                         sha256=save_sha256,
                         size_bytes=row.size_bytes,
                         source_mtime_ns=row.mtime_ns,
+                        save_sync_coverage_loss_acknowledged=(
+                            companion.save_sync_coverage_loss_acknowledged
+                        ),
                     )
                 )
             elif companion.disposition is SaveDisposition.LEAVE_IN_PLACE:

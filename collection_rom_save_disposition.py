@@ -41,6 +41,7 @@ class CollectionRomSaveCompanionDisposition:
     save_path: str
     disposition: SaveDisposition
     possible_target_path: str
+    save_sync_coverage_loss_acknowledged: bool = False
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,8 @@ def save_impact_review_fingerprint(review: CollectionRomSaveImpactReview) -> str
                 "mtime_ns": row.mtime_ns,
                 "possible_target_path": row.possible_target_path,
                 "target_occupied": row.target_occupied,
+                "save_sync_source_covered": row.save_sync_source_covered,
+                "save_sync_target_covered": row.save_sync_target_covered,
             }
             for row in review.rows
         ],
@@ -172,6 +175,7 @@ def finalize_collection_rom_save_disposition_decision(
     *,
     companion_dispositions: Mapping[str, SaveDisposition | str],
     rom_only_acknowledgements: Iterable[str] = (),
+    save_sync_coverage_loss_acknowledgements: Iterable[str] = (),
 ) -> CollectionRomSaveDispositionDecision:
     """Validate a complete explicit review and return detached immutable intent.
 
@@ -211,6 +215,22 @@ def finalize_collection_rom_save_disposition_decision(
             "Save disposition contains rows that are not part of this review."
         )
 
+    coverage_loss_keys = {
+        key
+        for key, row in expected_keys.items()
+        if getattr(row, "save_sync_coverage_lost", False)
+    }
+    coverage_acknowledgements = {
+        str(key)
+        for key in save_sync_coverage_loss_acknowledgements
+        if str(key)
+    }
+    unknown_coverage_acknowledgements = coverage_acknowledgements.difference(coverage_loss_keys)
+    if unknown_coverage_acknowledgements:
+        raise CollectionRomSaveDispositionError(
+            "Save Sync coverage acknowledgement contains rows that do not lose configured coverage."
+        )
+
     acknowledgements = {str(path) for path in rom_only_acknowledgements if str(path)}
     move_sources = {move.source_path for move in review.plan.moves}
     if not acknowledgements.issubset(move_sources):
@@ -240,6 +260,7 @@ def finalize_collection_rom_save_disposition_decision(
                     raise CollectionRomSaveDispositionError(
                         f"Invalid save disposition for {row.save_name!r}: {raw!r}"
                     ) from error
+                coverage_loss_acknowledged = False
                 if disposition is SaveDisposition.MIGRATE_WITH_ROM:
                     if not row.possible_target_path:
                         raise CollectionRomSaveDispositionError(
@@ -249,6 +270,12 @@ def finalize_collection_rom_save_disposition_decision(
                         raise CollectionRomSaveDispositionError(
                             f"Save {row.save_name!r} cannot migrate because its reviewed target is occupied."
                         )
+                    if row.save_sync_coverage_lost:
+                        if key not in coverage_acknowledgements:
+                            raise CollectionRomSaveDispositionError(
+                                f"Acknowledge that migrating {row.save_name!r} will move it out of configured Save Sync coverage."
+                            )
+                        coverage_loss_acknowledged = True
                 companion_decisions.append(
                     CollectionRomSaveCompanionDisposition(
                         collection_id=row.collection_id,
@@ -256,6 +283,7 @@ def finalize_collection_rom_save_disposition_decision(
                         save_path=row.save_path,
                         disposition=disposition,
                         possible_target_path=row.possible_target_path,
+                        save_sync_coverage_loss_acknowledged=coverage_loss_acknowledged,
                     )
                 )
             proceed_without = False

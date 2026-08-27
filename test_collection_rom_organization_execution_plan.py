@@ -267,6 +267,35 @@ class CollectionRomOrganizationExecutionPlanTests(unittest.TestCase):
                 )
             self.assertEqual(b"existing", target.read_bytes())
 
+
+    def test_save_sync_coverage_loss_acknowledgement_is_frozen_into_final_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = self._plan(root)
+            save = Path(plan.moves[0].source_path).with_suffix(".srm")
+            save.write_bytes(b"save")
+            configured = [str(save.parent.resolve())]
+            review = build_collection_rom_save_impact_review(plan, configured)
+            row = review.rows[0]
+            key = self._key(row)
+            decision = finalize_collection_rom_save_disposition_decision(
+                review,
+                companion_dispositions={key: SaveDisposition.MIGRATE_WITH_ROM},
+                save_sync_coverage_loss_acknowledgements=[key],
+            )
+
+            final_plan = build_collection_rom_organization_execution_plan(
+                plan,
+                decision,
+                current_collection_revision_token="revision",
+                configured_save_directories=configured,
+            )
+
+            self.assertEqual(1, final_plan.save_sync_coverage_loss_count)
+            self.assertTrue(
+                final_plan.save_moves[0].save_sync_coverage_loss_acknowledged
+            )
+
     def test_configured_save_evidence_is_retained_only_as_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -139,6 +139,51 @@ class CollectionRomSaveImpactTests(unittest.TestCase):
             self.assertEqual(SOURCE_COLOCATED, review.rows[0].source_kind)
 
 
+
+    def test_colocated_save_reports_save_sync_coverage_loss(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = self._plan(root)
+            save = root / "Old" / "Hack.srm"
+            save.write_bytes(b"save")
+
+            review = build_collection_rom_save_impact_review(
+                plan,
+                [str((root / "Old").resolve())],
+            )
+
+            row = review.rows[0]
+            self.assertTrue(row.save_sync_source_covered)
+            self.assertFalse(row.save_sync_target_covered)
+            self.assertTrue(row.save_sync_coverage_lost)
+            self.assertEqual(1, review.save_sync_coverage_loss_count)
+
+    def test_colocated_save_reports_retained_or_gained_save_sync_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = self._plan(root)
+            save = root / "Old" / "Hack.srm"
+            save.write_bytes(b"save")
+            source_dir = str((root / "Old").resolve())
+            target_dir = str((root / "ROMs" / "Kaizo" / "04 - Advanced").resolve())
+
+            retained = build_collection_rom_save_impact_review(
+                plan,
+                [source_dir, target_dir],
+            )
+            retained_row = retained.rows[0]
+            self.assertTrue(retained_row.save_sync_coverage_retained)
+            self.assertEqual(0, retained.save_sync_coverage_loss_count)
+
+            gained = build_collection_rom_save_impact_review(
+                plan,
+                [target_dir],
+            )
+            gained_row = gained.rows[0]
+            self.assertTrue(gained_row.save_sync_coverage_gained)
+            self.assertFalse(gained_row.save_sync_source_covered)
+            self.assertTrue(gained_row.save_sync_target_covered)
+
     def test_configured_association_is_not_repeated_for_multiple_variants(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
