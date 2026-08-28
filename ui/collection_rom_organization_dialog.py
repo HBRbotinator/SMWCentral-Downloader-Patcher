@@ -39,10 +39,12 @@ class CollectionRomOrganizationAuditDialog:
         audit: CollectionRomOrganizationAudit,
         on_close=None,
         on_preview_plan=None,
+        on_review_legacy_metadata=None,
     ):
         self.audit = audit
         self._on_close = on_close
         self._on_preview_plan = on_preview_plan
+        self._on_review_legacy_metadata = on_review_legacy_metadata
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Collection ROM Organization Audit")
@@ -180,6 +182,16 @@ class CollectionRomOrganizationAuditDialog:
                 text="Preview Safe Move Plan...",
                 command=self._preview_plan,
             ).pack(side="right", padx=(0, 8))
+        if self._on_review_legacy_metadata is not None and self.audit.legacy_path_count:
+            ttk.Button(
+                buttons,
+                text="Review Legacy ROM Metadata...",
+                command=self._review_legacy_metadata,
+            ).pack(side="right", padx=(0, 8))
+
+    def _review_legacy_metadata(self):
+        if self._on_review_legacy_metadata is not None:
+            self._on_review_legacy_metadata()
 
     def _preview_plan(self):
         if self._on_preview_plan is None:

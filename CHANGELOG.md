@@ -4,6 +4,16 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Read-only legacy Collection ROM metadata audit
+
+- The ROM organization audit now exposes **Review Legacy ROM Metadata...** when Collection still contains `file_path`-only ROM records.
+- The legacy audit is read-only and intentionally performs no hashing, Collection writes, ROM/save moves, copies, renames, deletes, or directory creation.
+- Existing numeric records without identity-migration provenance can be marked ready for a later metadata-backfill plan with the current Collection SMWC ID as proposed per-ROM provenance.
+- Local opaque `usr_*` records can be marked ready without inventing numeric SMWC provenance.
+- Numeric records that already carry prior-submission or identity-migration provenance remain review-only because the legacy `file_path` cannot safely be attributed to the current numeric ID automatically.
+- Missing ROMs, symbolic links, unsupported file types, malformed `files` metadata, unknown legacy identity forms, and the same path claimed by multiple Collection records are explicit blockers.
+- Ready rows still require exact SHA-256 hashing and a later immutable modernization plan before any `files[]` metadata is written.
+
 ### Save Sync coverage-aware ROM organization
 
 - Colocated save review now distinguishes whether the save's current directory and planned destination directory are configured Save Sync scan sources.

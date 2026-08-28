@@ -96,6 +96,10 @@ class CollectionRomOrganizationAudit:
     def attention_count(self) -> int:
         return sum(row.needs_action for row in self.rows)
 
+    @property
+    def legacy_path_count(self) -> int:
+        return sum(row.status == STATUS_LEGACY_PATH for row in self.rows)
+
 
 def _absolute(path: str) -> str:
     return os.path.abspath(os.path.expanduser(path))
