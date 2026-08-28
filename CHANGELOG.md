@@ -4,6 +4,13 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Final historical ROM/save execution preview
+
+- Historical ROM organization plans with completed save dispositions can now continue to **Preview Final Execution Plan...**.
+- Finalization re-discovers save evidence, verifies the detached review fingerprint, rechecks Collection revision and historical ROM SHA-256/size/mtime/target vacancy, and hashes each migrated save under stable filesystem-stat checks.
+- The immutable final plan retains the historical ROM submission/layout metadata together with exact ROM/save filesystem operations and Save Sync coverage-loss acknowledgements.
+- This remains a read-only boundary: no Collection or filesystem mutation and no Apply action are introduced yet.
+
 ### Historical ROM save-impact review
 
 - Immutable historical ROM move plans can now continue to **Review Save Dispositions...** using the same non-recursive colocated and configured Save Sync evidence rules as ordinary organization plans.

@@ -16,11 +16,14 @@ class CollectionRomHistoricalOrganizationPlanDialog:
         plan: HistoricalRomOrganizationPlan,
         on_close=None,
         on_review_save_impact=None,
+        on_preview_execution_plan=None,
     ):
         self.plan = plan
         self._on_close = on_close
         self._on_review_save_impact = on_review_save_impact
+        self._on_preview_execution_plan = on_preview_execution_plan
         self._save_disposition_decision = None
+        self._preview_execution_button = None
         self._save_disposition_status_var = None
         self._closed = False
         self.dialog = tk.Toplevel(parent)
@@ -152,8 +155,9 @@ class CollectionRomHistoricalOrganizationPlanDialog:
         ttk.Label(
             outer,
             text=(
-                "Save-impact review uses these exact historical move targets, but this boundary still "
-                "does not expose a final execution plan or Apply action."
+                "Save-impact review uses these exact historical move targets. After every save has an "
+                "explicit disposition, a separate final execution preview can freeze the exact ROM/save "
+                "operations. Apply remains unavailable in this boundary."
             ),
             wraplength=1180,
             justify="left",
@@ -162,6 +166,14 @@ class CollectionRomHistoricalOrganizationPlanDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_preview_execution_plan is not None:
+            self._preview_execution_button = ttk.Button(
+                buttons,
+                text="Preview Final Execution Plan...",
+                command=self._preview_execution_plan,
+                state="disabled",
+            )
+            self._preview_execution_button.pack(side="right", padx=(0, 8))
         if self._on_review_save_impact is not None:
             ttk.Button(
                 buttons,
@@ -175,8 +187,17 @@ class CollectionRomHistoricalOrganizationPlanDialog:
             return
         self._on_review_save_impact(self.plan, self.dialog)
 
+    def _preview_execution_plan(self):
+        if self._on_preview_execution_plan is None or self._save_disposition_decision is None:
+            return
+        self._on_preview_execution_plan(
+            self.plan,
+            self._save_disposition_decision,
+            self.dialog,
+        )
+
     def set_save_disposition_decision(self, decision):
-        """Reflect detached save choices without exposing historical execution yet."""
+        """Reflect detached save choices and enable the separate final preview boundary."""
         self._save_disposition_decision = decision
         if self._save_disposition_status_var is None:
             return
@@ -184,8 +205,11 @@ class CollectionRomHistoricalOrganizationPlanDialog:
             f"Save dispositions reviewed: {decision.approved_move_count} historical ROM move(s) "
             f"remain eligible for a later execution-plan boundary; {decision.blocked_move_count} "
             f"blocked. Save migrations selected: {decision.migrate_save_count}; leave in place: "
-            f"{decision.leave_save_count}. No filesystem action exists yet."
+            f"{decision.leave_save_count}. Final execution preview is now available; "
+            "filesystem Apply is still unavailable."
         )
+        if self._preview_execution_button is not None:
+            self._preview_execution_button.configure(state="normal")
 
     def close(self):
         if self._closed:

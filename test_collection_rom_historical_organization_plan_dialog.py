@@ -21,7 +21,7 @@ class HistoricalRomOrganizationPlanDialogContractTests(unittest.TestCase):
         self.assertIn("copy.deepcopy(self.data_manager.data)", source)
         self.assertIn("CollectionRomHistoricalOrganizationPlanDialog(", source)
 
-    def test_plan_dialog_exposes_save_review_but_no_execution_or_apply_action(self):
+    def test_plan_dialog_exposes_save_review_and_final_preview_but_no_apply_action(self):
         path = ROOT / "ui" / "collection_rom_historical_organization_plan_dialog.py"
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -39,8 +39,9 @@ class HistoricalRomOrganizationPlanDialogContractTests(unittest.TestCase):
         self.assertTrue(forbidden.isdisjoint(called), sorted(called))
         self.assertNotIn('text="Apply', source)
         self.assertIn('text="Review Save Dispositions..."', source)
-        self.assertNotIn('text="Preview Final Execution Plan..."', source)
-        self.assertIn("does not expose a final execution plan or Apply action", source)
+        self.assertIn('text="Preview Final Execution Plan..."', source)
+        self.assertIn('state="disabled"', source)
+        self.assertIn("Apply remains unavailable in this boundary", source)
 
     def test_collection_page_routes_historical_plan_through_existing_save_review(self):
         source = (ROOT / "ui" / "pages" / "collection_page.py").read_text(encoding="utf-8")
