@@ -4,6 +4,13 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Transactional historical ROM organization Apply
+
+- Final historical ROM/save execution plans can now be applied explicitly through the proven journaled organization transaction engine.
+- Apply maps each historical ROM's frozen `historical_smwc_submission_id` to the exact matching Collection `files[]` provenance precondition, preserving the current Collection identity while refusing stale or re-attributed assets.
+- Historical Apply inherits copy-and-verify-before-commit, no-overwrite targets, atomic Collection path updates, post-commit source cleanup, rollback, and startup recovery semantics.
+- No provider calls, layout discovery, save rediscovery decisions, or new semantic choices occur during Apply.
+
 ### Final historical ROM/save execution preview
 
 - Historical ROM organization plans with completed save dispositions can now continue to **Preview Final Execution Plan...**.

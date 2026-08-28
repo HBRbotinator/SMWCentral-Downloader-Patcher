@@ -3684,7 +3684,106 @@ class CollectionPage:
                 parent_dialog,
                 execution_plan,
                 on_close=self._collection_rom_historical_organization_execution_plan_closed,
+                on_apply=self._apply_collection_historical_rom_organization_execution_plan,
             )
+        )
+
+
+    def _apply_collection_historical_rom_organization_execution_plan(
+        self, execution_plan, parent_dialog
+    ):
+        """Execute only the active finalized historical ROM/save organization plan."""
+        dialog = self.collection_rom_historical_organization_execution_plan_dialog
+        if dialog is None or dialog.plan != execution_plan:
+            messagebox.showerror(
+                "Apply Historical ROM Organization",
+                "The final historical organization preview is no longer active. Run the audit again.",
+                parent=parent_dialog,
+            )
+            return
+
+        try:
+            from download_state_manager import is_download_active
+            if is_download_active():
+                messagebox.showwarning(
+                    "Download in Progress",
+                    "ROM organization cannot run while a download/patch operation is active.",
+                    parent=parent_dialog,
+                )
+                return
+        except ImportError:
+            pass
+
+        from collection_rom_historical_organization_apply import (
+            HistoricalRomOrganizationApplyError,
+            apply_historical_rom_organization_execution_plan,
+        )
+        from collection_rom_organization_apply import (
+            CollectionRomOrganizationApplyError,
+            CollectionRomOrganizationRecoveryError,
+            CollectionRomOrganizationRecoveryRequiredError,
+            CollectionRomOrganizationStaleStateError,
+        )
+
+        try:
+            parent_dialog.configure(cursor="wait")
+            parent_dialog.update_idletasks()
+            result = apply_historical_rom_organization_execution_plan(
+                execution_plan, self.data_manager
+            )
+        except CollectionRomOrganizationRecoveryRequiredError as error:
+            self._reload_collection_ingestion_live_state()
+            self._close_collection_rom_organization_workflow()
+            self._log(f"Historical ROM organization committed but cleanup requires recovery: {error}", "Error")
+            messagebox.showerror(
+                "ROM Organization Recovery Required",
+                (
+                    "The reviewed historical Collection path changes were committed, but cleanup of "
+                    "the old source files did not finish. A recovery journal remains.\n\n"
+                    f"{error}\n\nClose the application and resolve the prompted startup recovery before making further Collection changes."
+                ),
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+        except (
+            CollectionRomOrganizationStaleStateError,
+            CollectionRomOrganizationRecoveryError,
+            CollectionRomOrganizationApplyError,
+            HistoricalRomOrganizationApplyError,
+            OSError,
+        ) as error:
+            self._log(f"Historical ROM organization Apply failed: {error}", "Error")
+            messagebox.showerror(
+                "Historical ROM Organization Not Applied",
+                (
+                    "The finalized historical ROM/save plan could not be applied safely. "
+                    "Any pre-commit filesystem changes were rolled back when possible.\n\n"
+                    f"{error}\n\nRun the ROM layout audit again before retrying."
+                ),
+                parent=parent_dialog,
+            )
+            return
+        finally:
+            try:
+                if parent_dialog.winfo_exists():
+                    parent_dialog.configure(cursor="")
+            except tk.TclError:
+                pass
+
+        self._reload_collection_ingestion_live_state()
+        self._close_collection_rom_organization_workflow()
+        self._log(
+            f"Organized {result.rom_move_count} historical ROM(s) and {result.save_move_count} save(s)",
+            "Information",
+        )
+        messagebox.showinfo(
+            "Historical ROM Organization Complete",
+            (
+                f"Moved {result.rom_move_count} historical-provenance ROM(s) and "
+                f"{result.save_move_count} reviewed save(s). Collection paths now reference the verified targets.\n\n"
+                "Per-ROM historical SMWC provenance was preserved."
+            ),
+            parent=self.frame.winfo_toplevel(),
         )
 
     def _preview_collection_rom_organization_execution_plan(

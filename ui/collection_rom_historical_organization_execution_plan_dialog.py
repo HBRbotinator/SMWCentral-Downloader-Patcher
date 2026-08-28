@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 from collection_rom_historical_organization_execution_plan import (
     HistoricalRomOrganizationExecutionPlan,
@@ -10,12 +10,13 @@ from collection_rom_historical_organization_execution_plan import (
 
 
 class HistoricalRomOrganizationExecutionPlanDialog:
-    """Modal final historical execution preview; deliberately has no Apply action."""
+    """Modal final historical execution preview with explicit transactional Apply."""
 
-    def __init__(self, parent, plan: HistoricalRomOrganizationExecutionPlan, on_close=None):
+    def __init__(self, parent, plan: HistoricalRomOrganizationExecutionPlan, on_close=None, on_apply=None):
         self.plan = plan
         self._parent = parent
         self._on_close = on_close
+        self._on_apply = on_apply
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Final Historical ROM Organization Plan")
@@ -39,7 +40,7 @@ class HistoricalRomOrganizationExecutionPlanDialog:
             text=(
                 "Final read-only historical execution preview. Historical submission layout, "
                 "ROM byte identity, save dispositions, and migrated-save hashes are frozen. "
-                "No filesystem or Collection Apply action is exposed by this boundary."
+                "Apply revalidates the same historical provenance and byte evidence before using the journaled organization transaction."
             ),
             wraplength=1160,
             justify="left",
@@ -109,9 +110,9 @@ class HistoricalRomOrganizationExecutionPlanDialog:
         ttk.Label(
             outer,
             text=(
-                "This plan is fully frozen for a future transactional historical Apply boundary, "
-                "which must independently revalidate Collection ownership, historical per-ROM "
-                "provenance, source bytes/mtimes, target absence, and colocated-save evidence."
+                "Apply consumes only this frozen plan and independently revalidates Collection ownership, "
+                "historical per-ROM provenance, source bytes/mtimes, target absence, and colocated-save evidence. "
+                "Existing targets are never overwritten."
             ),
             wraplength=1160,
             justify="left",
@@ -119,6 +120,25 @@ class HistoricalRomOrganizationExecutionPlanDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_apply is not None:
+            ttk.Button(buttons, text="Apply Historical Organization...", command=self._confirm_apply).pack(side="right", padx=(0, 8))
+
+    def _confirm_apply(self):
+        if self._on_apply is None:
+            return
+        confirmed = messagebox.askyesno(
+            "Apply Historical ROM Organization",
+            (
+                f"Move {len(self.plan.rom_moves)} historical-provenance ROM(s) and "
+                f"{len(self.plan.save_moves)} reviewed save(s)?\n\n"
+                "The transaction never overwrites existing targets. It copies and verifies targets first, "
+                "commits Collection paths second, and removes reviewed sources only after the commit point.\n\n"
+                "Apply exactly this finalized historical plan?"
+            ),
+            icon="warning", default=messagebox.NO, parent=self.dialog,
+        )
+        if confirmed:
+            self._on_apply(self.plan, self.dialog)
 
     def close(self):
         if self._closed:

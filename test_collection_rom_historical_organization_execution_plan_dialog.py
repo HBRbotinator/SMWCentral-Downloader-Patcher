@@ -11,7 +11,6 @@ class HistoricalExecutionPlanDialogContractTests(unittest.TestCase):
         self.assertIn('text="Preview Final Execution Plan..."', source)
         self.assertIn('state="disabled"', source)
         self.assertIn('configure(state="normal")', source)
-        self.assertNotIn('text="Apply', source)
 
     def test_collection_page_routes_historical_final_preview(self):
         source = (ROOT / "ui" / "pages" / "collection_page.py").read_text(encoding="utf-8")
@@ -19,7 +18,7 @@ class HistoricalExecutionPlanDialogContractTests(unittest.TestCase):
         self.assertIn("HistoricalRomOrganizationExecutionPlanDialog(", source)
         self.assertIn("_last_collection_historical_rom_save_disposition_decision != decision", source)
 
-    def test_final_dialog_has_no_mutating_or_apply_action(self):
+    def test_final_dialog_exposes_apply_callback_without_direct_filesystem_mutation(self):
         path = ROOT / "ui" / "collection_rom_historical_organization_execution_plan_dialog.py"
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -32,8 +31,8 @@ class HistoricalExecutionPlanDialogContractTests(unittest.TestCase):
                     called.add(node.func.attr)
         forbidden = {"move", "rename", "replace", "remove", "unlink", "copy", "copy2", "mkdir", "makedirs"}
         self.assertTrue(forbidden.isdisjoint(called), sorted(called))
-        self.assertNotIn('text="Apply', source)
-        self.assertIn("No filesystem or Collection Apply action", source)
+        self.assertIn('text="Apply Historical Organization..."', source)
+        self.assertIn('self._on_apply(self.plan, self.dialog)', source)
 
 
 if __name__ == "__main__":
