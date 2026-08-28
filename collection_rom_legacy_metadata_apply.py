@@ -15,6 +15,7 @@ from collection_plan_apply import collection_revision_token
 from collection_rom_legacy_metadata_plan import (
     LegacyRomMetadataBackfillOperation,
     LegacyRomMetadataModernizationPlan,
+    ReviewedLegacyRomMetadataModernizationPlan,
 )
 from collection_transaction import (
     CollectionStaleStateError,
@@ -133,7 +134,7 @@ def _validate_exact_record(
 
 
 def _validate_unique_ownership(
-    plan: LegacyRomMetadataModernizationPlan,
+    plan: LegacyRomMetadataModernizationPlan | ReviewedLegacyRomMetadataModernizationPlan,
     collection_data: Mapping[str, Any],
 ) -> None:
     planned = {_path_identity(op.canonical_path): op.collection_id for op in plan.operations}
@@ -154,15 +155,12 @@ def _validate_unique_ownership(
             )
 
 
-def apply_legacy_rom_metadata_modernization_plan(
-    plan: LegacyRomMetadataModernizationPlan,
+def _apply_legacy_rom_metadata_plan(
+    plan: LegacyRomMetadataModernizationPlan | ReviewedLegacyRomMetadataModernizationPlan,
     manager: HackDataManager,
     *,
     fail_before_replace: bool = False,
 ) -> LegacyRomMetadataApplyResult:
-    """Apply exactly the frozen metadata rows as one atomic processed.json replacement."""
-    if not isinstance(plan, LegacyRomMetadataModernizationPlan):
-        raise TypeError("plan must be a LegacyRomMetadataModernizationPlan")
     if not isinstance(manager, HackDataManager):
         raise TypeError("manager must be a HackDataManager")
 
@@ -209,9 +207,54 @@ def apply_legacy_rom_metadata_modernization_plan(
     return LegacyRomMetadataApplyResult(collection_record_count=len(plan.operations))
 
 
+def apply_legacy_rom_metadata_modernization_plan(
+    plan: LegacyRomMetadataModernizationPlan,
+    manager: HackDataManager,
+    *,
+    fail_before_replace: bool = False,
+) -> LegacyRomMetadataApplyResult:
+    """Apply an unambiguous frozen legacy metadata backfill plan."""
+    if not isinstance(plan, LegacyRomMetadataModernizationPlan):
+        raise TypeError("plan must be a LegacyRomMetadataModernizationPlan")
+    return _apply_legacy_rom_metadata_plan(
+        plan, manager, fail_before_replace=fail_before_replace
+    )
+
+
+def apply_reviewed_legacy_rom_metadata_modernization_plan(
+    plan: ReviewedLegacyRomMetadataModernizationPlan,
+    manager: HackDataManager,
+    *,
+    fail_before_replace: bool = False,
+) -> LegacyRomMetadataApplyResult:
+    """Apply a frozen legacy backfill whose ROM provenance was explicitly reviewed."""
+    if not isinstance(plan, ReviewedLegacyRomMetadataModernizationPlan):
+        raise TypeError("plan must be a ReviewedLegacyRomMetadataModernizationPlan")
+
+    # Make the reviewed provenance contract explicit at the writable boundary, even
+    # though the exact Collection revision is also frozen by the plan.
+    from collection_rom_legacy_provenance_review import recorded_legacy_rom_provenance_ids
+
+    for operation in plan.operations:
+        record = manager.data.get(operation.collection_id)
+        if not isinstance(record, Mapping):
+            raise LegacyRomMetadataApplyStaleStateError(
+                f"Collection record changed after reviewed modernization preview: {operation.collection_id}"
+            )
+        if operation.smwc_submission_id not in recorded_legacy_rom_provenance_ids(operation.collection_id, record):
+            raise LegacyRomMetadataApplyStaleStateError(
+                f"Selected SMWC provenance is no longer recorded in Collection history: {operation.title}"
+            )
+
+    return _apply_legacy_rom_metadata_plan(
+        plan, manager, fail_before_replace=fail_before_replace
+    )
+
+
 __all__ = [
     "LegacyRomMetadataApplyError",
     "LegacyRomMetadataApplyResult",
     "LegacyRomMetadataApplyStaleStateError",
     "apply_legacy_rom_metadata_modernization_plan",
+    "apply_reviewed_legacy_rom_metadata_modernization_plan",
 ]

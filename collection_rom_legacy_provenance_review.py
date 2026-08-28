@@ -63,7 +63,7 @@ def _positive_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _candidate_ids(collection_id: str, record: Mapping[str, Any]) -> tuple[int, ...]:
+def recorded_legacy_rom_provenance_ids(collection_id: str, record: Mapping[str, Any]) -> tuple[int, ...]:
     current = _positive_int(collection_id)
     if current is None:
         return ()
@@ -103,7 +103,7 @@ def build_legacy_rom_provenance_review(
         record = collection_data.get(audit_row.collection_id)
         if current is None or not isinstance(record, Mapping):
             continue
-        candidates = _candidate_ids(audit_row.collection_id, record)
+        candidates = recorded_legacy_rom_provenance_ids(audit_row.collection_id, record)
         # A useful decision requires at least one recorded alternative to current identity.
         if len(candidates) < 2:
             continue
@@ -160,5 +160,6 @@ __all__ = [
     "LegacyRomProvenanceReview",
     "LegacyRomProvenanceReviewError",
     "build_legacy_rom_provenance_decision",
+    "recorded_legacy_rom_provenance_ids",
     "build_legacy_rom_provenance_review",
 ]

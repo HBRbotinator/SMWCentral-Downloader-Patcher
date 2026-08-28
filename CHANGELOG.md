@@ -4,6 +4,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Transactional reviewed legacy ROM metadata Apply
+
+- Reviewed-provenance modernization previews now expose **Apply Reviewed Metadata Backfill...** as an explicit Collection-only write boundary.
+- Apply accepts only the dedicated reviewed modernization plan and revalidates that each selected SMWC submission ID is still present in the Collection record's current/prior numeric identity history.
+- The exact Collection revision, legacy `file_path` ownership, duplicate ownership, regular non-symlink source state, byte size, source modification time, and SHA-256 are rechecked before the atomic commit, with ROM bytes verified again immediately before replacement.
+- Only the frozen primary `files[]` row is written. ROM/save files, `file_path`, `additional_paths`, user-owned metadata, and unknown/future fields remain unchanged.
+- All reviewed rows are committed through the same atomic `processed.json` transaction used by the unambiguous legacy backfill path; stale state or injected transaction failure cannot leave a partial modernization.
+
 ### Reviewed legacy ROM metadata modernization preview
 
 - Explicit legacy provenance decisions can now continue to **Preview Modernization Plan...** after every ambiguous row has a saved recorded-history SMWC selection.

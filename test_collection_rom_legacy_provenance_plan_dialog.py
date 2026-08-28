@@ -10,12 +10,12 @@ class ReviewedLegacyRomMetadataPlanDialogContractTests(unittest.TestCase):
         self.assertIn('_preview_button.configure(state="normal")', source)
         self.assertIn("_saved_decision", source)
 
-    def test_reviewed_plan_dialog_is_read_only_and_shows_selected_provenance(self):
+    def test_reviewed_plan_dialog_exposes_only_reviewed_metadata_apply(self):
         source = Path("ui/collection_rom_legacy_provenance_plan_dialog.py").read_text(encoding="utf-8")
         self.assertIn("Selected ROM Provenance", source)
-        self.assertIn("No Apply action exists", source)
-        self.assertNotIn("Apply Metadata Backfill", source)
-        self.assertNotIn("on_apply", source)
+        self.assertIn("Apply Reviewed Metadata Backfill...", source)
+        self.assertIn("on_apply", source)
+        self.assertNotIn("Apply Metadata Backfill...", source)
 
     def test_collection_page_routes_review_and_decision_into_dedicated_plan(self):
         source = Path("ui/pages/collection_page.py").read_text(encoding="utf-8")
@@ -23,6 +23,8 @@ class ReviewedLegacyRomMetadataPlanDialogContractTests(unittest.TestCase):
         self.assertIn("_preview_collection_legacy_rom_provenance_plan", source)
         self.assertIn("CollectionRomLegacyProvenancePlanDialog", source)
         self.assertIn("_last_collection_legacy_provenance_decision != decision", source)
+        self.assertIn("_apply_collection_legacy_rom_provenance_plan", source)
+        self.assertIn("apply_reviewed_legacy_rom_metadata_modernization_plan", source)
 
 
 if __name__ == "__main__":

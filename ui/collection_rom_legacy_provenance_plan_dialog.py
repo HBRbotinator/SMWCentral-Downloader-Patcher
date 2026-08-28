@@ -10,9 +10,10 @@ from collection_rom_legacy_metadata_plan import ReviewedLegacyRomMetadataModerni
 class CollectionRomLegacyProvenancePlanDialog:
     """Modal preview of hashed reviewed-provenance backfills; no Apply exists."""
 
-    def __init__(self, parent, plan: ReviewedLegacyRomMetadataModernizationPlan, on_close=None):
+    def __init__(self, parent, plan: ReviewedLegacyRomMetadataModernizationPlan, on_close=None, on_apply=None):
         self.plan = plan
         self._on_close = on_close
+        self._on_apply = on_apply
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Reviewed Legacy ROM Metadata Plan")
@@ -126,8 +127,9 @@ class CollectionRomLegacyProvenancePlanDialog:
         ttk.Label(
             outer,
             text=(
-                "No Apply action exists in this preview. No Collection metadata, ROM files, "
-                "save files, or additional_paths are changed or reinterpreted here."
+                "Apply writes only the frozen files[] metadata after revalidating the selected "
+                "SMWC provenance and exact ROM bytes. ROM files, saves, file_path, and "
+                "additional_paths are not moved or rewritten."
             ),
             wraplength=1080,
             justify="left",
@@ -136,6 +138,16 @@ class CollectionRomLegacyProvenancePlanDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_apply is not None:
+            ttk.Button(
+                buttons,
+                text="Apply Reviewed Metadata Backfill...",
+                command=self._apply,
+            ).pack(side="right", padx=(0, 8))
+
+    def _apply(self):
+        if self._on_apply is not None:
+            self._on_apply(self.plan, self.dialog)
 
     def close(self):
         if self._closed:
