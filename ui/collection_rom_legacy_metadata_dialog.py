@@ -28,9 +28,16 @@ _STATUS_LABELS = {
 class CollectionRomLegacyMetadataDialog:
     """Modal, read-only view of legacy file_path modernization readiness."""
 
-    def __init__(self, parent, audit: LegacyRomMetadataAudit, on_close=None):
+    def __init__(
+        self,
+        parent,
+        audit: LegacyRomMetadataAudit,
+        on_close=None,
+        on_preview_plan=None,
+    ):
         self.audit = audit
         self._on_close = on_close
+        self._on_preview_plan = on_preview_plan
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Legacy Collection ROM Metadata")
@@ -156,6 +163,16 @@ class CollectionRomLegacyMetadataDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_preview_plan is not None and self.audit.ready_count:
+            ttk.Button(
+                buttons,
+                text="Preview Modernization Plan...",
+                command=self._preview_plan,
+            ).pack(side="right", padx=(0, 8))
+
+    def _preview_plan(self):
+        if self._on_preview_plan is not None:
+            self._on_preview_plan(self.audit)
 
     def close(self):
         if self._closed:

@@ -164,6 +164,7 @@ The current matcher was calibrated against a legacy real-world Collection snapsh
    - Retained ROMs whose per-file SMWC provenance belongs to a different submission are intentionally review-only rather than inheriting the current record's catalogue layout
    - Numeric modern ROMs with missing provenance and legacy `file_path`-only entries are also review-only; the app does not invent migration semantics for them
    - When legacy `file_path`-only rows are present, **Review Legacy ROM Metadata...** opens a separate read-only modernization audit. It identifies records that can later be converted to modern `files[]` state and explicitly blocks missing/symlinked/duplicate paths or ambiguous historical provenance; this audit does not hash or write anything yet
+   - Audit-ready legacy rows can continue to **Preview Modernization Plan...**. This read-only step revalidates the Collection revision and path ownership, computes stable SHA-256/size evidence, and previews the exact modern primary `files[]` row while leaving `file_path`, `additional_paths`, ROM bytes, and Collection data unchanged
    - Only colocated saves explicitly marked **Migrate with ROM** become filesystem operations. **Leave in place** saves and configured/associated Save Sync evidence are not moved or rewritten
 
 ![Collection Page](images/application-5.0-collection.png)

@@ -54,6 +54,7 @@ class LegacyRomMetadataAudit:
     """Immutable read-only aggregate for legacy ROM metadata modernization."""
 
     rows: tuple[LegacyRomMetadataAuditRow, ...]
+    collection_revision_token: str | None = None
 
     @property
     def ready_count(self) -> int:
@@ -261,6 +262,7 @@ def _mark_duplicate_paths(
 
 def build_legacy_rom_metadata_audit(
     collection_data: Mapping[str, Any],
+    collection_revision_token: str | None = None,
 ) -> LegacyRomMetadataAudit:
     """Return a deterministic read-only audit of legacy ``file_path`` records."""
 
@@ -287,7 +289,12 @@ def build_legacy_rom_metadata_audit(
             ),
         )
     )
-    return LegacyRomMetadataAudit(rows=ordered)
+    revision = (
+        str(collection_revision_token).strip()
+        if collection_revision_token is not None
+        else None
+    )
+    return LegacyRomMetadataAudit(rows=ordered, collection_revision_token=revision or None)
 
 
 __all__ = [

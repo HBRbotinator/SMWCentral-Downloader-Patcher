@@ -4,6 +4,15 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Immutable legacy ROM metadata modernization preview
+
+- Audit-ready legacy `file_path` ROMs can now proceed to **Preview Modernization Plan...** without changing Collection data.
+- Planning revalidates the exact Collection revision, legacy path ownership, supported regular-file state, non-symlink status, and duplicate ownership before accepting a row.
+- Each accepted ROM is SHA-256 hashed with stable before/after filesystem-stat checks and frozen with exact byte size and source modification time.
+- The preview proposes one modern primary `files[]` row using the canonical ROM path, basename, SHA-256, byte size, `legacy_collection_backfill` ingestion provenance, and the audit-approved SMWC submission provenance when applicable.
+- `file_path` remains unchanged as the compatibility projection, and legacy `additional_paths` are intentionally not reinterpreted as launchable modern ROM variants.
+- This boundary is still read-only: there is no Collection write or filesystem mutation. A later explicit transactional Apply must verify the frozen preconditions again.
+
 ### Read-only legacy Collection ROM metadata audit
 
 - The ROM organization audit now exposes **Review Legacy ROM Metadata...** when Collection still contains `file_path`-only ROM records.

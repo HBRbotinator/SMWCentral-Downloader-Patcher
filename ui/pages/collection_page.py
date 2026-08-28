@@ -23,6 +23,13 @@ from collection_rom_organization import build_collection_rom_organization_audit
 from ui.collection_rom_organization_dialog import CollectionRomOrganizationAuditDialog
 from collection_rom_legacy_metadata import build_legacy_rom_metadata_audit
 from ui.collection_rom_legacy_metadata_dialog import CollectionRomLegacyMetadataDialog
+from collection_rom_legacy_metadata_plan import (
+    LegacyRomMetadataPlanError,
+    build_legacy_rom_metadata_modernization_plan,
+)
+from ui.collection_rom_legacy_metadata_plan_dialog import (
+    CollectionRomLegacyMetadataPlanDialog,
+)
 from collection_rom_organization_plan import (
     CollectionRomOrganizationPlanError,
     build_collection_rom_organization_plan,
@@ -69,6 +76,7 @@ class CollectionPage:
         self.collection_wheel_dialog = None
         self.collection_rom_organization_audit_dialog = None
         self.collection_rom_legacy_metadata_dialog = None
+        self.collection_rom_legacy_metadata_plan_dialog = None
         self.collection_rom_organization_plan_dialog = None
         self.collection_rom_save_impact_dialog = None
         self.collection_rom_organization_execution_plan_dialog = None
@@ -307,6 +315,10 @@ class CollectionPage:
         if self.collection_rom_legacy_metadata_dialog is not None:
             self.collection_rom_legacy_metadata_dialog.close()
             self.collection_rom_legacy_metadata_dialog = None
+
+        if self.collection_rom_legacy_metadata_plan_dialog is not None:
+            self.collection_rom_legacy_metadata_plan_dialog.close()
+            self.collection_rom_legacy_metadata_plan_dialog = None
 
         if self.collection_rom_save_impact_dialog is not None:
             self.collection_rom_save_impact_dialog.close()
@@ -3177,8 +3189,11 @@ class CollectionPage:
                 self.collection_rom_legacy_metadata_dialog = None
 
         try:
+            from collection_plan_apply import collection_revision_token
+
             audit = build_legacy_rom_metadata_audit(
-                copy.deepcopy(self.data_manager.data)
+                copy.deepcopy(self.data_manager.data),
+                collection_revision_token(self.data_manager),
             )
         except (TypeError, ValueError, OSError) as error:
             self._log(f"Legacy ROM metadata audit failed: {error}", "Error")
@@ -3193,8 +3208,43 @@ class CollectionPage:
             self.frame,
             audit,
             on_close=self._collection_rom_legacy_metadata_closed,
+            on_preview_plan=self._preview_collection_legacy_rom_metadata_plan,
         )
         self.collection_rom_legacy_metadata_dialog = dialog
+
+    def _preview_collection_legacy_rom_metadata_plan(self, audit):
+        """Hash/revalidate audit-ready legacy ROMs into an immutable preview plan."""
+        if self.collection_rom_legacy_metadata_plan_dialog is not None:
+            try:
+                self.collection_rom_legacy_metadata_plan_dialog.dialog.lift()
+                self.collection_rom_legacy_metadata_plan_dialog.dialog.focus_force()
+                return
+            except tk.TclError:
+                self.collection_rom_legacy_metadata_plan_dialog = None
+
+        try:
+            from collection_plan_apply import collection_revision_token
+
+            plan = build_legacy_rom_metadata_modernization_plan(
+                audit,
+                copy.deepcopy(self.data_manager.data),
+                collection_revision_token(self.data_manager),
+            )
+        except (LegacyRomMetadataPlanError, OSError, ValueError) as error:
+            self._log(f"Legacy ROM metadata plan preview failed: {error}", "Error")
+            messagebox.showerror(
+                "Legacy ROM Metadata Plan",
+                f"The legacy ROM metadata modernization plan could not be frozen:\n\n{error}",
+                parent=self.frame,
+            )
+            return
+
+        dialog = CollectionRomLegacyMetadataPlanDialog(
+            self.frame,
+            plan,
+            on_close=self._collection_rom_legacy_metadata_plan_closed,
+        )
+        self.collection_rom_legacy_metadata_plan_dialog = dialog
 
     def _preview_collection_rom_organization_plan(self, audit):
         """Freeze the audit's safe move rows into an immutable read-only plan."""
@@ -3478,6 +3528,7 @@ class CollectionPage:
             "collection_rom_organization_plan_dialog",
             "collection_rom_organization_audit_dialog",
             "collection_rom_legacy_metadata_dialog",
+            "collection_rom_legacy_metadata_plan_dialog",
         ):
             dialog = getattr(self, attr, None)
             setattr(self, attr, None)
@@ -3511,6 +3562,9 @@ class CollectionPage:
 
     def _collection_rom_legacy_metadata_closed(self):
         self.collection_rom_legacy_metadata_dialog = None
+
+    def _collection_rom_legacy_metadata_plan_closed(self):
+        self.collection_rom_legacy_metadata_plan_dialog = None
 
     def _create_pagination_controls(self):
         """Create pagination controls"""
