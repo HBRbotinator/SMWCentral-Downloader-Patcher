@@ -4,6 +4,15 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Transactional legacy ROM metadata modernization Apply
+
+- The immutable legacy ROM metadata preview now exposes an explicit **Apply Metadata Backfill...** confirmation boundary.
+- Apply consumes only the frozen modernization plan and performs no provider/network discovery, matching, ROM/save movement, rename, copy, delete, or `additional_paths` reinterpretation.
+- The exact Collection revision, legacy `file_path`, path ownership, regular non-symlink source state, byte size, source modification time, and SHA-256 are revalidated before the atomic Collection commit.
+- Apply writes only the proposed primary `files[]` row and preserves `file_path`, `additional_paths`, user-owned fields, and unknown/future record fields unchanged.
+- All selected records are published through one atomic `processed.json` transaction; stale state or pre-commit failure leaves the Collection unmodernized rather than partially backfilled.
+- After success the organizer can be audited again and the newly modernized records can participate in the normal modern ROM organization workflow.
+
 ### Immutable legacy ROM metadata modernization preview
 
 - Audit-ready legacy `file_path` ROMs can now proceed to **Preview Modernization Plan...** without changing Collection data.

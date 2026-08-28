@@ -10,9 +10,10 @@ from collection_rom_legacy_metadata_plan import LegacyRomMetadataModernizationPl
 class CollectionRomLegacyMetadataPlanDialog:
     """Modal preview of hashed modern ``files[]`` rows; no Apply action exists."""
 
-    def __init__(self, parent, plan: LegacyRomMetadataModernizationPlan, on_close=None):
+    def __init__(self, parent, plan: LegacyRomMetadataModernizationPlan, on_close=None, on_apply=None):
         self.plan = plan
         self._on_close = on_close
+        self._on_apply = on_apply
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Legacy ROM Metadata Modernization Plan")
@@ -153,6 +154,16 @@ class CollectionRomLegacyMetadataPlanDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_apply is not None:
+            ttk.Button(
+                buttons,
+                text="Apply Metadata Backfill...",
+                command=self._apply,
+            ).pack(side="right", padx=(0, 8))
+
+    def _apply(self):
+        if self._on_apply is not None:
+            self._on_apply(self.plan, self.dialog)
 
     def close(self):
         if self._closed:

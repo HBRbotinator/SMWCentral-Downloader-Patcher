@@ -18,7 +18,7 @@ class LegacyRomMetadataPlanDialogContractTests(unittest.TestCase):
         self.assertIn("build_legacy_rom_metadata_modernization_plan(", page_source)
         self.assertIn("CollectionRomLegacyMetadataPlanDialog", page_source)
 
-    def test_plan_dialog_is_read_only_and_has_no_apply_action(self):
+    def test_plan_dialog_exposes_explicit_metadata_only_apply_action(self):
         path = ROOT / "ui" / "collection_rom_legacy_metadata_plan_dialog.py"
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -35,10 +35,13 @@ class LegacyRomMetadataPlanDialogContractTests(unittest.TestCase):
             "makedirs", "mkdir", "open", "write_text", "write_bytes",
         }
         self.assertTrue(forbidden.isdisjoint(called), sorted(called))
-        self.assertNotIn('text="Apply', source)
+        self.assertIn('text="Apply Metadata Backfill..."', source)
         self.assertNotIn('text="Execute', source)
         self.assertIn("Read-only immutable preview", source)
         self.assertIn('text="Close"', source)
+        page_source = (ROOT / "ui" / "pages" / "collection_page.py").read_text(encoding="utf-8")
+        self.assertIn("apply_legacy_rom_metadata_modernization_plan", page_source)
+        self.assertIn("This changes Collection metadata only", page_source)
 
     def test_plan_model_hashes_but_contains_no_write_calls(self):
         source = (ROOT / "collection_rom_legacy_metadata_plan.py").read_text(encoding="utf-8")

@@ -3243,8 +3243,80 @@ class CollectionPage:
             self.frame,
             plan,
             on_close=self._collection_rom_legacy_metadata_plan_closed,
+            on_apply=self._apply_collection_legacy_rom_metadata_plan,
         )
         self.collection_rom_legacy_metadata_plan_dialog = dialog
+
+    def _apply_collection_legacy_rom_metadata_plan(self, plan, parent_dialog):
+        """Apply only the already-frozen legacy ROM metadata backfill plan."""
+        dialog = self.collection_rom_legacy_metadata_plan_dialog
+        if dialog is None or dialog.plan != plan:
+            messagebox.showerror(
+                "Apply Legacy ROM Metadata",
+                "The modernization preview is no longer active. Run the legacy metadata audit again.",
+                parent=parent_dialog,
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Apply Legacy ROM Metadata",
+            (
+                f"Write modern files[] metadata for {len(plan.operations)} reviewed ROM(s)?\n\n"
+                "This changes Collection metadata only. ROM files, save files, file_path, "
+                "and additional_paths will not be moved, renamed, or rewritten."
+            ),
+            parent=parent_dialog,
+        ):
+            return
+
+        from collection_rom_legacy_metadata_apply import (
+            LegacyRomMetadataApplyError,
+            LegacyRomMetadataApplyStaleStateError,
+            apply_legacy_rom_metadata_modernization_plan,
+        )
+
+        try:
+            parent_dialog.configure(cursor="wait")
+            parent_dialog.update_idletasks()
+            result = apply_legacy_rom_metadata_modernization_plan(plan, self.data_manager)
+        except (
+            LegacyRomMetadataApplyStaleStateError,
+            LegacyRomMetadataApplyError,
+            OSError,
+        ) as error:
+            self._log(f"Legacy ROM metadata Apply failed: {error}", "Error")
+            messagebox.showerror(
+                "Legacy ROM Metadata Not Applied",
+                (
+                    "The frozen metadata backfill could not be applied safely. "
+                    "Collection data was not partially modernized.\n\n"
+                    f"{error}\n\nRun the legacy metadata audit again before retrying."
+                ),
+                parent=parent_dialog,
+            )
+            return
+        finally:
+            try:
+                if parent_dialog.winfo_exists():
+                    parent_dialog.configure(cursor="")
+            except tk.TclError:
+                pass
+
+        self._reload_collection_ingestion_live_state()
+        self._close_collection_rom_organization_workflow()
+        self._log(
+            f"Modernized ROM metadata for {result.collection_record_count} Collection record(s)",
+            "Information",
+        )
+        messagebox.showinfo(
+            "Legacy ROM Metadata Updated",
+            (
+                f"Modern files[] metadata was written for {result.collection_record_count} "
+                "Collection record(s). ROM and save files were not changed.\n\n"
+                "Run the ROM organization audit again to reassess these records."
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
 
     def _preview_collection_rom_organization_plan(self, audit):
         """Freeze the audit's safe move rows into an immutable read-only plan."""
