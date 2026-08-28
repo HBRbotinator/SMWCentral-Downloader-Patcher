@@ -10,9 +10,18 @@ from collection_rom_historical_organization_plan import HistoricalRomOrganizatio
 class CollectionRomHistoricalOrganizationPlanDialog:
     """Modal preview of frozen historical-submission ROM move intent."""
 
-    def __init__(self, parent, plan: HistoricalRomOrganizationPlan, on_close=None):
+    def __init__(
+        self,
+        parent,
+        plan: HistoricalRomOrganizationPlan,
+        on_close=None,
+        on_review_save_impact=None,
+    ):
         self.plan = plan
         self._on_close = on_close
+        self._on_review_save_impact = on_review_save_impact
+        self._save_disposition_decision = None
+        self._save_disposition_status_var = None
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Historical ROM Organization Plan")
@@ -129,12 +138,22 @@ class CollectionRomHistoricalOrganizationPlanDialog:
 
         tree.bind("<<TreeviewSelect>>", show_detail)
 
+        self._save_disposition_status_var = tk.StringVar(
+            value=(
+                "Save dispositions: not reviewed. Historical filesystem execution remains unavailable."
+            )
+        )
+        ttk.Label(
+            outer,
+            textvariable=self._save_disposition_status_var,
+            wraplength=1180,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 6))
         ttk.Label(
             outer,
             text=(
-                "No save review, final execution plan, or Apply action is exposed from this "
-                "historical preview. A later boundary must explicitly connect these frozen moves "
-                "to the existing save-impact and transactional organization workflow."
+                "Save-impact review uses these exact historical move targets, but this boundary still "
+                "does not expose a final execution plan or Apply action."
             ),
             wraplength=1180,
             justify="left",
@@ -143,6 +162,30 @@ class CollectionRomHistoricalOrganizationPlanDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_review_save_impact is not None:
+            ttk.Button(
+                buttons,
+                text="Review Save Dispositions...",
+                command=self._review_save_impact,
+            ).pack(side="right", padx=(0, 8))
+
+
+    def _review_save_impact(self):
+        if self._on_review_save_impact is None:
+            return
+        self._on_review_save_impact(self.plan, self.dialog)
+
+    def set_save_disposition_decision(self, decision):
+        """Reflect detached save choices without exposing historical execution yet."""
+        self._save_disposition_decision = decision
+        if self._save_disposition_status_var is None:
+            return
+        self._save_disposition_status_var.set(
+            f"Save dispositions reviewed: {decision.approved_move_count} historical ROM move(s) "
+            f"remain eligible for a later execution-plan boundary; {decision.blocked_move_count} "
+            f"blocked. Save migrations selected: {decision.migrate_save_count}; leave in place: "
+            f"{decision.leave_save_count}. No filesystem action exists yet."
+        )
 
     def close(self):
         if self._closed:

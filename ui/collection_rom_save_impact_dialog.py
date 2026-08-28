@@ -10,6 +10,7 @@ from collection_rom_save_disposition import (
     companion_disposition_key,
     finalize_collection_rom_save_disposition_decision,
 )
+from collection_rom_historical_organization_plan import HistoricalRomMoveOperation
 from collection_rom_save_impact import (
     CollectionRomSaveImpactReview,
     SOURCE_COLOCATED,
@@ -23,6 +24,12 @@ _SOURCE_LABELS = {
     SOURCE_CONFIGURED_NAME: "Configured name match",
     SOURCE_CONFIGURED_ASSOCIATION: "Saved association",
 }
+
+
+def _move_title(move) -> str:
+    if isinstance(move, HistoricalRomMoveOperation):
+        return move.collection_title
+    return move.title
 
 
 class CollectionRomSaveImpactDialog:
@@ -96,7 +103,7 @@ class CollectionRomSaveImpactDialog:
             rows_by_move.setdefault((row.collection_id, row.rom_source_path), []).append(row)
 
         for move in self.review.plan.moves:
-            frame = ttk.LabelFrame(body, text=f"{move.title} — {move.asset_name}", padding=10)
+            frame = ttk.LabelFrame(body, text=f"{_move_title(move)} — {move.asset_name}", padding=10)
             frame.pack(fill="x", pady=(0, 10))
             ttk.Label(
                 frame,

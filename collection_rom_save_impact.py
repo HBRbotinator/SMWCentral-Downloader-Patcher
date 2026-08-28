@@ -11,6 +11,10 @@ import os
 from dataclasses import dataclass
 from typing import Iterable, Mapping
 
+from collection_rom_historical_organization_plan import (
+    HistoricalRomMoveOperation,
+    HistoricalRomOrganizationPlan,
+)
 from collection_rom_organization_plan import (
     CollectionRomMoveOperation,
     CollectionRomOrganizationPlan,
@@ -65,9 +69,9 @@ class CollectionRomSaveImpactRow:
 
 @dataclass(frozen=True)
 class CollectionRomSaveImpactReview:
-    """Read-only save evidence for one immutable organization plan."""
+    """Read-only save evidence for one immutable current or historical organization plan."""
 
-    plan: CollectionRomOrganizationPlan
+    plan: CollectionRomOrganizationPlan | HistoricalRomOrganizationPlan
     configured_save_directories: tuple[str, ...]
     rows: tuple[CollectionRomSaveImpactRow, ...]
 
@@ -137,8 +141,14 @@ def _stat_save(path: str) -> tuple[int, int]:
     return stat.st_size, stat.st_mtime_ns
 
 
+def _move_title(move: CollectionRomMoveOperation | HistoricalRomMoveOperation) -> str:
+    if isinstance(move, HistoricalRomMoveOperation):
+        return move.collection_title
+    return move.title
+
+
 def _colocated_rows(
-    move: CollectionRomMoveOperation,
+    move: CollectionRomMoveOperation | HistoricalRomMoveOperation,
     configured_directories: Iterable[str],
 ) -> list[CollectionRomSaveImpactRow]:
     source_dir = os.path.dirname(move.source_path)
@@ -161,7 +171,7 @@ def _colocated_rows(
         rows.append(
             CollectionRomSaveImpactRow(
                 collection_id=move.collection_id,
-                title=move.title,
+                title=_move_title(move),
                 rom_source_path=move.source_path,
                 rom_target_path=move.target_path,
                 save_path=candidate,
@@ -183,7 +193,7 @@ def _colocated_rows(
 
 
 def _configured_rows(
-    move: CollectionRomMoveOperation,
+    move: CollectionRomMoveOperation | HistoricalRomMoveOperation,
     configured_directories: Iterable[str],
     associations: Mapping[str, str],
     seen_paths: set[str],
@@ -221,7 +231,7 @@ def _configured_rows(
             rows.append(
                 CollectionRomSaveImpactRow(
                     collection_id=move.collection_id,
-                    title=move.title,
+                    title=_move_title(move),
                     rom_source_path=move.source_path,
                     rom_target_path=move.target_path,
                     save_path=path,
@@ -238,14 +248,16 @@ def _configured_rows(
 
 
 def build_collection_rom_save_impact_review(
-    plan: CollectionRomOrganizationPlan,
+    plan: CollectionRomOrganizationPlan | HistoricalRomOrganizationPlan,
     configured_save_directories: Iterable[str] = (),
     save_associations: Mapping[str, str] | None = None,
 ) -> CollectionRomSaveImpactReview:
     """Discover plausible save impact without deciding or performing any migration."""
 
-    if not isinstance(plan, CollectionRomOrganizationPlan):
-        raise TypeError("plan must be a CollectionRomOrganizationPlan")
+    if not isinstance(plan, (CollectionRomOrganizationPlan, HistoricalRomOrganizationPlan)):
+        raise TypeError(
+            "plan must be a CollectionRomOrganizationPlan or HistoricalRomOrganizationPlan"
+        )
 
     directories = tuple(clean_save_directories(list(configured_save_directories)))
     associations = clean_save_associations(save_associations or {})

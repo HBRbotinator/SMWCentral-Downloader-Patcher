@@ -88,6 +88,8 @@ class CollectionPage:
         self.collection_rom_organization_execution_plan_dialog = None
         self._last_collection_rom_save_disposition_review = None
         self._last_collection_rom_save_disposition_decision = None
+        self._last_collection_historical_rom_save_disposition_review = None
+        self._last_collection_historical_rom_save_disposition_decision = None
 
         # v3.1 NEW: Pagination state
         self.current_page = 1
@@ -3339,11 +3341,14 @@ class CollectionPage:
         if self.collection_rom_historical_provenance_dialog is not None:
             self.collection_rom_historical_provenance_dialog.close()
 
+        self._last_collection_historical_rom_save_disposition_review = None
+        self._last_collection_historical_rom_save_disposition_decision = None
         self.collection_rom_historical_organization_plan_dialog = (
             CollectionRomHistoricalOrganizationPlanDialog(
                 self.frame,
                 plan,
                 on_close=self._collection_rom_historical_organization_plan_closed,
+                on_review_save_impact=self._review_collection_rom_save_impact,
             )
         )
 
@@ -3574,24 +3579,32 @@ class CollectionPage:
         self.collection_rom_save_impact_dialog = dialog
 
     def _collection_rom_save_dispositions_saved(self, review, decision):
-        """Retain detached save choices for the next bounded organization planning step."""
-        if self.collection_rom_organization_plan_dialog is None:
-            return False
-        if review.plan != self.collection_rom_organization_plan_dialog.plan:
-            messagebox.showerror(
-                "ROM Organization Save Dispositions",
-                "The ROM organization plan changed while save dispositions were open. "
-                "Review save impact again.",
-                parent=self.frame,
-            )
-            return False
-        if self.collection_rom_organization_execution_plan_dialog is not None:
-            self.collection_rom_organization_execution_plan_dialog.close()
-            self.collection_rom_organization_execution_plan_dialog = None
-        self._last_collection_rom_save_disposition_review = review
-        self._last_collection_rom_save_disposition_decision = decision
-        self.collection_rom_organization_plan_dialog.set_save_disposition_decision(decision)
-        return True
+        """Retain detached save choices for the matching current or historical move plan."""
+        normal_dialog = self.collection_rom_organization_plan_dialog
+        historical_dialog = self.collection_rom_historical_organization_plan_dialog
+
+        if normal_dialog is not None and review.plan == normal_dialog.plan:
+            if self.collection_rom_organization_execution_plan_dialog is not None:
+                self.collection_rom_organization_execution_plan_dialog.close()
+                self.collection_rom_organization_execution_plan_dialog = None
+            self._last_collection_rom_save_disposition_review = review
+            self._last_collection_rom_save_disposition_decision = decision
+            normal_dialog.set_save_disposition_decision(decision)
+            return True
+
+        if historical_dialog is not None and review.plan == historical_dialog.plan:
+            self._last_collection_historical_rom_save_disposition_review = review
+            self._last_collection_historical_rom_save_disposition_decision = decision
+            historical_dialog.set_save_disposition_decision(decision)
+            return True
+
+        messagebox.showerror(
+            "ROM Organization Save Dispositions",
+            "The ROM organization plan changed while save dispositions were open. "
+            "Review save impact again.",
+            parent=self.frame,
+        )
+        return False
 
     def _preview_collection_rom_organization_execution_plan(
         self,
@@ -3783,6 +3796,8 @@ class CollectionPage:
                     pass
         self._last_collection_rom_save_disposition_review = None
         self._last_collection_rom_save_disposition_decision = None
+        self._last_collection_historical_rom_save_disposition_review = None
+        self._last_collection_historical_rom_save_disposition_decision = None
 
     def _collection_rom_organization_execution_plan_closed(self):
         self.collection_rom_organization_execution_plan_dialog = None
@@ -3814,6 +3829,17 @@ class CollectionPage:
         self.collection_rom_historical_provenance_dialog = None
 
     def _collection_rom_historical_organization_plan_closed(self):
+        historical_dialog = self.collection_rom_historical_organization_plan_dialog
+        save_dialog = self.collection_rom_save_impact_dialog
+        if (
+            historical_dialog is not None
+            and save_dialog is not None
+            and save_dialog.review.plan == historical_dialog.plan
+        ):
+            save_dialog.close()
+            self.collection_rom_save_impact_dialog = None
+        self._last_collection_historical_rom_save_disposition_review = None
+        self._last_collection_historical_rom_save_disposition_decision = None
         self.collection_rom_historical_organization_plan_dialog = None
 
     def _create_pagination_controls(self):

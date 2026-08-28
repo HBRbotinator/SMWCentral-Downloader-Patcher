@@ -4,6 +4,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Historical ROM save-impact review
+
+- Immutable historical ROM move plans can now continue to **Review Save Dispositions...** using the same non-recursive colocated and configured Save Sync evidence rules as ordinary organization plans.
+- Save discovery uses the historical plan's already-frozen source and target paths; it does not recompute catalogue layout or borrow current-submission metadata.
+- Detached save-review fingerprints now include the historical SMWC submission ID, historical title, hack type, difficulty, and exact ROM byte preconditions so historically different plans cannot collapse to the same review identity.
+- Historical save choices can be retained on the historical plan preview, including Save Sync coverage-loss acknowledgement, but no final execution-plan or Apply action is exposed yet.
+- This boundary remains read-only and performs no ROM/save filesystem mutation, Collection rewrite, provider call, or Save Sync configuration change.
+
 ### Immutable historical ROM organization plan preview
 
 - Historical provenance review rows marked **Ready for plan** can now be frozen through **Preview Historical Move Plan...** into a dedicated immutable read-only plan.

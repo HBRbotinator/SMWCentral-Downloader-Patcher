@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Mapping
 
+from collection_rom_historical_organization_plan import HistoricalRomOrganizationPlan
 from collection_rom_save_impact import (
     CollectionRomSaveImpactReview,
     SOURCE_COLOCATED,
@@ -126,10 +127,27 @@ def save_impact_review_fingerprint(review: CollectionRomSaveImpactReview) -> str
         raise TypeError("review must be a CollectionRomSaveImpactReview")
 
     plan = review.plan
-    payload = {
-        "collection_revision_token": plan.collection_revision_token,
-        "output_dir": plan.output_dir,
-        "moves": [
+    if isinstance(plan, HistoricalRomOrganizationPlan):
+        plan_kind = "historical_provenance"
+        move_payloads = [
+            {
+                "collection_id": move.collection_id,
+                "source_path": move.source_path,
+                "target_path": move.target_path,
+                "sha256": move.sha256,
+                "size_bytes": move.size_bytes,
+                "source_mtime_ns": move.source_mtime_ns,
+                "primary": move.primary,
+                "historical_smwc_submission_id": move.historical_smwc_submission_id,
+                "historical_title": move.historical_title,
+                "historical_hack_type": move.historical_hack_type,
+                "historical_difficulty": move.historical_difficulty,
+            }
+            for move in plan.moves
+        ]
+    else:
+        plan_kind = "current_submission"
+        move_payloads = [
             {
                 "collection_id": move.collection_id,
                 "source_path": move.source_path,
@@ -141,7 +159,13 @@ def save_impact_review_fingerprint(review: CollectionRomSaveImpactReview) -> str
                 "smwc_submission_id": move.smwc_submission_id,
             }
             for move in plan.moves
-        ],
+        ]
+
+    payload = {
+        "plan_kind": plan_kind,
+        "collection_revision_token": plan.collection_revision_token,
+        "output_dir": plan.output_dir,
+        "moves": move_payloads,
         "configured_save_directories": list(review.configured_save_directories),
         "rows": [
             {
