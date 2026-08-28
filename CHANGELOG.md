@@ -4,6 +4,13 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Immutable historical ROM organization plan preview
+
+- Historical provenance review rows marked **Ready for plan** can now be frozen through **Preview Historical Move Plan...** into a dedicated immutable read-only plan.
+- Planning preserves the exact historical SMWC submission ID, catalogue title, hack type, and difficulty that justified each target instead of borrowing current Collection metadata.
+- The planner rechecks the same Collection revision, exact modern `files[]` ownership/provenance, regular non-symlink source state, target vacancy, byte size, stable filesystem identity, and exact SHA-256 before freezing a move.
+- The historical plan preview exposes no save review, final execution plan, or Apply action yet; connecting these frozen historical moves to the existing save-aware transactional organizer remains a later explicit boundary.
+
 ### Read-only historical ROM provenance organization review
 
 - The ROM organization audit now exposes **Review Historical Provenance...** for modern `files[]` assets whose explicit per-ROM SMWC submission differs from the Collection record's current numeric submission.

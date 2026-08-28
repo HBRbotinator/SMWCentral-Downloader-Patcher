@@ -63,9 +63,16 @@ class HistoricalRomProvenanceProgressDialog:
 class CollectionRomHistoricalProvenanceDialog:
     """Modal read-only preview of historical submission-owned ROM layout metadata."""
 
-    def __init__(self, parent, review: HistoricalRomProvenanceReview, on_close=None):
+    def __init__(
+        self,
+        parent,
+        review: HistoricalRomProvenanceReview,
+        on_close=None,
+        on_preview_plan=None,
+    ):
         self.review = review
         self._on_close = on_close
+        self._on_preview_plan = on_preview_plan
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Historical ROM Provenance Review")
@@ -170,9 +177,9 @@ class CollectionRomHistoricalProvenanceDialog:
         ttk.Label(
             outer,
             text=(
-                "No move plan or Apply action exists in this review. A later boundary must freeze "
-                "the exact historical metadata, Collection revision, ROM bytes and target preconditions "
-                "before these ready rows can join transactional organization."
+                "No Apply action exists in this review. Ready rows may be frozen into an immutable "
+                "historical move-plan preview that revalidates the exact historical metadata, Collection "
+                "revision, ROM bytes and target preconditions before any later save/filesystem boundary."
             ),
             wraplength=1160,
             justify="left",
@@ -180,6 +187,16 @@ class CollectionRomHistoricalProvenanceDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        if self._on_preview_plan is not None and self.review.ready_count:
+            ttk.Button(
+                buttons,
+                text="Preview Historical Move Plan...",
+                command=self._preview_plan,
+            ).pack(side="right", padx=(0, 8))
+
+    def _preview_plan(self):
+        if self._on_preview_plan is not None:
+            self._on_preview_plan(self.review)
 
     def close(self):
         if self._closed:

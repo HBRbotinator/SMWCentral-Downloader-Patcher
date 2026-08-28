@@ -30,8 +30,9 @@ class HistoricalRomProvenanceDialogContractTests(unittest.TestCase):
                 elif isinstance(node.func, ast.Attribute): called.add(node.func.attr)
         self.assertTrue(forbidden.isdisjoint(called), sorted(called))
         self.assertNotIn('text="Apply', source)
-        self.assertNotIn('text="Preview Plan', source)
-        self.assertIn("No move plan or Apply action exists", source)
+        self.assertNotIn('text="Apply', source)
+        self.assertIn('text="Preview Historical Move Plan..."', source)
+        self.assertIn("No Apply action exists in this review", source)
 
     def test_model_has_no_mutating_filesystem_calls(self):
         source = (ROOT / "collection_rom_historical_provenance.py").read_text(encoding="utf-8")

@@ -78,6 +78,7 @@ class CollectionPage:
         self.collection_rom_legacy_metadata_dialog = None
         self.collection_rom_legacy_metadata_plan_dialog = None
         self.collection_rom_historical_provenance_dialog = None
+        self.collection_rom_historical_organization_plan_dialog = None
         self.collection_rom_historical_provenance_progress_dialog = None
         self._collection_rom_historical_provenance_busy = False
         self._collection_rom_historical_provenance_queue = queue.Queue()
@@ -324,6 +325,10 @@ class CollectionPage:
         if self.collection_rom_legacy_metadata_plan_dialog is not None:
             self.collection_rom_legacy_metadata_plan_dialog.close()
             self.collection_rom_legacy_metadata_plan_dialog = None
+
+        if self.collection_rom_historical_organization_plan_dialog is not None:
+            self.collection_rom_historical_organization_plan_dialog.close()
+            self.collection_rom_historical_organization_plan_dialog = None
 
         if self.collection_rom_save_impact_dialog is not None:
             self.collection_rom_save_impact_dialog.close()
@@ -3293,6 +3298,52 @@ class CollectionPage:
                 self.frame,
                 payload,
                 on_close=self._collection_rom_historical_provenance_closed,
+                on_preview_plan=self._preview_collection_historical_rom_organization_plan,
+            )
+        )
+
+    def _preview_collection_historical_rom_organization_plan(self, review):
+        """Freeze historical-review ready rows into an immutable read-only move plan."""
+        if self.collection_rom_historical_organization_plan_dialog is not None:
+            try:
+                self.collection_rom_historical_organization_plan_dialog.dialog.lift()
+                self.collection_rom_historical_organization_plan_dialog.dialog.focus_force()
+                return
+            except tk.TclError:
+                self.collection_rom_historical_organization_plan_dialog = None
+
+        try:
+            from collection_plan_apply import collection_revision_token
+            from collection_rom_historical_organization_plan import (
+                HistoricalRomOrganizationPlanError,
+                build_historical_rom_organization_plan,
+            )
+            from ui.collection_rom_historical_organization_plan_dialog import (
+                CollectionRomHistoricalOrganizationPlanDialog,
+            )
+
+            plan = build_historical_rom_organization_plan(
+                review,
+                copy.deepcopy(self.data_manager.data),
+                collection_revision_token(self.data_manager),
+            )
+        except (HistoricalRomOrganizationPlanError, OSError, ValueError) as error:
+            self._log(f"Historical ROM organization plan preview failed: {error}", "Error")
+            messagebox.showerror(
+                "Historical ROM Organization Plan",
+                f"The historical ROM move plan could not be frozen safely:\\n\\n{error}",
+                parent=self.frame,
+            )
+            return
+
+        if self.collection_rom_historical_provenance_dialog is not None:
+            self.collection_rom_historical_provenance_dialog.close()
+
+        self.collection_rom_historical_organization_plan_dialog = (
+            CollectionRomHistoricalOrganizationPlanDialog(
+                self.frame,
+                plan,
+                on_close=self._collection_rom_historical_organization_plan_closed,
             )
         )
 
@@ -3720,6 +3771,7 @@ class CollectionPage:
             "collection_rom_legacy_metadata_dialog",
             "collection_rom_legacy_metadata_plan_dialog",
             "collection_rom_historical_provenance_dialog",
+            "collection_rom_historical_organization_plan_dialog",
             "collection_rom_historical_provenance_progress_dialog",
         ):
             dialog = getattr(self, attr, None)
@@ -3760,6 +3812,9 @@ class CollectionPage:
 
     def _collection_rom_historical_provenance_closed(self):
         self.collection_rom_historical_provenance_dialog = None
+
+    def _collection_rom_historical_organization_plan_closed(self):
+        self.collection_rom_historical_organization_plan_dialog = None
 
     def _create_pagination_controls(self):
         """Create pagination controls"""
