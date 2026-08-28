@@ -4,6 +4,15 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Read-only historical ROM provenance organization review
+
+- The ROM organization audit now exposes **Review Historical Provenance...** for modern `files[]` assets whose explicit per-ROM SMWC submission differs from the Collection record's current numeric submission.
+- The review fetches rich metadata only for those already-recorded historical submission IDs and derives type/difficulty layout from each ROM's own submission metadata rather than borrowing current Collection metadata.
+- The exact Collection revision is captured before metadata loading and the review is discarded if Collection state changes before presentation.
+- Historical targets remain read-only: the review reports ready, already-in-place, missing, occupied, collision, and metadata-review states but exposes no move-plan or Apply action.
+- Target collisions are checked both between historical assets and against ordinary current-submission move candidates from the same organization audit.
+- Numeric assets with missing/unknown per-ROM provenance remain explicitly excluded; this workflow does not guess their submission identity or resolve ambiguous legacy migration provenance.
+
 ### Transactional legacy ROM metadata modernization Apply
 
 - The immutable legacy ROM metadata preview now exposes an explicit **Apply Metadata Backfill...** confirmation boundary.

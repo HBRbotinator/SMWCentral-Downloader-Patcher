@@ -100,6 +100,16 @@ class CollectionRomOrganizationAudit:
     def legacy_path_count(self) -> int:
         return sum(row.status == STATUS_LEGACY_PATH for row in self.rows)
 
+    @property
+    def historical_provenance_count(self) -> int:
+        return sum(
+            row.status == STATUS_REVIEW_PROVENANCE
+            and row.smwc_submission_id is not None
+            and _numeric_collection_id(row.collection_id) is not None
+            and row.smwc_submission_id != _numeric_collection_id(row.collection_id)
+            for row in self.rows
+        )
+
 
 def _absolute(path: str) -> str:
     return os.path.abspath(os.path.expanduser(path))

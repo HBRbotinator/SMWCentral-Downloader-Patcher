@@ -77,6 +77,11 @@ class CollectionPage:
         self.collection_rom_organization_audit_dialog = None
         self.collection_rom_legacy_metadata_dialog = None
         self.collection_rom_legacy_metadata_plan_dialog = None
+        self.collection_rom_historical_provenance_dialog = None
+        self.collection_rom_historical_provenance_progress_dialog = None
+        self._collection_rom_historical_provenance_busy = False
+        self._collection_rom_historical_provenance_queue = queue.Queue()
+        self._collection_rom_historical_provenance_poll_id = None
         self.collection_rom_organization_plan_dialog = None
         self.collection_rom_save_impact_dialog = None
         self.collection_rom_organization_execution_plan_dialog = None
@@ -3175,8 +3180,121 @@ class CollectionPage:
             on_close=self._collection_rom_organization_audit_closed,
             on_preview_plan=self._preview_collection_rom_organization_plan,
             on_review_legacy_metadata=self._review_collection_legacy_rom_metadata,
+            on_review_historical_provenance=self._review_collection_historical_rom_provenance,
         )
         self.collection_rom_organization_audit_dialog = dialog
+
+    def _review_collection_historical_rom_provenance(self, audit):
+        """Fetch only recorded historical submission metadata for read-only layout review."""
+        if self._collection_rom_historical_provenance_busy:
+            return
+        if self.collection_rom_historical_provenance_dialog is not None:
+            try:
+                self.collection_rom_historical_provenance_dialog.dialog.lift()
+                self.collection_rom_historical_provenance_dialog.dialog.focus_force()
+                return
+            except tk.TclError:
+                self.collection_rom_historical_provenance_dialog = None
+
+        from collection_plan_apply import collection_revision_token
+        from collection_rom_historical_provenance import required_historical_submission_ids
+        from ui.collection_rom_historical_provenance_dialog import (
+            HistoricalRomProvenanceProgressDialog,
+        )
+
+        identifiers = required_historical_submission_ids(audit)
+        if not identifiers:
+            messagebox.showinfo(
+                "Historical ROM Provenance",
+                "This audit has no retained ROM assets with an explicit historical SMWC submission ID.",
+                parent=self.frame,
+            )
+            return
+
+        frozen_collection = copy.deepcopy(self.data_manager.data)
+        revision = collection_revision_token(self.data_manager)
+        processed_path = str(self.data_manager.json_path)
+        self._collection_rom_historical_provenance_busy = True
+        self.collection_rom_historical_provenance_progress_dialog = (
+            HistoricalRomProvenanceProgressDialog(self.frame)
+        )
+        self._log(
+            "Reviewing retained ROM layout from recorded historical SMWC provenance: "
+            + ", ".join(str(identifier) for identifier in identifiers),
+            "Information",
+        )
+
+        def worker():
+            try:
+                from kaizoff_provider import KaizOffCatalogueProvider
+                from collection_rom_historical_provenance import (
+                    build_historical_rom_provenance_review,
+                )
+
+                processed = Path(processed_path).expanduser().resolve()
+                provider = KaizOffCatalogueProvider(
+                    cache_dir=processed.with_name("kaizoff_cache")
+                )
+                details = tuple(provider.get_hack(identifier) for identifier in identifiers)
+                review = build_historical_rom_provenance_review(
+                    audit, frozen_collection, revision, details
+                )
+                self._collection_rom_historical_provenance_queue.put(("ok", review))
+            except Exception as error:
+                self._collection_rom_historical_provenance_queue.put(("error", error))
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="collection-rom-historical-provenance",
+        ).start()
+        self._collection_rom_historical_provenance_poll_id = self.frame.after(
+            100, self._poll_collection_historical_rom_provenance
+        )
+
+    def _poll_collection_historical_rom_provenance(self):
+        try:
+            status, payload = self._collection_rom_historical_provenance_queue.get_nowait()
+        except queue.Empty:
+            self._collection_rom_historical_provenance_poll_id = self.frame.after(
+                100, self._poll_collection_historical_rom_provenance
+            )
+            return
+
+        self._collection_rom_historical_provenance_poll_id = None
+        self._collection_rom_historical_provenance_busy = False
+        if self.collection_rom_historical_provenance_progress_dialog is not None:
+            self.collection_rom_historical_provenance_progress_dialog.close()
+            self.collection_rom_historical_provenance_progress_dialog = None
+
+        if status != "ok":
+            self._log(f"Historical ROM provenance review failed: {payload}", "Error")
+            messagebox.showerror(
+                "Historical ROM Provenance",
+                f"Historical submission metadata could not be reviewed safely:\n\n{payload}",
+                parent=self.frame,
+            )
+            return
+
+        from collection_plan_apply import collection_revision_token
+        if collection_revision_token(self.data_manager) != payload.collection_revision_token:
+            messagebox.showerror(
+                "Historical ROM Provenance",
+                "Collection changed while historical metadata was loading. Run the ROM organization audit again.",
+                parent=self.frame,
+            )
+            return
+
+        from ui.collection_rom_historical_provenance_dialog import (
+            CollectionRomHistoricalProvenanceDialog,
+        )
+        self.collection_rom_historical_provenance_dialog = (
+            CollectionRomHistoricalProvenanceDialog(
+                self.frame,
+                payload,
+                on_close=self._collection_rom_historical_provenance_closed,
+            )
+        )
 
     def _review_collection_legacy_rom_metadata(self):
         """Show a read-only audit of file_path-only Collection ROM records."""
@@ -3601,6 +3719,8 @@ class CollectionPage:
             "collection_rom_organization_audit_dialog",
             "collection_rom_legacy_metadata_dialog",
             "collection_rom_legacy_metadata_plan_dialog",
+            "collection_rom_historical_provenance_dialog",
+            "collection_rom_historical_provenance_progress_dialog",
         ):
             dialog = getattr(self, attr, None)
             setattr(self, attr, None)
@@ -3637,6 +3757,9 @@ class CollectionPage:
 
     def _collection_rom_legacy_metadata_plan_closed(self):
         self.collection_rom_legacy_metadata_plan_dialog = None
+
+    def _collection_rom_historical_provenance_closed(self):
+        self.collection_rom_historical_provenance_dialog = None
 
     def _create_pagination_controls(self):
         """Create pagination controls"""

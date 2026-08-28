@@ -162,9 +162,8 @@ The current matcher was calibrated against a legacy real-world Collection snapsh
    - Organization uses a journaled copy → Collection commit → old-source cleanup sequence. Targets are created exclusively and never overwrite existing files; pre-commit failures roll back target copies and Collection state
    - After the commit marker, Collection points at the verified targets and recovery only finishes deleting the reviewed old sources. Startup detects an interrupted organization journal and requires explicit confirmation that every other application instance is closed before recovery
    - Retained ROMs whose per-file SMWC provenance belongs to a different submission are intentionally review-only rather than inheriting the current record's catalogue layout
+   - For those retained modern assets, **Review Historical Provenance...** fetches metadata only for the explicitly recorded historical SMWC IDs and previews the type/difficulty layout derived from each ROM's own submission; it remains read-only and does not yet add the rows to a move plan
    - Numeric modern ROMs with missing provenance and legacy `file_path`-only entries are also review-only; the app does not invent migration semantics for them
-   - When legacy `file_path`-only rows are present, **Review Legacy ROM Metadata...** opens a separate read-only modernization audit. It identifies records that can later be converted to modern `files[]` state and explicitly blocks missing/symlinked/duplicate paths or ambiguous historical provenance; this audit does not hash or write anything yet
-   - Audit-ready legacy rows can continue to **Preview Modernization Plan...**. This read-only step revalidates the Collection revision and path ownership, computes stable SHA-256/size evidence, and previews the exact modern primary `files[]` row while leaving `file_path`, `additional_paths`, ROM bytes, and Collection data unchanged
    - Only colocated saves explicitly marked **Migrate with ROM** become filesystem operations. **Leave in place** saves and configured/associated Save Sync evidence are not moved or rewritten
 
 ![Collection Page](images/application-5.0-collection.png)
