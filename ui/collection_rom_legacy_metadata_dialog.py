@@ -34,10 +34,12 @@ class CollectionRomLegacyMetadataDialog:
         audit: LegacyRomMetadataAudit,
         on_close=None,
         on_preview_plan=None,
+        on_review_provenance=None,
     ):
         self.audit = audit
         self._on_close = on_close
         self._on_preview_plan = on_preview_plan
+        self._on_review_provenance = on_review_provenance
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Legacy Collection ROM Metadata")
@@ -163,12 +165,23 @@ class CollectionRomLegacyMetadataDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        provenance_count = sum(row.status == STATUS_REVIEW_PROVENANCE for row in self.audit.rows)
+        if self._on_review_provenance is not None and provenance_count:
+            ttk.Button(
+                buttons,
+                text="Review Provenance...",
+                command=self._review_provenance,
+            ).pack(side="right", padx=(0, 8))
         if self._on_preview_plan is not None and self.audit.ready_count:
             ttk.Button(
                 buttons,
                 text="Preview Modernization Plan...",
                 command=self._preview_plan,
             ).pack(side="right", padx=(0, 8))
+
+    def _review_provenance(self):
+        if self._on_review_provenance is not None:
+            self._on_review_provenance(self.audit)
 
     def _preview_plan(self):
         if self._on_preview_plan is not None:

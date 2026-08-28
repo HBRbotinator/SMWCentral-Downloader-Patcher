@@ -4,6 +4,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Explicit legacy ROM provenance review
+
+- Legacy `file_path` records that are blocked because their numeric Collection entry has prior identity-migration provenance can now open **Review Provenance...** from the legacy metadata audit.
+- Each row requires an explicit choice between the current numeric SMWC ID and numeric prior/history IDs already recorded on that Collection record; no provider search or inferred submission relationship is introduced.
+- The review is bound to the exact Collection revision captured by the legacy audit and fails closed if Collection state changes before the choice boundary is opened.
+- Saved choices are detached review state only. This commit does not hash ROMs, create `files[]`, move files, or persist Collection metadata; a later immutable modernization-plan boundary must consume and revalidate the decision.
+- Unknown legacy identity forms and migrated records without a recorded alternative numeric SMWC ID remain blocked rather than receiving a guessed choice.
+
 ### Transactional historical ROM organization Apply
 
 - Final historical ROM/save execution plans can now be applied explicitly through the proven journaled organization transaction engine.

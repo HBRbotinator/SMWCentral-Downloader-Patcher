@@ -23,6 +23,11 @@ from collection_rom_organization import build_collection_rom_organization_audit
 from ui.collection_rom_organization_dialog import CollectionRomOrganizationAuditDialog
 from collection_rom_legacy_metadata import build_legacy_rom_metadata_audit
 from ui.collection_rom_legacy_metadata_dialog import CollectionRomLegacyMetadataDialog
+from collection_rom_legacy_provenance_review import (
+    LegacyRomProvenanceReviewError,
+    build_legacy_rom_provenance_review,
+)
+from ui.collection_rom_legacy_provenance_dialog import CollectionRomLegacyProvenanceDialog
 from collection_rom_legacy_metadata_plan import (
     LegacyRomMetadataPlanError,
     build_legacy_rom_metadata_modernization_plan,
@@ -84,6 +89,9 @@ class CollectionPage:
         self.collection_rom_organization_audit_dialog = None
         self.collection_rom_legacy_metadata_dialog = None
         self.collection_rom_legacy_metadata_plan_dialog = None
+        self.collection_rom_legacy_provenance_dialog = None
+        self._last_collection_legacy_provenance_review = None
+        self._last_collection_legacy_provenance_decision = None
         self.collection_rom_historical_provenance_dialog = None
         self.collection_rom_historical_organization_plan_dialog = None
         self.collection_rom_historical_provenance_progress_dialog = None
@@ -98,6 +106,8 @@ class CollectionPage:
         self._last_collection_rom_save_disposition_decision = None
         self._last_collection_historical_rom_save_disposition_review = None
         self._last_collection_historical_rom_save_disposition_decision = None
+        self._last_collection_legacy_provenance_review = None
+        self._last_collection_legacy_provenance_decision = None
 
         # v3.1 NEW: Pagination state
         self.current_page = 1
@@ -335,6 +345,10 @@ class CollectionPage:
         if self.collection_rom_legacy_metadata_plan_dialog is not None:
             self.collection_rom_legacy_metadata_plan_dialog.close()
             self.collection_rom_legacy_metadata_plan_dialog = None
+
+        if self.collection_rom_legacy_provenance_dialog is not None:
+            self.collection_rom_legacy_provenance_dialog.close()
+            self.collection_rom_legacy_provenance_dialog = None
 
         if self.collection_rom_historical_organization_plan_dialog is not None:
             self.collection_rom_historical_organization_plan_dialog.close()
@@ -3392,8 +3406,53 @@ class CollectionPage:
             audit,
             on_close=self._collection_rom_legacy_metadata_closed,
             on_preview_plan=self._preview_collection_legacy_rom_metadata_plan,
+            on_review_provenance=self._review_collection_legacy_rom_provenance,
         )
         self.collection_rom_legacy_metadata_dialog = dialog
+
+    def _review_collection_legacy_rom_provenance(self, audit):
+        """Collect explicit provenance decisions for ambiguous migrated legacy ROMs."""
+        if self.collection_rom_legacy_provenance_dialog is not None:
+            try:
+                self.collection_rom_legacy_provenance_dialog.dialog.lift()
+                self.collection_rom_legacy_provenance_dialog.dialog.focus_force()
+                return
+            except tk.TclError:
+                self.collection_rom_legacy_provenance_dialog = None
+
+        try:
+            from collection_plan_apply import collection_revision_token
+
+            review = build_legacy_rom_provenance_review(
+                audit,
+                copy.deepcopy(self.data_manager.data),
+                collection_revision_token(self.data_manager),
+            )
+        except (LegacyRomProvenanceReviewError, OSError, ValueError) as error:
+            self._log(f"Legacy ROM provenance review failed: {error}", "Error")
+            messagebox.showerror(
+                "Legacy ROM Provenance",
+                f"Legacy ROM provenance could not be reviewed safely:\n\n{error}",
+                parent=self.frame,
+            )
+            return
+
+        self._last_collection_legacy_provenance_review = None
+        self._last_collection_legacy_provenance_decision = None
+        self.collection_rom_legacy_provenance_dialog = CollectionRomLegacyProvenanceDialog(
+            self.frame,
+            review,
+            on_close=self._collection_rom_legacy_provenance_closed,
+            on_saved=self._collection_rom_legacy_provenance_saved,
+        )
+
+    def _collection_rom_legacy_provenance_saved(self, review, decision):
+        self._last_collection_legacy_provenance_review = review
+        self._last_collection_legacy_provenance_decision = decision
+        self._log(
+            f"Saved explicit legacy ROM provenance for {len(decision.selections)} record(s)",
+            "Information",
+        )
 
     def _preview_collection_legacy_rom_metadata_plan(self, audit):
         """Hash/revalidate audit-ready legacy ROMs into an immutable preview plan."""
@@ -3964,6 +4023,7 @@ class CollectionPage:
             "collection_rom_organization_audit_dialog",
             "collection_rom_legacy_metadata_dialog",
             "collection_rom_legacy_metadata_plan_dialog",
+            "collection_rom_legacy_provenance_dialog",
             "collection_rom_historical_provenance_dialog",
             "collection_rom_historical_organization_plan_dialog",
             "collection_rom_historical_provenance_progress_dialog",
@@ -4008,6 +4068,11 @@ class CollectionPage:
 
     def _collection_rom_legacy_metadata_plan_closed(self):
         self.collection_rom_legacy_metadata_plan_dialog = None
+
+    def _collection_rom_legacy_provenance_closed(self):
+        self.collection_rom_legacy_provenance_dialog = None
+        self._last_collection_legacy_provenance_review = None
+        self._last_collection_legacy_provenance_decision = None
 
     def _collection_rom_historical_provenance_closed(self):
         self.collection_rom_historical_provenance_dialog = None
