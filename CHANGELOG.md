@@ -4,6 +4,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Reviewed legacy ROM metadata modernization preview
+
+- Explicit legacy provenance decisions can now continue to **Preview Modernization Plan...** after every ambiguous row has a saved recorded-history SMWC selection.
+- Planning requires the exact legacy audit, provenance review, saved decision, and live Collection revision to agree before any ROM is accepted.
+- Each reviewed ROM is revalidated as the same regular non-symlink `file_path` owner, duplicate ownership is rejected, and exact SHA-256/size/mtime evidence is frozen under stable before/after filesystem-stat checks.
+- The proposed primary `files[]` row preserves the user-selected current/prior SMWC submission ID and records `legacy_collection_backfill_reviewed_provenance` as the backfill source.
+- This boundary is deliberately read-only and uses a dedicated plan/preview type with no Apply action; Collection writes remain a later explicit commit.
+
 ### Explicit legacy ROM provenance review
 
 - Legacy `file_path` records that are blocked because their numeric Collection entry has prior identity-migration provenance can now open **Review Provenance...** from the legacy metadata audit.

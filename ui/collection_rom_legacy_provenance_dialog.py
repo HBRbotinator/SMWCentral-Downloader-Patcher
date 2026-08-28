@@ -12,10 +12,12 @@ from collection_rom_legacy_provenance_review import (
 
 
 class CollectionRomLegacyProvenanceDialog:
-    def __init__(self, parent, review: LegacyRomProvenanceReview, on_close=None, on_saved=None):
+    def __init__(self, parent, review: LegacyRomProvenanceReview, on_close=None, on_saved=None, on_preview_plan=None):
         self.review = review
         self._on_close = on_close
         self._on_saved = on_saved
+        self._on_preview_plan = on_preview_plan
+        self._saved_decision = None
         self._closed = False
         self._vars: dict[str, tk.StringVar] = {}
         self.dialog = tk.Toplevel(parent)
@@ -74,6 +76,14 @@ class CollectionRomLegacyProvenanceDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x", pady=(12, 0))
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        self._preview_button = ttk.Button(
+            buttons,
+            text="Preview Modernization Plan...",
+            command=self._preview_plan,
+            state="disabled",
+        )
+        if self._on_preview_plan is not None:
+            self._preview_button.pack(side="right", padx=(0, 8))
         ttk.Button(buttons, text="Save Provenance Decisions", command=self._save).pack(side="right", padx=(0, 8))
 
     def _save(self):
@@ -87,6 +97,9 @@ class CollectionRomLegacyProvenanceDialog:
         except LegacyRomProvenanceReviewError as error:
             messagebox.showerror("Legacy ROM Provenance", str(error), parent=self.dialog)
             return
+        self._saved_decision = decision
+        if self._on_preview_plan is not None:
+            self._preview_button.configure(state="normal")
         if self._on_saved is not None:
             self._on_saved(self.review, decision)
         messagebox.showinfo(
@@ -97,6 +110,11 @@ class CollectionRomLegacyProvenanceDialog:
             ),
             parent=self.dialog,
         )
+
+
+    def _preview_plan(self):
+        if self._on_preview_plan is not None and self._saved_decision is not None:
+            self._on_preview_plan(self.review, self._saved_decision)
 
     def close(self):
         if self._closed:

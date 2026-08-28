@@ -14,7 +14,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from collection_rom_legacy_metadata import LegacyRomMetadataAudit, STATUS_READY
+from collection_rom_legacy_metadata import (
+    LegacyRomMetadataAudit,
+    STATUS_READY,
+    STATUS_REVIEW_PROVENANCE,
+)
+from collection_rom_legacy_provenance_review import (
+    LegacyRomProvenanceDecision,
+    LegacyRomProvenanceReview,
+)
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -104,6 +112,39 @@ class LegacyRomMetadataModernizationPlan:
         paths = [_path_identity(operation.canonical_path) for operation in self.operations]
         if len(paths) != len(set(paths)):
             raise LegacyRomMetadataPlanError("Modernization plan has duplicate ROM paths.")
+
+
+@dataclass(frozen=True)
+class ReviewedLegacyRomMetadataModernizationPlan:
+    """Immutable preview created only from explicit ambiguous provenance decisions."""
+
+    collection_revision_token: str
+    operations: tuple[LegacyRomMetadataBackfillOperation, ...]
+    reviewed_row_count: int
+
+    def __post_init__(self) -> None:
+        if not self.collection_revision_token.strip():
+            raise LegacyRomMetadataPlanError(
+                "Reviewed modernization plan requires a Collection revision precondition."
+            )
+        if not self.operations:
+            raise LegacyRomMetadataPlanError(
+                "Reviewed modernization plan requires at least one explicit provenance decision."
+            )
+        if self.reviewed_row_count != len(self.operations):
+            raise LegacyRomMetadataPlanError(
+                "Reviewed modernization plan must contain every reviewed provenance row exactly once."
+            )
+        ids = [operation.collection_id for operation in self.operations]
+        if len(ids) != len(set(ids)):
+            raise LegacyRomMetadataPlanError(
+                "Reviewed modernization plan has duplicate Collection IDs."
+            )
+        paths = [_path_identity(operation.canonical_path) for operation in self.operations]
+        if len(paths) != len(set(paths)):
+            raise LegacyRomMetadataPlanError(
+                "Reviewed modernization plan has duplicate ROM paths."
+            )
 
 
 def _absolute(path: str) -> str:
@@ -306,9 +347,124 @@ def build_legacy_rom_metadata_modernization_plan(
     )
 
 
+def build_reviewed_legacy_rom_metadata_modernization_plan(
+    audit: LegacyRomMetadataAudit,
+    review: LegacyRomProvenanceReview,
+    decision: LegacyRomProvenanceDecision,
+    collection_data: Mapping[str, Any],
+    collection_revision_token: str,
+) -> ReviewedLegacyRomMetadataModernizationPlan:
+    """Hash/freeze ambiguous legacy ROMs only after explicit recorded-ID provenance choices."""
+    if not isinstance(audit, LegacyRomMetadataAudit):
+        raise TypeError("audit must be a LegacyRomMetadataAudit")
+    if not isinstance(review, LegacyRomProvenanceReview):
+        raise TypeError("review must be a LegacyRomProvenanceReview")
+    if not isinstance(decision, LegacyRomProvenanceDecision):
+        raise TypeError("decision must be a LegacyRomProvenanceDecision")
+    if not isinstance(collection_data, Mapping):
+        raise TypeError("Collection data must be a mapping.")
+
+    revision = str(collection_revision_token or "").strip()
+    if not revision:
+        raise LegacyRomMetadataPlanError(
+            "Collection revision token is required before previewing reviewed modernization."
+        )
+    revisions = {
+        str(audit.collection_revision_token or "").strip(),
+        str(review.collection_revision_token or "").strip(),
+        str(decision.collection_revision_token or "").strip(),
+        revision,
+    }
+    if "" in revisions or len(revisions) != 1:
+        raise LegacyRomMetadataPlanError(
+            "Collection or provenance review changed before modernization planning. Run the legacy metadata audit again."
+        )
+
+    audit_rows = {
+        row.collection_id: row
+        for row in audit.rows
+        if row.status == STATUS_REVIEW_PROVENANCE
+    }
+    review_rows = {row.collection_id: row for row in review.rows}
+    selected = dict(decision.selections)
+    if set(review_rows) != set(selected):
+        raise LegacyRomMetadataPlanError(
+            "The saved provenance decision no longer covers the exact reviewed legacy ROM set."
+        )
+
+    candidate_paths: dict[str, str] = {}
+    for collection_id, review_row in review_rows.items():
+        audit_row = audit_rows.get(collection_id)
+        if audit_row is None:
+            raise LegacyRomMetadataPlanError(
+                "The saved provenance review no longer matches the legacy metadata audit."
+            )
+        chosen = selected[collection_id]
+        if chosen not in review_row.candidate_smwc_submission_ids:
+            raise LegacyRomMetadataPlanError(
+                f"Selected SMWC provenance for {review_row.title!r} is no longer an allowed recorded identity."
+            )
+        _validate_exact_legacy_record(audit_row, collection_data)
+        identity = _path_identity(audit_row.current_path)
+        if identity in candidate_paths:
+            raise LegacyRomMetadataPlanError(
+                "The reviewed provenance set contains duplicate legacy ROM paths."
+            )
+        candidate_paths[identity] = collection_id
+    _reject_duplicate_current_ownership(candidate_paths, collection_data)
+
+    operations: list[LegacyRomMetadataBackfillOperation] = []
+    for collection_id, review_row in review_rows.items():
+        audit_row = audit_rows[collection_id]
+        record = _validate_exact_legacy_record(audit_row, collection_data)
+        current_file_path = str(record["file_path"])
+        canonical = _canonical(current_file_path)
+        if _path_identity(canonical) != _path_identity(audit_row.current_path):
+            raise LegacyRomMetadataPlanError(
+                f"Legacy ROM target for {audit_row.title!r} changed after provenance review."
+            )
+        sha256, size_bytes, mtime_ns = _hash_stable_regular_file(canonical)
+        if audit_row.size_bytes is not None and size_bytes != audit_row.size_bytes:
+            raise LegacyRomMetadataPlanError(
+                f"Legacy ROM size for {audit_row.title!r} changed after provenance review."
+            )
+        operations.append(
+            LegacyRomMetadataBackfillOperation(
+                collection_id=collection_id,
+                title=audit_row.title,
+                legacy_file_path=current_file_path,
+                canonical_path=canonical,
+                asset_name=os.path.basename(canonical),
+                sha256=sha256,
+                size_bytes=size_bytes,
+                source_mtime_ns=mtime_ns,
+                smwc_submission_id=selected[collection_id],
+                ingestion_source="legacy_collection_backfill_reviewed_provenance",
+            )
+        )
+
+    ordered = tuple(
+        sorted(
+            operations,
+            key=lambda operation: (
+                operation.title.casefold(),
+                operation.collection_id,
+                operation.canonical_path.casefold(),
+            ),
+        )
+    )
+    return ReviewedLegacyRomMetadataModernizationPlan(
+        collection_revision_token=revision,
+        operations=ordered,
+        reviewed_row_count=len(review_rows),
+    )
+
+
 __all__ = [
     "LegacyRomMetadataBackfillOperation",
     "LegacyRomMetadataModernizationPlan",
+    "ReviewedLegacyRomMetadataModernizationPlan",
     "LegacyRomMetadataPlanError",
     "build_legacy_rom_metadata_modernization_plan",
+    "build_reviewed_legacy_rom_metadata_modernization_plan",
 ]
