@@ -11,6 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from collection_rom_provenance_history import (
+    positive_smwc_submission_id,
+    recorded_collection_smwc_submission_ids,
+)
+
 from collection_rom_legacy_metadata import LegacyRomMetadataAudit, STATUS_REVIEW_PROVENANCE
 
 
@@ -54,36 +59,15 @@ class LegacyRomProvenanceDecision:
 
 
 def _positive_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        parsed = int(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
+    return positive_smwc_submission_id(value)
 
 
-def recorded_legacy_rom_provenance_ids(collection_id: str, record: Mapping[str, Any]) -> tuple[int, ...]:
-    current = _positive_int(collection_id)
-    if current is None:
-        return ()
-    candidates = {current}
-    prior = record.get("prior_smwc_submission_ids", [])
-    if isinstance(prior, list):
-        for value in prior:
-            parsed = _positive_int(value)
-            if parsed is not None:
-                candidates.add(parsed)
-    history = record.get("identity_migration_history", [])
-    if isinstance(history, list):
-        for event in history:
-            if not isinstance(event, Mapping):
-                continue
-            for key in ("source_key", "target_key"):
-                parsed = _positive_int(event.get(key))
-                if parsed is not None:
-                    candidates.add(parsed)
-    return tuple(sorted(candidates))
+def recorded_legacy_rom_provenance_ids(
+    collection_id: str, record: Mapping[str, Any]
+) -> tuple[int, ...]:
+    """Backward-compatible legacy name for the shared recorded-ID helper."""
+
+    return recorded_collection_smwc_submission_ids(collection_id, record)
 
 
 def build_legacy_rom_provenance_review(

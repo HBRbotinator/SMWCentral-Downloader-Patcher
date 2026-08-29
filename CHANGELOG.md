@@ -4,6 +4,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Modern ROM missing-provenance review
+
+- Numeric modern `files[]` ROM assets that are missing per-ROM `smwc_submission_id` can now open **Review Missing Provenance...** directly from the ROM organization audit.
+- Each ROM asset is reviewed independently, so multiple ROMs on the same Collection entry can receive different explicit provenance decisions without collapsing to one record-level choice.
+- Allowed choices come only from the Collection record's current numeric SMWC ID plus numeric IDs already present in prior-submission or identity-migration history; arbitrary/free-form submission IDs are not accepted.
+- The review revalidates the exact audited asset path, primary flag, SHA-256, byte size, and still-missing provenance before accepting detached decisions.
+- This boundary is decision-only: it performs no provider lookup, ROM hashing, Collection write, filesystem mutation, or organization planning.
+
 ### Transactional reviewed legacy ROM metadata Apply
 
 - Reviewed-provenance modernization previews now expose **Apply Reviewed Metadata Backfill...** as an explicit Collection-only write boundary.

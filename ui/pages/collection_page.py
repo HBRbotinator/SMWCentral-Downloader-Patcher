@@ -21,6 +21,11 @@ from collection_wheel_model import CollectionWheelModel
 from ui.collection_wheel_dialog import CollectionWheelDialog
 from collection_rom_organization import build_collection_rom_organization_audit
 from ui.collection_rom_organization_dialog import CollectionRomOrganizationAuditDialog
+from collection_rom_modern_provenance_review import (
+    ModernRomProvenanceReviewError,
+    build_modern_rom_provenance_review,
+)
+from ui.collection_rom_modern_provenance_dialog import CollectionRomModernProvenanceDialog
 from collection_rom_legacy_metadata import build_legacy_rom_metadata_audit
 from ui.collection_rom_legacy_metadata_dialog import CollectionRomLegacyMetadataDialog
 from collection_rom_legacy_provenance_review import (
@@ -91,6 +96,9 @@ class CollectionPage:
         self.collection_wheel_model = CollectionWheelModel()
         self.collection_wheel_dialog = None
         self.collection_rom_organization_audit_dialog = None
+        self.collection_rom_modern_provenance_dialog = None
+        self._last_collection_modern_provenance_review = None
+        self._last_collection_modern_provenance_decision = None
         self.collection_rom_legacy_metadata_dialog = None
         self.collection_rom_legacy_metadata_plan_dialog = None
         self.collection_rom_legacy_provenance_dialog = None
@@ -3215,8 +3223,50 @@ class CollectionPage:
             on_preview_plan=self._preview_collection_rom_organization_plan,
             on_review_legacy_metadata=self._review_collection_legacy_rom_metadata,
             on_review_historical_provenance=self._review_collection_historical_rom_provenance,
+            on_review_missing_provenance=self._review_collection_modern_rom_provenance,
         )
         self.collection_rom_organization_audit_dialog = dialog
+
+    def _review_collection_modern_rom_provenance(self, audit):
+        """Review explicit ownership for modern files[] rows missing SMWC provenance."""
+        if self.collection_rom_modern_provenance_dialog is not None:
+            try:
+                self.collection_rom_modern_provenance_dialog.dialog.lift()
+                self.collection_rom_modern_provenance_dialog.dialog.focus_force()
+                return
+            except tk.TclError:
+                self.collection_rom_modern_provenance_dialog = None
+
+        try:
+            from collection_plan_apply import collection_revision_token
+
+            revision = collection_revision_token(self.data_manager)
+            review = build_modern_rom_provenance_review(
+                audit,
+                copy.deepcopy(self.data_manager.data),
+                revision,
+            )
+        except (ModernRomProvenanceReviewError, TypeError, ValueError) as error:
+            self._log(f"Modern ROM provenance review failed: {error}", "Error")
+            messagebox.showerror(
+                "Modern ROM Provenance",
+                f"Missing per-ROM provenance could not be reviewed safely:\n\n{error}",
+                parent=self.frame,
+            )
+            return
+
+        self._last_collection_modern_provenance_review = review
+        self._last_collection_modern_provenance_decision = None
+        self.collection_rom_modern_provenance_dialog = CollectionRomModernProvenanceDialog(
+            self.frame,
+            review,
+            on_close=self._collection_rom_modern_provenance_closed,
+            on_saved=self._collection_rom_modern_provenance_saved,
+        )
+
+    def _collection_rom_modern_provenance_saved(self, review, decision):
+        self._last_collection_modern_provenance_review = review
+        self._last_collection_modern_provenance_decision = decision
 
     def _review_collection_historical_rom_provenance(self, audit):
         """Fetch only recorded historical submission metadata for read-only layout review."""
@@ -4157,6 +4207,7 @@ class CollectionPage:
             "collection_rom_save_impact_dialog",
             "collection_rom_organization_plan_dialog",
             "collection_rom_organization_audit_dialog",
+            "collection_rom_modern_provenance_dialog",
             "collection_rom_legacy_metadata_dialog",
             "collection_rom_legacy_metadata_plan_dialog",
             "collection_rom_legacy_provenance_dialog",
@@ -4176,6 +4227,8 @@ class CollectionPage:
         self._last_collection_rom_save_disposition_decision = None
         self._last_collection_historical_rom_save_disposition_review = None
         self._last_collection_historical_rom_save_disposition_decision = None
+        self._last_collection_modern_provenance_review = None
+        self._last_collection_modern_provenance_decision = None
 
     def _collection_rom_organization_execution_plan_closed(self):
         self.collection_rom_organization_execution_plan_dialog = None
@@ -4196,6 +4249,11 @@ class CollectionPage:
         self._last_collection_rom_save_disposition_review = None
         self._last_collection_rom_save_disposition_decision = None
         self.collection_rom_organization_plan_dialog = None
+
+    def _collection_rom_modern_provenance_closed(self):
+        self.collection_rom_modern_provenance_dialog = None
+        self._last_collection_modern_provenance_review = None
+        self._last_collection_modern_provenance_decision = None
 
     def _collection_rom_organization_audit_closed(self):
         self.collection_rom_organization_audit_dialog = None

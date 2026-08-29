@@ -110,6 +110,15 @@ class CollectionRomOrganizationAudit:
             for row in self.rows
         )
 
+    @property
+    def missing_provenance_count(self) -> int:
+        return sum(
+            row.status == STATUS_REVIEW_PROVENANCE
+            and row.smwc_submission_id is None
+            and _numeric_collection_id(row.collection_id) is not None
+            for row in self.rows
+        )
+
 
 def _absolute(path: str) -> str:
     return os.path.abspath(os.path.expanduser(path))

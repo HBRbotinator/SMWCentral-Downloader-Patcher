@@ -41,12 +41,14 @@ class CollectionRomOrganizationAuditDialog:
         on_preview_plan=None,
         on_review_legacy_metadata=None,
         on_review_historical_provenance=None,
+        on_review_missing_provenance=None,
     ):
         self.audit = audit
         self._on_close = on_close
         self._on_preview_plan = on_preview_plan
         self._on_review_legacy_metadata = on_review_legacy_metadata
         self._on_review_historical_provenance = on_review_historical_provenance
+        self._on_review_missing_provenance = on_review_missing_provenance
         self._closed = False
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Collection ROM Organization Audit")
@@ -199,6 +201,19 @@ class CollectionRomOrganizationAuditDialog:
                 text="Review Historical Provenance...",
                 command=self._review_historical_provenance,
             ).pack(side="right", padx=(0, 8))
+        if (
+            self._on_review_missing_provenance is not None
+            and self.audit.missing_provenance_count
+        ):
+            ttk.Button(
+                buttons,
+                text="Review Missing Provenance...",
+                command=self._review_missing_provenance,
+            ).pack(side="right", padx=(0, 8))
+
+    def _review_missing_provenance(self):
+        if self._on_review_missing_provenance is not None:
+            self._on_review_missing_provenance(self.audit)
 
     def _review_historical_provenance(self):
         if self._on_review_historical_provenance is not None:
