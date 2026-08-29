@@ -76,7 +76,7 @@ class ModernRomProvenanceReviewTests(unittest.TestCase):
             decision = build_modern_rom_provenance_decision(
                 review, {review.rows[0].decision_key: 200}
             )
-            self.assertEqual(decision.selections, (("200", str(rom.resolve()), 200),))
+            self.assertEqual(decision.selections, (("200", str(rom.absolute()), 200),))
 
     def test_multiple_assets_on_same_collection_have_distinct_decision_keys(self):
         with tempfile.TemporaryDirectory() as temp:
