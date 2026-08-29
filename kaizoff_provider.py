@@ -23,9 +23,13 @@ from rom_title_matching import CatalogueEntry
 
 KAIZOFF_PUBLIC_BASE_URL = "https://kaizoff.com/api/public/v1"
 KAIZOFF_INDEX_URL = f"{KAIZOFF_PUBLIC_BASE_URL}/hacks/index"
+KAIZOFF_LIST_URL = f"{KAIZOFF_PUBLIC_BASE_URL}/hacks"
 KAIZOFF_DETAIL_URL_TEMPLATE = f"{KAIZOFF_PUBLIC_BASE_URL}/hacks/{{id}}"
 DEFAULT_INDEX_MAX_AGE_SECONDS = 6 * 60 * 60
+DEFAULT_CATALOGUE_MAX_AGE_SECONDS = 6 * 60 * 60
 DEFAULT_DETAIL_MAX_AGE_SECONDS = 24 * 60 * 60
+PUBLIC_CATALOGUE_PAGE_SIZE = 500
+MAX_PUBLIC_CATALOGUE_PAGES = 100
 MAX_KAIZOFF_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
@@ -38,6 +42,16 @@ class KaizOffIndexSnapshot:
     """One validated lightweight catalogue snapshot."""
 
     entries: tuple[CatalogueEntry, ...]
+    fetched_at: float
+    source: str
+    stale: bool
+
+
+@dataclass(frozen=True)
+class KaizOffCatalogueSnapshot:
+    """One validated full public catalogue snapshot."""
+
+    records: tuple["KaizOffHackMetadata", ...]
     fetched_at: float
     source: str
     stale: bool
@@ -69,6 +83,7 @@ class KaizOffHackMetadata:
     last_fetched: str
     obsoleted_by_submission_id: int | None
     difficulty_id: str = ""
+    moderated: bool | None = None
 
     def as_catalogue_entry(self) -> CatalogueEntry:
         return CatalogueEntry(
@@ -132,7 +147,7 @@ FetchJson = Callable[[str, float], Any]
 
 
 class KaizOffCatalogueProvider:
-    """Use the one-shot Index API and lazy per-ID rich metadata API."""
+    """Use cached public Index, per-ID detail, and paginated rich catalogue APIs."""
 
     def __init__(
         self,
@@ -142,10 +157,15 @@ class KaizOffCatalogueProvider:
         timeout_seconds: float = 20.0,
         index_max_age_seconds: float = DEFAULT_INDEX_MAX_AGE_SECONDS,
         detail_max_age_seconds: float = DEFAULT_DETAIL_MAX_AGE_SECONDS,
+        catalogue_max_age_seconds: float = DEFAULT_CATALOGUE_MAX_AGE_SECONDS,
     ):
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive.")
-        if index_max_age_seconds < 0 or detail_max_age_seconds < 0:
+        if (
+            index_max_age_seconds < 0
+            or detail_max_age_seconds < 0
+            or catalogue_max_age_seconds < 0
+        ):
             raise ValueError("cache max age must be non-negative.")
 
         self.cache_dir = (
@@ -157,7 +177,10 @@ class KaizOffCatalogueProvider:
         self.timeout_seconds = float(timeout_seconds)
         self.index_max_age_seconds = float(index_max_age_seconds)
         self.detail_max_age_seconds = float(detail_max_age_seconds)
+        self.catalogue_max_age_seconds = float(catalogue_max_age_seconds)
         self._memory_index: tuple[Any, float] | None = None
+        self._memory_catalogue: tuple[Any, float] | None = None
+        self._memory_catalogue_records: tuple[KaizOffHackMetadata, ...] | None = None
         self._memory_details: dict[int, tuple[Any, float]] = {}
 
     def get_index(self, *, force_refresh: bool = False) -> KaizOffIndexSnapshot:
@@ -209,6 +232,96 @@ class KaizOffCatalogueProvider:
         self._write_cache(self._index_cache_path(), payload)
         return KaizOffIndexSnapshot(
             entries=entries,
+            fetched_at=fetched_at,
+            source="network",
+            stale=False,
+        )
+
+    def get_catalogue(self, *, force_refresh: bool = False) -> KaizOffCatalogueSnapshot:
+        """Return the full active SMWC catalogue from KaizOFF public pages.
+
+        KaizOFF deliberately exposes this no-auth, cached endpoint for clients that
+        need rich catalogue filtering locally.  The complete validated payload is
+        cached as one snapshot so callers do not repeatedly walk every page.
+        """
+
+        memory = self._memory_catalogue
+        if memory is not None and not force_refresh:
+            payload, fetched_at = memory
+            if _is_fresh(fetched_at, self.catalogue_max_age_seconds):
+                records = self._memory_catalogue_records
+                if records is None:
+                    records = _parse_catalogue_payload(payload)
+                    self._memory_catalogue_records = records
+                return KaizOffCatalogueSnapshot(
+                    records=records,
+                    fetched_at=fetched_at,
+                    source="memory",
+                    stale=False,
+                )
+
+        cache = self._read_cache(self._catalogue_cache_path())
+        if cache is not None and not force_refresh:
+            payload, fetched_at = cache
+            try:
+                records = _parse_catalogue_payload(payload)
+            except KaizOffProviderError:
+                cache = None
+            else:
+                if _is_fresh(fetched_at, self.catalogue_max_age_seconds):
+                    self._memory_catalogue = (payload, fetched_at)
+                    self._memory_catalogue_records = records
+                    return KaizOffCatalogueSnapshot(
+                        records=records,
+                        fetched_at=fetched_at,
+                        source="disk_cache",
+                        stale=False,
+                    )
+
+        try:
+            rows = []
+            seen_ids = set()
+            page = 1
+            while True:
+                if page > MAX_PUBLIC_CATALOGUE_PAGES:
+                    raise KaizOffProviderError(
+                        "KaizOFF public catalogue exceeded the safety page limit."
+                    )
+                url = (
+                    f"{KAIZOFF_LIST_URL}?page={page}"
+                    f"&limit={PUBLIC_CATALOGUE_PAGE_SIZE}"
+                )
+                page_payload = self.fetch_json(url, self.timeout_seconds)
+                page_rows, has_more = _parse_catalogue_page(page_payload, page)
+                for row in page_rows:
+                    identifier = _positive_int(row.get("id"), "KaizOFF hack ID")
+                    if identifier in seen_ids:
+                        raise KaizOffProviderError(
+                            "KaizOFF public catalogue contains duplicate SMWC submission IDs."
+                        )
+                    seen_ids.add(identifier)
+                    rows.append(row)
+                if not has_more:
+                    break
+                page += 1
+            payload = {"data": rows, "count": len(rows)}
+            records = _parse_catalogue_payload(payload)
+        except Exception as error:
+            stale = self._validated_stale_catalogue(memory, cache)
+            if stale is not None:
+                return stale
+            if isinstance(error, KaizOffProviderError):
+                raise
+            raise KaizOffProviderError(
+                "KaizOFF public catalogue request failed and no valid cached catalogue is available."
+            ) from error
+
+        fetched_at = time.time()
+        self._memory_catalogue = (payload, fetched_at)
+        self._memory_catalogue_records = records
+        self._write_cache(self._catalogue_cache_path(), payload)
+        return KaizOffCatalogueSnapshot(
+            records=records,
             fetched_at=fetched_at,
             source="network",
             stale=False,
@@ -297,6 +410,29 @@ class KaizOffCatalogueProvider:
             )
         return None
 
+    def _validated_stale_catalogue(
+        self,
+        memory: tuple[Any, float] | None,
+        cache: tuple[Any, float] | None,
+    ) -> KaizOffCatalogueSnapshot | None:
+        for source, candidate in (("memory", memory), ("disk_cache", cache)):
+            if candidate is None:
+                continue
+            payload, fetched_at = candidate
+            try:
+                records = _parse_catalogue_payload(payload)
+            except KaizOffProviderError:
+                continue
+            self._memory_catalogue = (payload, fetched_at)
+            self._memory_catalogue_records = records
+            return KaizOffCatalogueSnapshot(
+                records=records,
+                fetched_at=fetched_at,
+                source=source,
+                stale=True,
+            )
+        return None
+
     def _validated_stale_detail(
         self,
         identifier: int,
@@ -324,6 +460,11 @@ class KaizOffCatalogueProvider:
         if self.cache_dir is None:
             return None
         return self.cache_dir / "kaizoff_hacks_index.json"
+
+    def _catalogue_cache_path(self) -> Path | None:
+        if self.cache_dir is None:
+            return None
+        return self.cache_dir / "kaizoff_hacks_catalogue.json"
 
     def _detail_cache_path(self, identifier: int) -> Path | None:
         if self.cache_dir is None:
@@ -383,6 +524,8 @@ def _http_get_json(url: str, timeout_seconds: float) -> Any:
 
     if not (
         url == KAIZOFF_INDEX_URL
+        or url == KAIZOFF_LIST_URL
+        or url.startswith(f"{KAIZOFF_LIST_URL}?")
         or url.startswith(f"{KAIZOFF_PUBLIC_BASE_URL}/hacks/")
     ):
         raise KaizOffProviderError("KaizOFF transport refused an unexpected URL.")
@@ -480,9 +623,16 @@ def _parse_index_payload(payload: Any) -> tuple[CatalogueEntry, ...]:
 def _parse_detail_payload(payload: Any, requested_id: int) -> KaizOffHackMetadata:
     if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), Mapping):
         raise KaizOffProviderError("KaizOFF hack-detail payload is malformed.")
-    data = payload["data"]
+    return _parse_hack_record(payload["data"], requested_id=requested_id)
+
+
+def _parse_hack_record(
+    data: Mapping[str, Any],
+    *,
+    requested_id: int | None = None,
+) -> KaizOffHackMetadata:
     identifier = _positive_int(data.get("id"), "KaizOFF hack ID")
-    if identifier != requested_id:
+    if requested_id is not None and identifier != requested_id:
         raise KaizOffProviderError(
             "KaizOFF hack-detail response ID does not match the requested submission."
         )
@@ -556,7 +706,59 @@ def _parse_detail_payload(payload: Any, requested_id: int) -> KaizOffHackMetadat
         last_fetched=str(data.get("last_fetched") or "").strip(),
         obsoleted_by_submission_id=obsoleted_by,
         difficulty_id=str(raw_fields.get("difficulty") or "").strip(),
+        moderated=_optional_bool(data.get("moderated"), "KaizOFF moderated"),
     )
+
+
+def _parse_catalogue_page(
+    payload: Any, expected_page: int
+) -> tuple[tuple[Mapping[str, Any], ...], bool]:
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
+        raise KaizOffProviderError("KaizOFF public catalogue page is malformed.")
+    pagination = payload.get("pagination")
+    if not isinstance(pagination, Mapping):
+        raise KaizOffProviderError("KaizOFF public catalogue pagination is malformed.")
+    page = pagination.get("page")
+    if isinstance(page, bool) or page != expected_page:
+        raise KaizOffProviderError("KaizOFF public catalogue returned an unexpected page.")
+    has_more = pagination.get("has_more")
+    if not isinstance(has_more, bool):
+        raise KaizOffProviderError("KaizOFF public catalogue has invalid has_more metadata.")
+    rows = []
+    for row in payload["data"]:
+        if not isinstance(row, Mapping):
+            raise KaizOffProviderError("KaizOFF public catalogue contains a malformed hack row.")
+        # Validate each full row before accepting the page.
+        _parse_hack_record(row)
+        rows.append(row)
+    if has_more and not rows:
+        raise KaizOffProviderError("KaizOFF public catalogue pagination made no progress.")
+    return tuple(rows), has_more
+
+
+def _parse_catalogue_payload(payload: Any) -> tuple[KaizOffHackMetadata, ...]:
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
+        raise KaizOffProviderError("KaizOFF cached public catalogue is malformed.")
+    records = []
+    seen = set()
+    for row in payload["data"]:
+        if not isinstance(row, Mapping):
+            raise KaizOffProviderError("KaizOFF cached public catalogue contains a malformed row.")
+        metadata = _parse_hack_record(row)
+        if metadata.smwc_submission_id in seen:
+            raise KaizOffProviderError(
+                "KaizOFF cached public catalogue contains duplicate SMWC submission IDs."
+            )
+        seen.add(metadata.smwc_submission_id)
+        records.append(metadata)
+    count = payload.get("count")
+    if count is not None and (
+        isinstance(count, bool) or not isinstance(count, int) or count != len(records)
+    ):
+        raise KaizOffProviderError(
+            "KaizOFF cached public catalogue count does not match the returned catalogue."
+        )
+    return tuple(records)
 
 
 def _names_from_objects(value: Any, label: str) -> tuple[str, ...]:
@@ -683,12 +885,15 @@ def _is_fresh(fetched_at: float, max_age_seconds: float) -> bool:
 
 
 __all__ = [
+    "DEFAULT_CATALOGUE_MAX_AGE_SECONDS",
     "DEFAULT_DETAIL_MAX_AGE_SECONDS",
     "DEFAULT_INDEX_MAX_AGE_SECONDS",
     "KAIZOFF_DETAIL_URL_TEMPLATE",
     "KAIZOFF_INDEX_URL",
+    "KAIZOFF_LIST_URL",
     "KAIZOFF_PUBLIC_BASE_URL",
     "KaizOffCatalogueProvider",
+    "KaizOffCatalogueSnapshot",
     "KaizOffDetailSnapshot",
     "KaizOffHackMetadata",
     "KaizOffIndexSnapshot",

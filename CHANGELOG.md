@@ -6,6 +6,13 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### KaizOFF-first core catalogue access
+
+- Moderated SMWC catalogue reads now choose the cheapest suitable KaizOFF public endpoint: Index + per-ID detail for sparse name searches, and the cached paginated full-record catalogue for broad/rich/bulk workloads.
+- Bulk refresh, migration, metadata backfill, and broad Download searches avoid hundreds of individual detail calls by reusing the paginated rich catalogue locally.
+- Per-ID metadata continues to use KaizOFF `/hacks/{id}` first. Direct SMWCentral remains limited to waiting/unmoderated submissions, unsupported future filters, and provider fallback.
+- Save Sync manual fallback explicitly bypasses the KaizOFF-first compatibility seam so a KaizOFF failure cannot recurse back into KaizOFF.
+
 ### KaizOFF-first Save Data Sync catalogue lookup
 
 - Checked orphan saves now share one cached KaizOFF Index snapshot and match strict exact titles locally instead of issuing one direct SMWC search per save.

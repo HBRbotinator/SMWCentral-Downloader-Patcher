@@ -16,6 +16,7 @@ from collection_ingestion import (
 from kaizoff_provider import (
     KAIZOFF_DETAIL_URL_TEMPLATE,
     KAIZOFF_INDEX_URL,
+    KAIZOFF_LIST_URL,
     KaizOffCatalogueProvider,
     KaizOffProviderError,
 )
@@ -261,6 +262,108 @@ class KaizOffProviderTest(unittest.TestCase):
             KaizOffCatalogueProvider(
                 fetch_json=lambda _url, _timeout: payload
             ).get_hack(41022)
+
+
+class PublicCatalogueProviderTest(unittest.TestCase):
+    @staticmethod
+    def _row(identifier: int, name: str):
+        row = json.loads(json.dumps(DETAIL_PAYLOAD["data"]))
+        row["id"] = identifier
+        row["name"] = name
+        row["download_url"] = f"https://dl.smwcentral.net/{identifier}/hack.zip"
+        return row
+
+    def test_full_public_catalogue_walks_pages_once_and_reuses_memory(self):
+        calls = []
+        rows = {
+            1: [self._row(1, "One")],
+            2: [self._row(2, "Two")],
+        }
+
+        def fetch(url, _timeout):
+            calls.append(url)
+            page = 1 if "page=1" in url else 2
+            return {
+                "data": rows[page],
+                "pagination": {
+                    "page": page,
+                    "limit": 500,
+                    "total": 2,
+                    "total_pages": 2,
+                    "has_more": page == 1,
+                },
+            }
+
+        provider = KaizOffCatalogueProvider(fetch_json=fetch)
+        first = provider.get_catalogue()
+        second = provider.get_catalogue()
+
+        self.assertEqual([1, 2], [row.smwc_submission_id for row in first.records])
+        self.assertEqual("network", first.source)
+        self.assertEqual("memory", second.source)
+        self.assertEqual(2, len(calls))
+        self.assertTrue(all(url.startswith(KAIZOFF_LIST_URL + "?") for url in calls))
+
+    def test_full_public_catalogue_uses_fresh_disk_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            payload = {"data": [self._row(3, "Cached")], "count": 1}
+            (cache / "kaizoff_hacks_catalogue.json").write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
+
+            def fail_fetch(_url, _timeout):
+                raise AssertionError("fresh catalogue cache should avoid network")
+
+            provider = KaizOffCatalogueProvider(
+                cache_dir=cache,
+                fetch_json=fail_fetch,
+                catalogue_max_age_seconds=3600,
+            )
+            snapshot = provider.get_catalogue()
+            self.assertEqual("disk_cache", snapshot.source)
+            self.assertEqual(3, snapshot.records[0].smwc_submission_id)
+
+    def test_full_public_catalogue_returns_valid_stale_cache_when_refresh_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            path = cache / "kaizoff_hacks_catalogue.json"
+            path.write_text(
+                json.dumps({"data": [self._row(4, "Stale")], "count": 1}),
+                encoding="utf-8",
+            )
+            old = time.time() - 7200
+            os.utime(path, (old, old))
+
+            provider = KaizOffCatalogueProvider(
+                cache_dir=cache,
+                fetch_json=lambda _url, _timeout: (_ for _ in ()).throw(OSError("offline")),
+                catalogue_max_age_seconds=1,
+            )
+            snapshot = provider.get_catalogue()
+            self.assertTrue(snapshot.stale)
+            self.assertEqual("disk_cache", snapshot.source)
+            self.assertEqual(4, snapshot.records[0].smwc_submission_id)
+
+    def test_full_public_catalogue_rejects_duplicate_ids_across_pages(self):
+        row = self._row(5, "Duplicate")
+
+        def fetch(url, _timeout):
+            page = 1 if "page=1" in url else 2
+            return {
+                "data": [row],
+                "pagination": {
+                    "page": page,
+                    "limit": 500,
+                    "total": 2,
+                    "total_pages": 2,
+                    "has_more": page == 1,
+                },
+            }
+
+        provider = KaizOffCatalogueProvider(fetch_json=fetch)
+        with self.assertRaises(KaizOffProviderError):
+            provider.get_catalogue()
 
 
 if __name__ == "__main__":

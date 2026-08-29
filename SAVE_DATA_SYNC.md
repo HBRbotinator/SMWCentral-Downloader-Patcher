@@ -112,6 +112,10 @@ to the user's single manual request rather than repeated automatically for all
 unmatched saves. User-facing SMWC terminology refers to the canonical SMWC
 submission identity even when KaizOFF supplies the catalogue data.
 
+The wider application follows the same provider policy: KaizOFF Index is preferred for
+sparse discovery, KaizOFF per-ID detail for resolved hacks, and KaizOFF's paginated full-record catalogue for rich bulk workloads. Direct SMWC catalogue reads
+remain fallback/exception paths rather than the normal source.
+
 Local save-backed entries are intentionally excluded from ordinary automatic
 title and ROM-path matching. Their explicit saved filename association remains
 authoritative, which allows the association to be forgotten later.

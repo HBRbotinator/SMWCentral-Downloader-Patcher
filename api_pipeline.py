@@ -11,15 +11,16 @@ import os
 import tempfile
 import time
 from datetime import datetime
+from pathlib import Path
 
 from utils import (
     safe_filename, get_sorted_folder_name,
     DIFFICULTY_LOOKUP, DIFFICULTY_KEYMAP,
     load_processed, save_processed, make_output_path,
     TYPE_KEYMAP, TYPE_DISPLAY_LOOKUP,
-    title_case, clean_hack_title  # Import the new function
+    title_case, clean_hack_title, PROCESSED_JSON_PATH  # Import the new function
 )
-from smwc_api_proxy import smwc_api_get, get_api_delay
+from smwc_api_proxy import smwc_api_get
 from patch_handler import PatchHandler
 from rom_filename_policy import build_patched_rom_filename
 from rom_asset_metadata import build_tool_patch_rom_asset, merge_collection_rom_assets
@@ -84,8 +85,8 @@ def _metadata_still_missing(existing, fetched):
     has_rating = "rating" in fetched
     return (needs_time and not has_time) or (needs_rating and not has_rating)
 
-def fetch_hack_list(config, page=1, waiting_mode=False, log=None):
-    """Fetch hack list - separated for moderated vs waiting hacks"""
+def _fetch_hack_list_smwc(config, page=1, waiting_mode=False, log=None):
+    """Direct SMWCentral list fallback, including waiting submissions."""
     params = {
         "a": "getsectionlist",
         "s": "smwhacks",
@@ -167,7 +168,15 @@ def fetch_hack_list(config, page=1, waiting_mode=False, log=None):
         "current_page": response_data.get("current_page", page)
     }
 
-def fetch_file_metadata(file_id, log=None):
+def fetch_hack_list_direct_smwc(config, page=1, waiting_mode=False, log=None):
+    """Explicit direct-SMWCentral list access reserved for fallback/unsupported data."""
+
+    return _fetch_hack_list_smwc(
+        config, page=page, waiting_mode=waiting_mode, log=log
+    )
+
+
+def _fetch_file_metadata_smwc(file_id, log=None):
     params = {"a": "getfile", "v": "2", "id": file_id}
     response = smwc_api_get("https://www.smwcentral.net/ajax.php", params=params, log=log)
 
@@ -182,6 +191,429 @@ def fetch_file_metadata(file_id, log=None):
                 log(f"Error parsing file metadata JSON: {e}", "Error")
             return None
     return None
+
+_CORE_KAIZOFF_PROVIDER = None
+_CORE_KAIZOFF_QUERY_CACHE = None
+_KAIZOFF_COMPAT_PAGE_SIZE = 50
+_KAIZOFF_SPARSE_DETAIL_LIMIT = 25
+_KAIZOFF_LOCAL_FILTER_KEYS = frozenset(
+    {
+        "name",
+        "author",
+        "tags",
+        "description",
+        "type",
+        "hof",
+        "sa1",
+        "collab",
+        "demo",
+        "difficulties",
+        "order",
+        "waiting",
+    }
+)
+_KAIZOFF_INDEX_FILTER_KEYS = frozenset({"name", "type", "waiting"})
+
+
+class _UseKaizOffRichCatalogue(RuntimeError):
+    """Internal signal that a sparse Index result is too broad to hydrate per ID."""
+
+
+def _get_core_kaizoff_provider():
+    global _CORE_KAIZOFF_PROVIDER
+    if _CORE_KAIZOFF_PROVIDER is None:
+        from kaizoff_provider import KaizOffCatalogueProvider
+
+        processed = Path(PROCESSED_JSON_PATH).expanduser().absolute()
+        _CORE_KAIZOFF_PROVIDER = KaizOffCatalogueProvider(
+            cache_dir=processed.with_name("kaizoff_cache")
+        )
+    return _CORE_KAIZOFF_PROVIDER
+
+
+def _normalize_filter_text(value):
+    return str(value or "").strip().casefold()
+
+
+def _normalize_type_filter(value):
+    return _normalize_filter_text(value).replace("-", "_").replace(" ", "_")
+
+
+def _requested_boolean(value):
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        value = value[0]
+    normalized = _normalize_filter_text(value)
+    if normalized in {"1", "true", "yes"}:
+        return True
+    if normalized in {"0", "false", "no"}:
+        return False
+    return None
+
+
+def _freeze_filter_value(value):
+    if isinstance(value, dict):
+        return tuple(
+            sorted((str(key), _freeze_filter_value(item)) for key, item in value.items())
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return tuple(_freeze_filter_value(item) for item in value)
+    return value
+
+
+def _kaizoff_filter_signature(config):
+    return tuple(
+        sorted((str(key), _freeze_filter_value(value)) for key, value in config.items())
+    )
+
+
+def _active_filter_keys(config):
+    return {
+        str(key)
+        for key, value in config.items()
+        if value not in (None, "", [], (), {}) and key != "waiting"
+    }
+
+
+def _validate_kaizoff_filter_keys(config):
+    unsupported = sorted(_active_filter_keys(config) - _KAIZOFF_LOCAL_FILTER_KEYS)
+    if unsupported:
+        raise ValueError(
+            "KaizOFF local filtering does not support: " + ", ".join(unsupported)
+        )
+
+
+def _should_try_sparse_index(config):
+    """Use Index + per-ID detail only for genuinely sparse interactive searches.
+
+    The public Index is ideal for name discovery. Broad searches and filters that
+    need rich fields intentionally use the paginated full-record catalogue so a
+    migration/bulk job does not turn into hundreds of individual detail requests.
+    """
+
+    keys = _active_filter_keys(config)
+    return bool(_normalize_filter_text(config.get("name"))) and keys.issubset(
+        _KAIZOFF_INDEX_FILTER_KEYS
+    )
+
+
+def _kaizoff_index_entry_matches(entry, config):
+    name = _normalize_filter_text(config.get("name"))
+    if name and name not in entry.title.casefold():
+        return False
+
+    requested_types = config.get("type")
+    if requested_types:
+        if not isinstance(requested_types, (list, tuple)):
+            requested_types = [requested_types]
+        requested = {_normalize_type_filter(value) for value in requested_types}
+        actual = {
+            _normalize_type_filter(value)
+            for value in str(entry.hack_type or "").split(",")
+            if str(value).strip()
+        }
+        if requested and not requested.intersection(actual):
+            return False
+    return True
+
+
+def _kaizoff_record_matches(metadata, config):
+    _validate_kaizoff_filter_keys(config)
+
+    name = _normalize_filter_text(config.get("name"))
+    if name and name not in metadata.title.casefold():
+        return False
+
+    author = _normalize_filter_text(config.get("author"))
+    if author and not any(author in value.casefold() for value in metadata.authors):
+        return False
+
+    description = _normalize_filter_text(config.get("description"))
+    if description and description not in metadata.description.casefold():
+        return False
+
+    tags = config.get("tags")
+    if tags:
+        if isinstance(tags, (list, tuple)):
+            requested_tags = [str(value).strip() for value in tags if str(value).strip()]
+        else:
+            requested_tags = [
+                value.strip() for value in str(tags).split(",") if value.strip()
+            ]
+        available_tags = {value.casefold() for value in metadata.tags}
+        if any(value.casefold() not in available_tags for value in requested_tags):
+            return False
+
+    requested_types = config.get("type")
+    if requested_types:
+        if not isinstance(requested_types, (list, tuple)):
+            requested_types = [requested_types]
+        requested = {_normalize_type_filter(value) for value in requested_types}
+        actual = {_normalize_type_filter(value) for value in metadata.hack_types}
+        if requested and not requested.intersection(actual):
+            return False
+
+    difficulties = config.get("difficulties") or []
+    if difficulties:
+        requested_ids = set()
+        allow_missing = False
+        for difficulty in difficulties:
+            normalized = _normalize_filter_text(difficulty)
+            if normalized == "no difficulty":
+                allow_missing = True
+                continue
+            key = DIFFICULTY_KEYMAP.get(normalized)
+            if key:
+                requested_ids.add(f"diff_{key}")
+        actual_id = str(getattr(metadata, "difficulty_id", "") or "").strip()
+        if actual_id:
+            if requested_ids and actual_id not in requested_ids:
+                return False
+            if not requested_ids and allow_missing:
+                return False
+        elif not allow_missing:
+            return False
+
+    for field, attribute in (
+        ("hof", "hall_of_fame"),
+        ("sa1", "sa1_compatible"),
+        ("collab", "collaboration"),
+        ("demo", "demo"),
+    ):
+        if field not in config:
+            continue
+        expected = _requested_boolean(config.get(field))
+        if expected is not None and getattr(metadata, attribute) is not expected:
+            return False
+
+    return True
+
+
+def _legacy_record_from_kaizoff(metadata):
+    obsolete = bool(
+        metadata.active is False
+        or metadata.obsoleted_by_submission_id is not None
+    )
+    hack_types = list(metadata.hack_types) or ["standard"]
+    return {
+        "id": str(metadata.smwc_submission_id),
+        "name": metadata.title,
+        "time": int(metadata.release_timestamp or 0),
+        "authors": [{"name": name} for name in metadata.authors],
+        "tags": list(metadata.tags),
+        "images": list(metadata.image_urls),
+        "rating": metadata.rating,
+        "size": metadata.size_bytes,
+        "downloads": metadata.downloads,
+        "download_url": metadata.download_url,
+        "difficulty": metadata.difficulty,
+        "type": hack_types[0] if len(hack_types) == 1 else ", ".join(hack_types),
+        "exits": metadata.exits,
+        "length": metadata.exits,
+        "demo": metadata.demo,
+        "hof": metadata.hall_of_fame,
+        "sa1": metadata.sa1_compatible,
+        "collab": metadata.collaboration,
+        "description": metadata.description,
+        "active": metadata.active,
+        "moderated": metadata.moderated,
+        "obsoleted_by": metadata.obsoleted_by_submission_id,
+        "last_fetched": metadata.last_fetched,
+        "raw_fields": {
+            "difficulty": str(metadata.difficulty_id or ""),
+            "type": hack_types,
+            "length": int(metadata.exits or 0),
+            "hof": bool(metadata.hall_of_fame),
+            "sa1": bool(metadata.sa1_compatible),
+            "collab": bool(metadata.collaboration),
+            "demo": bool(metadata.demo),
+            "description": metadata.description,
+            "obsolete": obsolete,
+        },
+    }
+
+
+def _fetch_sparse_kaizoff_index(config, page, log=None):
+    provider = _get_core_kaizoff_provider()
+    snapshot = provider.get_index()
+    entries = [
+        entry for entry in snapshot.entries if _kaizoff_index_entry_matches(entry, config)
+    ]
+    if len(entries) > _KAIZOFF_SPARSE_DETAIL_LIMIT:
+        raise _UseKaizOffRichCatalogue(
+            f"Index search matched {len(entries)} hacks; bulk rich catalogue is cheaper."
+        )
+
+    records = []
+    for entry in entries:
+        detail = provider.get_hack(entry.smwc_submission_id)
+        if _kaizoff_record_matches(detail.metadata, config):
+            records.append(detail.metadata)
+
+    page_number = max(1, int(page))
+    selected = records if page_number == 1 else []
+    if log and page_number == 1:
+        stale = " stale-cache" if snapshot.stale else ""
+        log(
+            f"📊 Found {len(records)} moderated hacks through KaizOFF Index "
+            f"({snapshot.source}{stale}); hydrated {len(records)} rich records",
+            level="information",
+        )
+    return {
+        "data": [_legacy_record_from_kaizoff(row) for row in selected],
+        "last_page": 1,
+        "current_page": page_number,
+        "lookup_source": "kaizoff_index_detail",
+    }
+
+
+def _fetch_rich_kaizoff_catalogue(config, page, log=None):
+    provider = _get_core_kaizoff_provider()
+    snapshot = provider.get_catalogue()
+    signature = _kaizoff_filter_signature(config)
+    global _CORE_KAIZOFF_QUERY_CACHE
+    cached = _CORE_KAIZOFF_QUERY_CACHE
+    if (
+        cached is not None
+        and cached[0] == snapshot.fetched_at
+        and cached[1] == signature
+    ):
+        records = list(cached[2])
+    else:
+        records = [
+            metadata
+            for metadata in snapshot.records
+            if _kaizoff_record_matches(metadata, config)
+        ]
+        if config.get("order") == "date":
+            records.sort(
+                key=lambda metadata: (
+                    int(metadata.release_timestamp or 0),
+                    metadata.smwc_submission_id,
+                ),
+                reverse=True,
+            )
+        _CORE_KAIZOFF_QUERY_CACHE = (
+            snapshot.fetched_at,
+            signature,
+            tuple(records),
+        )
+
+    page_number = max(1, int(page))
+    total = len(records)
+    last_page = max(
+        1, (total + _KAIZOFF_COMPAT_PAGE_SIZE - 1) // _KAIZOFF_COMPAT_PAGE_SIZE
+    )
+    start = (page_number - 1) * _KAIZOFF_COMPAT_PAGE_SIZE
+    selected = records[start : start + _KAIZOFF_COMPAT_PAGE_SIZE]
+    if log and page_number == 1:
+        stale = " stale-cache" if snapshot.stale else ""
+        log(
+            f"📊 Found {total} moderated hacks through KaizOFF rich catalogue "
+            f"({snapshot.source}{stale}) across {last_page} local pages",
+            level="information",
+        )
+    return {
+        "data": [_legacy_record_from_kaizoff(row) for row in selected],
+        "last_page": last_page,
+        "current_page": page_number,
+        "lookup_source": "kaizoff_catalogue",
+    }
+
+
+def _smwc_catalogue_fallback(config, page, log, reason):
+    if log:
+        log(
+            "[WRN] KaizOFF could not satisfy the moderated catalogue request; "
+            f"falling back to the direct SMWCentral API for this page: {reason}",
+            level="warning",
+        )
+    result = _fetch_hack_list_smwc(
+        config, page=page, waiting_mode=False, log=log
+    )
+    if isinstance(result, dict):
+        result = dict(result)
+        result["lookup_source"] = "smwc_fallback"
+    return result
+
+
+def fetch_hack_list(config, page=1, waiting_mode=False, log=None):
+    """Fetch SMWC catalogue rows through the cheapest suitable KaizOFF path.
+
+    Sparse name discovery uses the one-shot Index and hydrates only the small
+    matching set. Broad searches, rich-field filters, and bulk scans use the
+    paginated full-record public catalogue, cached as one local snapshot.
+    Waiting/unmoderated submissions remain a direct-SMWCentral exception.
+    """
+
+    if waiting_mode:
+        if log and page == 1:
+            log(
+                "[WRN] Waiting submissions are not available in the KaizOFF active "
+                "catalogue; using the direct SMWCentral API for waiting results.",
+                level="warning",
+            )
+        return _fetch_hack_list_smwc(
+            config, page=page, waiting_mode=True, log=log
+        )
+
+    try:
+        _validate_kaizoff_filter_keys(config)
+    except ValueError as exc:
+        return _smwc_catalogue_fallback(config, page, log, exc)
+
+    if _should_try_sparse_index(config):
+        try:
+            return _fetch_sparse_kaizoff_index(config, page, log=log)
+        except _UseKaizOffRichCatalogue as exc:
+            if log and int(page) == 1:
+                log(
+                    f"[DEBUG] {exc} Using KaizOFF paginated rich catalogue instead.",
+                    level="debug",
+                )
+        except Exception as index_error:
+            if log and int(page) == 1:
+                log(
+                    "[WRN] KaizOFF Index path failed; trying the KaizOFF paginated "
+                    f"rich catalogue before SMWCentral fallback: {index_error}",
+                    level="warning",
+                )
+
+    try:
+        return _fetch_rich_kaizoff_catalogue(config, page, log=log)
+    except Exception as exc:
+        return _smwc_catalogue_fallback(config, page, log, exc)
+
+
+def fetch_file_metadata(file_id, log=None):
+    """Fetch one SMWC submission with KaizOFF public detail as primary."""
+
+    try:
+        snapshot = _get_core_kaizoff_provider().get_hack(int(file_id))
+        if log:
+            stale = " stale-cache" if snapshot.stale else ""
+            log(
+                f"[DEBUG] Loaded SMWC {file_id} metadata through KaizOFF "
+                f"({snapshot.source}{stale})",
+                level="debug",
+            )
+        return {
+            "data": _legacy_record_from_kaizoff(snapshot.metadata),
+            "lookup_source": "kaizoff",
+        }
+    except Exception as exc:
+        if log:
+            log(
+                "[WRN] KaizOFF detail unavailable; falling back to the direct "
+                f"SMWCentral API for SMWC {file_id}: {exc}",
+                level="warning",
+            )
+        result = _fetch_file_metadata_smwc(file_id, log=log)
+        if isinstance(result, dict):
+            result = dict(result)
+            result["lookup_source"] = "smwc_fallback"
+        return result
 
 def _select_best_patch(patch_files, hack_name=""):
     """Pick the best single patch from an already-collected sorted list.
@@ -293,7 +725,7 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
     # Add warning for "No Difficulty" selections
     if has_no_difficulty:
         if log:
-            log("[WRN] 'No Difficulty' selected - downloading ALL hacks then filtering locally due to SMWC API limitations", level="warning")
+            log("[WRN] 'No Difficulty' selected - filtering the complete catalogue locally", level="warning")
 
     # PHASE 1: Fetch all moderated hacks (u=0)
     page = 1
@@ -920,16 +1352,18 @@ def backfill_metadata(log_callback=None, cancel_check=None):
     if log_callback:
         log_callback(
             f"Found {len(ids_to_update)} SMWC hacks missing metadata. "
-            "Fetching from SMWCentral...",
+            "Fetching through KaizOFF first...",
             "Information",
         )
 
     api_metadata = {}
     total_fetched = 0
     if log_callback:
-        log_callback("🌐 Fetching hack list from SMWC API (bulk)...", "Information")
+        log_callback("🌐 Loading SMWC catalogue through KaizOFF first...", "Information")
 
     for waiting_mode in [False, True]:
+        if not ids_to_update:
+            break
         section_name = "waiting" if waiting_mode else "moderated"
         page = 1
         if log_callback:

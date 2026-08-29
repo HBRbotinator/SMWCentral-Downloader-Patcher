@@ -222,8 +222,8 @@ class SaveSyncCatalogueLookup:
     def _fallback_fetch(self) -> Callable[..., Any]:
         if self.fallback_fetch_fn is not None:
             return self.fallback_fetch_fn
-        from api_pipeline import fetch_hack_list
-        return fetch_hack_list
+        from api_pipeline import fetch_hack_list_direct_smwc
+        return fetch_hack_list_direct_smwc
 
     def _fallback_search(self, query: str, existing_ids: Iterable[str], limit: int) -> dict:
         result = save_sync.search_orphan_options(

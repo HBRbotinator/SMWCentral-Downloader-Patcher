@@ -215,6 +215,42 @@ class SmwcRatingBackfillTest(unittest.TestCase):
         fetch_individual.assert_not_called()
         self.assertEqual(saved[-1]["101"]["rating"], 4.6)
 
+    def test_backfill_skips_waiting_lookup_when_active_catalogue_resolves_all(self):
+        processed = {
+            "101": {
+                "title": "Alpha World",
+                "time": 1_600_000_000,
+                "date": "2020-09-13",
+                "rating": "N/A",
+            }
+        }
+        calls = []
+
+        def fetch_list(_config, page, waiting_mode, log=None):
+            calls.append(waiting_mode)
+            if waiting_mode:
+                raise AssertionError(
+                    "waiting SMWC fallback must not run after active catalogue resolution"
+                )
+            return {
+                "data": [{"id": 101, "rating": 4.2}],
+                "last_page": 1,
+                "current_page": page,
+            }
+
+        with (
+            patch("api_pipeline.load_processed", return_value=processed),
+            patch("api_pipeline.fetch_hack_list", side_effect=fetch_list),
+            patch("api_pipeline.fetch_file_metadata") as fetch_individual,
+            patch("api_pipeline.save_processed"),
+            patch("api_pipeline.time.sleep"),
+        ):
+            updated = api_pipeline.backfill_metadata()
+
+        self.assertEqual(1, updated)
+        self.assertEqual([False], calls)
+        fetch_individual.assert_not_called()
+
     def test_zero_rating_is_known_unrated_and_does_not_refetch(self):
         processed = {
             "101": {

@@ -60,7 +60,7 @@ The current build contract publishes a native tarball rather than an AppImage. E
 ### Downloading ROM Hacks
 1. **Set your filters**: Use the filter options to narrow down what you want to search for (difficulty, type, author, etc.)
 2. **Choose display mode**: Use the "Show only non-downloaded hacks" checkbox to hide hacks you already own, making it easier to find new content
-3. **Search for hacks**: Click the "Search Hacks" button to pull data from the SMWCentral API based on your filters
+3. **Search for hacks**: Click the "Search Hacks" button to search the SMWC catalogue. KaizOFF is the primary catalogue provider; direct SMWCentral access is reserved for fallback and waiting/unmoderated submissions.
 4. **Browse results as they load**: Results appear progressively as each page loads - no need to wait for all data to finish loading
 5. **Select hacks to download**: Click the checkmark in the first column for each hack you want to download
    - **Tip**: Click the column header to select ALL hacks at once
@@ -374,11 +374,10 @@ If clicking the play icon doesn't work:
   - Preferences persist across app sessions
 
 **Fetch Metadata - Supercharged**
-- **Bulk Metadata Updates**: Update missing release dates for your entire collection from SMWCentral
-  - **60-100x faster** than previous versions (under 1 minute vs 30+ minutes)
-  - Uses optimized bulk API fetching for active hacks
-  - Fallback individual lookups for obsolete/unlisted hacks
-  - Checks both moderated AND waiting sections
+- **Bulk Metadata Updates**: Update missing release dates and SMWC metadata for your entire collection
+  - Uses KaizOFF's cached paginated full-record catalogue for active bulk metadata instead of hundreds of per-hack requests
+  - Uses KaizOFF per-ID detail for sparse/individual lookups
+  - Direct SMWCentral access is reserved for waiting/unmoderated submissions and provider fallback
   - **Cancellable operation** - safe to cancel during API fetch phase
   - Access via Settings → Data Migration → "Fetch Metadata"
 
@@ -598,6 +597,12 @@ non-SMWCentral hacks are supported. Save Sync uses the cached KaizOFF catalogue
 as its primary SMWC data source; direct SMWC search is reserved for explicit
 manual fallback when KaizOFF cannot satisfy the request. Save files are never
 modified, and no collection change is made until **Apply Selected** is pressed.
+
+Across the application, KaizOFF catalogue access is tiered by workload: the lightweight
+`/hacks/index` endpoint is used for interactive name discovery, `/hacks/{id}` hydrates
+small resolved sets, and the paginated `/hacks?limit=500` endpoint is used for broad or
+rich bulk catalogue work. This avoids both unnecessary full-catalogue transfers for sparse
+lookups and hundreds of individual detail requests for migrations/bulk refreshes.
 
 See [SAVE_DATA_SYNC.md](SAVE_DATA_SYNC.md) for the complete workflow, safety
 rules, confidence model, privacy contract, and known limitations.

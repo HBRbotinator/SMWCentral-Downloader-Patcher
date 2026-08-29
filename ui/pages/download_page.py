@@ -244,8 +244,8 @@ class DownloadPage:
         if has_no_difficulty:
             result = messagebox.askokcancel(
                 "Search with No Difficulty",
-                "⚠️ Searching for hacks with 'No Difficulty' requires downloading ALL hacks from SMWCentral's API and then filtering locally.\n\n"
-                "This process may take significantly longer than normal searches due to API limitations.\n\n"
+                "⚠️ Searching for hacks with 'No Difficulty' requires filtering the complete SMWC catalogue locally.\n\n"
+                "KaizOFF normally supplies this catalogue from its cached public API. If KaizOFF is unavailable, the SMWCentral fallback may take longer.\n\n"
                 "Do you want to continue with this comprehensive search?",
                 icon='warning'
             )
