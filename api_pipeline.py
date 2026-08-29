@@ -448,18 +448,11 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
 
         if hack_id in processed:
             actual_diff = processed[hack_id].get("current_difficulty", "")
-            actual_path = os.path.join(
-                make_output_path(output_dir, normalized_type, get_sorted_folder_name(actual_diff)),
-                f"{title_clean}{base_rom_ext}"
-            )
-            expected_path = os.path.join(
-                make_output_path(output_dir, normalized_type, folder_name),
-                f"{title_clean}{base_rom_ext}"
-            )
 
-            # Determine whether the file actually exists using the stored path.
-            # Multi-patch hacks store a custom primary name in file_path / files[],
-            # so using title_clean to construct expected_path would be wrong for them.
+            # Determine whether the recorded ROM actually exists using Collection state.
+            # Never infer ownership from a generated title/difficulty path: catalogue refresh
+            # is metadata-only for an existing ROM, and any layout drift belongs to the
+            # explicit Collection organization workflow.
             _stored_path = processed[hack_id].get("file_path", "")
             _stored_files = processed[hack_id].get("files", [])
             if _stored_files:
@@ -470,28 +463,16 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
             else:
                 _file_on_disk = False
 
-            if actual_diff != display_diff and log:
-                log(f"✅ Moved: {title_clean} from {actual_diff} to {display_diff} difficulty!")
-
-            if actual_diff != display_diff or not _file_on_disk:
-                if os.path.exists(actual_path):
-                    try:
-                        os.makedirs(os.path.dirname(expected_path), exist_ok=True)
-                        os.rename(actual_path, expected_path)
-                        processed[hack_id]["current_difficulty"] = display_diff
-                        save_processed(processed)
-                    except Exception as e:
-                        if log:
-                            log(f"❌ Failed to move: {title_clean} → {str(e)}", "Error")
-                else:
-                    if log:
-                        log(f"⚠️ Source Not Found: Redownloading {title_clean}", "Warning")
-                    # Don't continue here - fall through to redownload the hack
+            if not _file_on_disk:
+                if log:
+                    log(f"⚠️ Source Not Found: Redownloading {title_clean}", "Warning")
+                # Don't continue here - fall through to redownload the hack. Existing
+                # unrecorded paths are never guessed, renamed, or adopted implicitly.
             else:
                 if log:
                     log(f"✅ Skipped: {title_clean}")
 
-                # OPTIMIZED: Still update metadata from page data even when skipping download
+                # OPTIMIZED: Still update metadata from page data even when skipping download.
                 existing_hack = processed.get(hack_id, {})
                 for key, new_value in page_metadata.items():
                     old_value = existing_hack.get(key)
@@ -500,9 +481,7 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
                             log(f"Updated: {title_clean} attribute {key} updated from {old_value} → {new_value}", "Information")
                         processed[hack_id][key] = new_value
 
-                # Update title if it doesn't match the properly formatted version
-                # This ensures processed.json gets updated with proper title case formatting
-                # when running bulk download, even for hacks that already exist
+                # Update title if it doesn't match the properly formatted version.
                 current_title = existing_hack.get("title", "")
                 proper_title = clean_hack_title(raw_title)
                 if current_title != proper_title:
@@ -510,9 +489,16 @@ def run_pipeline(filter_payload, base_rom_path, output_dir, log=None, multi_patc
                         log(f"Updated: {title_clean} title formatting updated from '{current_title}' → '{proper_title}'", "Information")
                     processed[hack_id]["title"] = proper_title
 
-                # Update difficulty if it changed
-                if processed[hack_id].get("current_difficulty") != display_diff:
+                if actual_diff != display_diff:
                     processed[hack_id]["current_difficulty"] = display_diff
+                    processed[hack_id]["difficulty_id"] = raw_diff
+                    processed[hack_id]["folder_name"] = folder_name
+                    if log:
+                        log(
+                            f"📝 Updated difficulty from {actual_diff} → {display_diff}; "
+                            "the existing ROM was left in place for explicit Collection organization.",
+                            "Information",
+                        )
 
                 save_processed(processed)
                 continue

@@ -172,6 +172,8 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 ### Non-destructive ROM metadata refresh
 
 - Refreshing an already-downloaded hack no longer moves its existing ROM when SMWCentral difficulty metadata points at a different configured output folder.
+- The legacy bulk `run_pipeline()` path now follows the same rule as single-download refresh: when the recorded ROM exists it refreshes difficulty/catalogue metadata in place and leaves ROM organization to the explicit Collection workflow.
+- If the recorded ROM is missing, bulk refresh may redownload it but never guesses ownership from an inferred old difficulty/title path or silently renames an unrecorded file into the new layout.
 - The refresh updates catalogue metadata while leaving `file_path`, modern `files[]`, `additional_paths`, ROM bytes, and save files in place.
 - A new read-only ROM-location assessment reports configured layout drift without creating directories or changing Collection state.
 - Explicit ROM organization/consolidation remains a separate workflow; metadata refresh never performs a hidden relocation.
