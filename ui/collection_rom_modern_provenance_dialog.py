@@ -12,10 +12,11 @@ from collection_rom_modern_provenance_review import (
 
 
 class CollectionRomModernProvenanceDialog:
-    def __init__(self, parent, review: ModernRomProvenanceReview, on_close=None, on_saved=None):
+    def __init__(self, parent, review: ModernRomProvenanceReview, on_close=None, on_saved=None, on_apply=None):
         self.review = review
         self._on_close = on_close
         self._on_saved = on_saved
+        self._on_apply = on_apply
         self._saved_decision = None
         self._closed = False
         self._vars: dict[tuple[str, str], tk.StringVar] = {}
@@ -76,6 +77,8 @@ class CollectionRomModernProvenanceDialog:
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x", pady=(12, 0))
         ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        self._apply_button = ttk.Button(buttons, text="Apply Provenance Repair...", command=self._apply, state="disabled")
+        self._apply_button.pack(side="right", padx=(0, 8))
         ttk.Button(buttons, text="Save Provenance Decisions", command=self._save).pack(side="right", padx=(0, 8))
 
     def _save(self):
@@ -92,14 +95,21 @@ class CollectionRomModernProvenanceDialog:
         self._saved_decision = decision
         if self._on_saved is not None:
             self._on_saved(self.review, decision)
+        if self._on_apply is not None:
+            self._apply_button.configure(state="normal")
         messagebox.showinfo(
             "Provenance Decisions Saved",
             (
                 "The decisions are retained only for this active review. Collection metadata and ROM files "
-                "have not changed. A later explicit metadata-repair boundary may consume them."
+                "have not changed. Use Apply Provenance Repair only when you are ready to write the reviewed "
+                "smwc_submission_id values."
             ),
             parent=self.dialog,
         )
+
+    def _apply(self):
+        if self._on_apply is not None and self._saved_decision is not None:
+            self._on_apply(self.review, self._saved_decision, self.dialog)
 
     def close(self):
         if self._closed:

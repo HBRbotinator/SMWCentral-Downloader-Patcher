@@ -1,5 +1,7 @@
 # Changelog
 
+- Added transactional repair for reviewed modern ROM assets whose `files[]` rows are missing `smwc_submission_id`; Apply writes only the reviewed per-ROM provenance and preserves all other Collection/file metadata.
+
 All notable changes to SMWC Downloader & Patcher will be documented in this file.
 
 ## [Unreleased]

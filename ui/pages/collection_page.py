@@ -3262,11 +3262,91 @@ class CollectionPage:
             review,
             on_close=self._collection_rom_modern_provenance_closed,
             on_saved=self._collection_rom_modern_provenance_saved,
+            on_apply=self._apply_collection_modern_rom_provenance,
         )
 
     def _collection_rom_modern_provenance_saved(self, review, decision):
         self._last_collection_modern_provenance_review = review
         self._last_collection_modern_provenance_decision = decision
+
+
+    def _apply_collection_modern_rom_provenance(self, review, decision, parent_dialog):
+        """Atomically repair only reviewed missing modern per-ROM provenance."""
+        dialog = self.collection_rom_modern_provenance_dialog
+        if (
+            dialog is None
+            or dialog.review != review
+            or self._last_collection_modern_provenance_decision != decision
+        ):
+            messagebox.showerror(
+                "Apply Modern ROM Provenance",
+                "The provenance review is no longer active. Run the ROM organization audit again.",
+                parent=parent_dialog,
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Apply Modern ROM Provenance",
+            (
+                f"Write reviewed SMWC provenance for {len(decision.selections)} ROM asset(s)?\n\n"
+                "This changes Collection files[] metadata only. ROM and save files are not moved, renamed, "
+                "hashed, downloaded, or otherwise modified."
+            ),
+            parent=parent_dialog,
+        ):
+            return
+
+        from collection_rom_modern_provenance_apply import (
+            ModernRomProvenanceApplyError,
+            ModernRomProvenanceApplyStaleStateError,
+            apply_modern_rom_provenance_decision,
+        )
+
+        try:
+            parent_dialog.configure(cursor="wait")
+            parent_dialog.update_idletasks()
+            result = apply_modern_rom_provenance_decision(
+                review, decision, self.data_manager
+            )
+        except (
+            ModernRomProvenanceApplyStaleStateError,
+            ModernRomProvenanceApplyError,
+            OSError,
+        ) as error:
+            self._log(f"Modern ROM provenance repair failed: {error}", "Error")
+            messagebox.showerror(
+                "Modern ROM Provenance Not Applied",
+                (
+                    "The reviewed provenance repair could not be applied safely. "
+                    "Collection data was not partially changed.\n\n"
+                    f"{error}\n\nRun the ROM organization audit again before retrying."
+                ),
+                parent=parent_dialog,
+            )
+            return
+        finally:
+            try:
+                if parent_dialog.winfo_exists():
+                    parent_dialog.configure(cursor="")
+            except tk.TclError:
+                pass
+
+        self._reload_collection_ingestion_live_state()
+        self._close_collection_rom_organization_workflow()
+        self._log(
+            f"Repaired SMWC provenance for {result.asset_count} Collection ROM asset(s)",
+            "Information",
+        )
+        messagebox.showinfo(
+            "Modern ROM Provenance Updated",
+            (
+                f"Updated SMWC provenance for {result.asset_count} ROM asset(s) across "
+                f"{result.collection_record_count} Collection record(s).\n\n"
+                "ROM/save files and unrelated Collection metadata were not changed. "
+                "Run the ROM organization audit again to reassess layout."
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
 
     def _review_collection_historical_rom_provenance(self, audit):
         """Fetch only recorded historical submission metadata for read-only layout review."""
