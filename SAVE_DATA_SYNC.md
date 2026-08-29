@@ -98,6 +98,20 @@ Normal collection matching uses conservative normalized title and known local
 ROM-path forms. Automatic orphan resolution against SMWCentral remains strict:
 ambiguous and non-exact results are never selected silently.
 
+Save Data Sync uses the KaizOFF public catalogue as its primary SMWC data
+provider. **Look up checked on SMWC** loads one cached KaizOFF Index snapshot
+for the review, performs strict exact-title matching locally, and fetches rich
+KaizOFF metadata only for submission IDs that actually resolve. The checked-row
+batch never fans out into direct SMWCentral API searches if KaizOFF is
+unavailable; this avoids exhausting SMWC's comparatively small rate limit.
+
+An explicit manual search also uses the shared KaizOFF Index first. Direct
+SMWCentral API search is retained only as a logged fallback when KaizOFF cannot
+provide the catalogue or the selected submission detail. This fallback is tied
+to the user's single manual request rather than repeated automatically for all
+unmatched saves. User-facing SMWC terminology refers to the canonical SMWC
+submission identity even when KaizOFF supplies the catalogue data.
+
 Local save-backed entries are intentionally excluded from ordinary automatic
 title and ROM-path matching. Their explicit saved filename association remains
 authoritative, which allows the association to be forgotten later.
@@ -109,7 +123,7 @@ For one unresolved save:
 1. Select the save on the unresolved/import tab.
 2. Choose **Search Selected...**.
 3. Enter a free-text query.
-4. Review ranked current, obsolete, new, and already-collected results.
+4. Review ranked catalogue results and whether each SMWC ID is already in the collection. KaizOFF Index rows may show a neutral **Catalogue** release state until the selected ID is hydrated.
 5. Explicitly choose **Use Selected**.
 6. Keep the row checked and press **Apply Selected**.
 

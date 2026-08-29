@@ -1036,10 +1036,11 @@ class ManualOrphanSearchUiTest(unittest.TestCase):
 
     def test_manual_results_show_release_and_collection_state(self):
         source = self._source()
-        self.assertIn(
-            'release = "Obsolete" if option["obsolete"] else "Current"',
-            source,
-        )
+        self.assertIn('if obsolete is True:', source)
+        self.assertIn('release = "Obsolete"', source)
+        self.assertIn('elif obsolete is False:', source)
+        self.assertIn('release = "Current"', source)
+        self.assertIn('release = "Catalogue"', source)
         self.assertIn(
             'collection = "Already added" '
             'if option["in_collection"] else "New"',

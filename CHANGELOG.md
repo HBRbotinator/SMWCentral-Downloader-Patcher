@@ -6,6 +6,13 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### KaizOFF-first Save Data Sync catalogue lookup
+
+- Checked orphan saves now share one cached KaizOFF Index snapshot and match strict exact titles locally instead of issuing one direct SMWC search per save.
+- Rich KaizOFF detail is fetched only for resolved or explicitly selected SMWC submission IDs.
+- Manual search uses the same local KaizOFF catalogue first; a direct SMWC request is used only as a logged fallback when KaizOFF cannot supply the catalogue or selected detail.
+- Bulk lookup deliberately stops rather than fanning out to direct SMWC fallback when KaizOFF is unavailable, avoiding SMWC rate-limit exhaustion.
+
 ### Modern ROM missing-provenance review
 
 - Numeric modern `files[]` ROM assets that are missing per-ROM `smwc_submission_id` can now open **Review Missing Provenance...** directly from the ROM organization audit.

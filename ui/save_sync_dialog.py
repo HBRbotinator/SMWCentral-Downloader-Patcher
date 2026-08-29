@@ -151,13 +151,14 @@ class ManualSmwcSearchDialog:
     """Modal free-text SMWC search for one unresolved save."""
 
     def __init__(self, parent, candidate, existing_ids, fetch_fn=None,
-                 logger=None, on_selected=None):
+                 logger=None, on_selected=None, lookup_service=None):
         self.parent = parent
         self.candidate = candidate
         self.existing_ids = set(existing_ids)
         self.fetch_fn = fetch_fn
         self.logger = logger
         self.on_selected = on_selected
+        self.lookup_service = lookup_service
 
         self.win = None
         self.query_var = None
@@ -257,7 +258,7 @@ class ManualSmwcSearchDialog:
         self._search_running = True
         self.search_button.config(state="disabled")
         self.use_button.config(state="disabled")
-        self.status_label.config(text="Searching SMWCentral...")
+        self.status_label.config(text="Searching SMWC catalogue...")
         self.options.clear()
         for iid in self.result_tree.get_children():
             self.result_tree.delete(iid)
@@ -267,12 +268,15 @@ class ManualSmwcSearchDialog:
         ).start()
 
     def _search_worker(self, query):
-        result = save_sync.search_orphan_options(
-            query,
-            self.existing_ids,
-            fetch_fn=self.fetch_fn,
-            log=self.logger.log if self.logger else None,
-        )
+        if self.lookup_service is not None:
+            result = self.lookup_service.search_manual(query, self.existing_ids)
+        else:
+            result = save_sync.search_orphan_options(
+                query,
+                self.existing_ids,
+                fetch_fn=self.fetch_fn,
+                log=self.logger.log if self.logger else None,
+            )
         self._ui(self._show_results, result)
 
     def _show_results(self, result):
@@ -284,7 +288,13 @@ class ManualSmwcSearchDialog:
 
         options = result.get("options", [])
         for option in options:
-            release = "Obsolete" if option["obsolete"] else "Current"
+            obsolete = option.get("obsolete")
+            if obsolete is True:
+                release = "Obsolete"
+            elif obsolete is False:
+                release = "Current"
+            else:
+                release = "Catalogue"
             collection = "Already added" if option["in_collection"] else "New"
             iid = self.result_tree.insert(
                 "",
@@ -299,7 +309,7 @@ class ManualSmwcSearchDialog:
             self.options[iid] = option
 
         if result.get("status") == save_sync.RESOLUTION_ERROR:
-            message = "SMWCentral search failed. Check the log and try again."
+            message = "SMWC catalogue search failed. Check the log and try again."
         elif options:
             message = f"Found {len(options)} result(s). Select the correct hack."
         else:
@@ -321,19 +331,45 @@ class ManualSmwcSearchDialog:
 
     def _use_selected(self, _event=None):
         selected = self.result_tree.selection()
-        if len(selected) != 1:
+        if len(selected) != 1 or self._search_running:
             return
         option = self.options.get(selected[0])
         if not option:
             return
 
-        resolution = save_sync.resolution_for_selected_hack(
-            option["hack"], self.existing_ids
-        )
-        if resolution["status"] not in _ORPHAN_ACTIONABLE:
-            self.status_label.config(text="The selected result cannot be used.")
+        if self.lookup_service is not None and option.get("lookup_source") == "kaizoff":
+            self._search_running = True
+            self.search_button.config(state="disabled")
+            self.use_button.config(state="disabled")
+            self.status_label.config(text="Loading selected SMWC details...")
+            threading.Thread(
+                target=self._resolve_selected_worker, args=(option,), daemon=True
+            ).start()
             return
 
+        resolution = save_sync.resolution_for_selected_hack(
+            option.get("hack"), self.existing_ids
+        )
+        self._finish_selected_resolution(resolution)
+
+    def _resolve_selected_worker(self, option):
+        resolution = self.lookup_service.resolve_selected_option(
+            option, self.existing_ids
+        )
+        self._ui(self._finish_selected_resolution, resolution)
+
+    def _finish_selected_resolution(self, resolution):
+        self._search_running = False
+        try:
+            self.search_button.config(state="normal")
+        except tk.TclError:
+            return
+        if resolution.get("status") not in _ORPHAN_ACTIONABLE:
+            self.status_label.config(
+                text="The selected SMWC result could not be loaded. Check the log."
+            )
+            self._selection_changed()
+            return
         if self.on_selected:
             self.on_selected(resolution)
         self._close()
@@ -555,12 +591,13 @@ class SaveSyncDialog:
 
     def __init__(self, parent, candidates, data_manager, logger=None,
                  on_applied=None, fetch_fn=None, mark_all=False,
-                 config_manager=None):
+                 config_manager=None, lookup_service=None):
         self.parent = parent
         self.data_manager = data_manager
         self.logger = logger
         self.on_applied = on_applied
         self.fetch_fn = fetch_fn
+        self.lookup_service = lookup_service
         self.mark_all = mark_all
         self.config_manager = config_manager
         self.candidates = list(candidates)
@@ -594,6 +631,18 @@ class SaveSyncDialog:
 
         self._cancel_lookup = False
         self._lookup_running = False
+
+    def _catalogue_lookup(self):
+        """Return one shared KaizOFF-first lookup session for this review."""
+
+        if self.lookup_service is None:
+            from save_sync_catalogue import SaveSyncCatalogueLookup
+
+            self.lookup_service = SaveSyncCatalogueLookup(
+                processed_json_path=getattr(self.data_manager, "json_path", None),
+                log=self.logger.log if self.logger else None,
+            )
+        return self.lookup_service
 
     # -- construction ---------------------------------------------------------
 
@@ -1139,6 +1188,9 @@ class SaveSyncDialog:
             on_selected=lambda resolution: self._apply_manual_resolution(
                 iid, resolution
             ),
+            lookup_service=(
+                None if self.fetch_fn is not None else self._catalogue_lookup()
+            ),
         ).show()
 
     def _apply_manual_resolution(self, iid, resolution):
@@ -1149,7 +1201,7 @@ class SaveSyncDialog:
                 pass
             self._update_apply_state()
 
-    # -- SMWC lookup (threaded) ----------------------------------------------
+    # -- SMWC catalogue lookup (threaded) ------------------------------------
 
     def _toggle_lookup(self):
         if self._lookup_running:
@@ -1184,16 +1236,23 @@ class SaveSyncDialog:
 
     def _lookup_worker(self, targets, existing_ids):
         total = len(targets)
+        lookup = None if self.fetch_fn is not None else self._catalogue_lookup()
         for index, iid in enumerate(targets, start=1):
             if self._cancel_lookup:
                 break
             cand = self.orph_cand[iid]
-            resolution = save_sync.resolve_orphan(
-                cand.save_name, existing_ids, fetch_fn=self.fetch_fn,
-                log=self.logger.log if self.logger else None,
-            )
+            if lookup is not None:
+                resolution = lookup.resolve_automatic(cand.save_name, existing_ids)
+            else:
+                resolution = save_sync.resolve_orphan(
+                    cand.save_name, existing_ids, fetch_fn=self.fetch_fn,
+                    log=self.logger.log if self.logger else None,
+                )
             self._ui(self._apply_lookup_result, iid, resolution, index, total)
-        self._ui(self._lookup_done)
+            if resolution.get("catalogue_unavailable"):
+                self._ui(self._lookup_done, True)
+                return
+        self._ui(self._lookup_done, False)
 
     def _apply_lookup_result(self, iid, resolution, index, total):
         if self._set_orphan_resolution(iid, resolution):
@@ -1253,14 +1312,20 @@ class SaveSyncDialog:
         self._update_apply_state()
         return True
 
-    def _lookup_done(self):
+    def _lookup_done(self, catalogue_unavailable=False):
         self._lookup_running = False
         self._cancel_lookup = False
         try:
             self.lookup_button.config(text="Look up checked on SMWC", state="normal")
             self.manual_search_button.config(state="normal")
             self.local_entry_button.config(state="normal")
-            self.lookup_status.config(text="")
+            self.lookup_status.config(
+                text=(
+                    "KaizOFF unavailable - manual search can use SMWC fallback"
+                    if catalogue_unavailable
+                    else ""
+                )
+            )
         except tk.TclError:
             pass
         self._update_apply_state()

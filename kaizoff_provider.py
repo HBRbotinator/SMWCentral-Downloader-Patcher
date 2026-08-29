@@ -68,6 +68,7 @@ class KaizOffHackMetadata:
     active: bool | None
     last_fetched: str
     obsoleted_by_submission_id: int | None
+    difficulty_id: str = ""
 
     def as_catalogue_entry(self) -> CatalogueEntry:
         return CatalogueEntry(
@@ -554,6 +555,7 @@ def _parse_detail_payload(payload: Any, requested_id: int) -> KaizOffHackMetadat
         active=_optional_bool(data.get("active"), "KaizOFF active"),
         last_fetched=str(data.get("last_fetched") or "").strip(),
         obsoleted_by_submission_id=obsoleted_by,
+        difficulty_id=str(raw_fields.get("difficulty") or "").strip(),
     )
 
 

@@ -147,6 +147,7 @@ class KaizOffProviderTest(unittest.TestCase):
         self.assertTrue(metadata.hall_of_fame)
         self.assertTrue(metadata.active)
         self.assertIsNone(metadata.obsoleted_by_submission_id)
+        self.assertEqual("diff_7", metadata.difficulty_id)
         self.assertEqual(
             [(KAIZOFF_DETAIL_URL_TEMPLATE.format(id=41022), 20.0)],
             fetch.calls,
