@@ -2795,6 +2795,9 @@ class CollectionPage:
             return True
 
         self._last_collection_ingestion_convergence_decisions = {}
+        dialog = self.collection_ingestion_review_dialog
+        if dialog is not None and dialog.is_open:
+            dialog.set_converged_rom_decisions({})
         return self._begin_collection_ingestion_finalization(decisions, {})
 
     def _open_collection_ingestion_convergence_review(self, reviews):
@@ -2842,6 +2845,9 @@ class CollectionPage:
         if group_decisions is None:
             return False
         self._last_collection_ingestion_convergence_decisions = dict(decisions)
+        dialog = self.collection_ingestion_review_dialog
+        if dialog is not None and dialog.is_open:
+            dialog.set_converged_rom_decisions(decisions)
         return self._begin_collection_ingestion_finalization(
             group_decisions,
             decisions,
@@ -2937,6 +2943,7 @@ class CollectionPage:
         review_dialog = self.collection_ingestion_review_dialog
         if review_dialog is not None and review_dialog.is_open:
             review_dialog.set_submitting(False)
+            review_dialog.set_diagnostic_error(error)
             review_dialog.lift()
         self._log(f"❌ Collection import plan finalization failed: {error}", "Error")
         messagebox.showerror(

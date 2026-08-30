@@ -79,6 +79,12 @@ The current build contract publishes a native tarball rather than an AppImage. E
 
 ![Multi-BPS Dialog](images/application-5.0-download-multiple-bps.png)
 
+### Collection import review and diagnostics
+
+Collection ROM-folder/GiganticBucket review keeps the frequently used **Save**, **Save & Next**, and **Reset** controls fixed below the selected-item detail pane. A single retained ROM is shown as Primary automatically; long catalogue result fields remain horizontally scrollable instead of disappearing outside the review pane.
+
+**Export Diagnostics...** writes a troubleshooting JSON snapshot of the frozen review session, matcher classifications/suggestions, ROM filenames and SHA-256 values, saved decisions, combined-ROM choices, and any finalization error. It deliberately excludes absolute filesystem paths, raw ROM bytes, and imported history record IDs.
+
 ### Interrupted Collection transaction recovery
 
 Collection imports and explicit SMWC replacement migrations can update Collection state together with dependent Save Sync, identity-hint, and optional Planner references. These coordinated writes use a recovery journal.

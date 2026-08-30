@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import os
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from collection_ingestion import IngestionSource
+from collection_ingestion_diagnostics import diagnostic_filename, write_diagnostic_report
+from ui.window_positioning import center_window_on_parent
 from collection_ingestion_review_model import (
     CollectionIngestionReviewError,
     CollectionIngestionReviewModel,
@@ -57,12 +59,15 @@ class CollectionIngestionReviewDialog:
         self.summary_label = None
         self.catalogue_label = None
         self.details = None
+        self.detail_actions = None
         self.done_button = None
         self.attention_var = None
         self.search_var = None
         self.search_status = None
         self.suggestion_tree = None
+        self.suggestion_detail_label = None
         self._suggestion_targets = {}
+        self._suggestion_rows = {}
         self._current_group_id = None
         self._action_var = None
         self._rom_action_vars = {}
@@ -74,6 +79,8 @@ class CollectionIngestionReviewDialog:
         self._remember_vars = []
         self._closed = False
         self._submitting = False
+        self._diagnostic_error = ""
+        self._converged_rom_decisions = {}
 
     @property
     def is_open(self):
@@ -171,6 +178,8 @@ class CollectionIngestionReviewDialog:
         detail_canvas.configure(yscrollcommand=detail_scroll.set)
         detail_canvas.grid(row=0, column=0, sticky="nsew")
         detail_scroll.grid(row=0, column=1, sticky="ns")
+        self.detail_actions = ttk.Frame(right, padding=(0, 8, 0, 0))
+        self.detail_actions.grid(row=1, column=0, columnspan=2, sticky="ew")
         right.rowconfigure(0, weight=1)
         right.columnconfigure(0, weight=1)
         self.details.bind(
@@ -184,6 +193,11 @@ class CollectionIngestionReviewDialog:
 
         footer = ttk.Frame(root)
         footer.pack(fill="x", pady=(10, 0))
+        ttk.Button(
+            footer,
+            text="Export Diagnostics...",
+            command=self._export_diagnostics,
+        ).pack(side="left")
         ttk.Button(footer, text="Close", command=self.close).pack(side="right")
         self.done_button = ttk.Button(
             footer,
@@ -215,6 +229,7 @@ class CollectionIngestionReviewDialog:
             self.done_button.configure(
                 state="disabled" if self._submitting else "normal"
             )
+        self._apply_submitting_state()
         if self._submitting:
             try:
                 self.win.configure(cursor="watch")
@@ -240,15 +255,7 @@ class CollectionIngestionReviewDialog:
             self.on_close()
 
     def _center(self):
-        try:
-            self.win.update_idletasks()
-            width = self.win.winfo_width()
-            height = self.win.winfo_height()
-            x = self.parent.winfo_rootx() + max(0, (self.parent.winfo_width() - width) // 2)
-            y = self.parent.winfo_rooty() + max(0, (self.parent.winfo_height() - height) // 2)
-            self.win.geometry(f"+{x}+{y}")
-        except (tk.TclError, AttributeError):
-            pass
+        center_window_on_parent(self.win, self.parent)
 
     def _refresh_rows(self):
         if not self.tree:
@@ -303,13 +310,20 @@ class CollectionIngestionReviewDialog:
         self.catalogue_label.configure(
             text=f"KaizOFF Index: {self.model.session.catalogue_source}{stale}"
         )
-        self.done_button.configure(state="normal" if summary.can_complete else "disabled")
+        self.done_button.configure(
+            state=(
+                "disabled"
+                if self._submitting or not summary.can_complete
+                else "normal"
+            )
+        )
 
-    def _select_next_unresolved(self):
+    def _select_next_unresolved(self, *, quiet=False):
         unresolved = self.model.unresolved_group_ids()
         if not unresolved:
-            messagebox.showinfo("Collection Import", "All required review decisions are resolved.", parent=self.win)
-            return
+            if not quiet:
+                messagebox.showinfo("Collection Import", "All required review decisions are resolved.", parent=self.win)
+            return False
         if self.attention_var and not self.attention_var.get():
             self.attention_var.set(True)
             self._refresh_rows()
@@ -319,7 +333,8 @@ class CollectionIngestionReviewDialog:
                 self.tree.focus(group_id)
                 self.tree.see(group_id)
                 self._render_group(group_id)
-                return
+                return True
+        return False
 
     def _on_row_selected(self, _event=None):
         selected = self.tree.selection()
@@ -330,15 +345,45 @@ class CollectionIngestionReviewDialog:
     def _clear_details(self, message="Select an item to review."):
         for child in self.details.winfo_children():
             child.destroy()
-        ttk.Label(self.details, text=message, wraplength=500).pack(anchor="w", padx=4, pady=4)
+        self._clear_detail_actions()
+        self._wrapped_label(self.details, message).pack(anchor="w", padx=4, pady=4)
         self._current_group_id = None
+
+    def _clear_detail_actions(self):
+        if self.detail_actions is None:
+            return
+        for child in self.detail_actions.winfo_children():
+            child.destroy()
+
+    def _apply_submitting_state(self):
+        if self.detail_actions is None:
+            return
+        state = "disabled" if self._submitting else "normal"
+        for child in self.detail_actions.winfo_children():
+            if isinstance(child, ttk.Button):
+                try:
+                    child.configure(state=state)
+                except tk.TclError:
+                    pass
+
+    def _wrapped_label(self, parent, text, **kwargs):
+        label = ttk.Label(parent, text=text, wraplength=480, **kwargs)
+        def resize(event):
+            try:
+                label.configure(wraplength=max(180, int(event.width) - 24))
+            except (tk.TclError, ValueError):
+                pass
+        parent.bind("<Configure>", resize, add="+")
+        return label
 
     def _render_group(self, group_id):
         self._current_group_id = group_id
         self.search_var = None
         self.search_status = None
         self.suggestion_tree = None
+        self.suggestion_detail_label = None
         self._suggestion_targets = {}
+        self._suggestion_rows = {}
         self._action_var = None
         self._rom_action_vars = {}
         self._rom_primary_var = None
@@ -349,15 +394,16 @@ class CollectionIngestionReviewDialog:
         self._remember_vars = []
         for child in self.details.winfo_children():
             child.destroy()
+        self._clear_detail_actions()
         context = self.model.context(group_id)
         group = context.group
         previous = self.model.decision_for(group_id)
 
-        ttk.Label(
+        self._wrapped_label(
             self.details,
-            text=context.row.title,
+            context.row.title,
             font=("Segoe UI", 13, "bold"),
-        ).pack(anchor="w")
+        ).pack(anchor="w", fill="x")
         ttk.Label(
             self.details,
             text=f"Source: {', '.join(context.row.sources)}   •   {context.row.status}",
@@ -368,13 +414,13 @@ class CollectionIngestionReviewDialog:
             issue_box = ttk.LabelFrame(self.details, text="Review status", padding=8)
             issue_box.pack(fill="x", pady=(0, 8))
             for issue in group.issues:
-                ttk.Label(issue_box, text=f"• {issue.reason}", wraplength=520).pack(anchor="w")
+                self._wrapped_label(issue_box, f"• {issue.reason}").pack(anchor="w", fill="x")
 
         if context.candidate_reasons:
             evidence = ttk.LabelFrame(self.details, text="Matching evidence", padding=8)
             evidence.pack(fill="x", pady=(0, 8))
             for reason in context.candidate_reasons:
-                ttk.Label(evidence, text=reason, wraplength=520).pack(anchor="w", pady=1)
+                self._wrapped_label(evidence, reason).pack(anchor="w", fill="x", pady=1)
 
         self._action_var = tk.StringVar(value=self._default_action(group, previous))
         self._render_identity(group, context, previous)
@@ -383,11 +429,27 @@ class CollectionIngestionReviewDialog:
         self._render_first_clear(group, previous)
         self._render_remember_aliases(context, previous)
 
-        actions = ttk.Frame(self.details)
-        actions.pack(fill="x", pady=(10, 4))
-        if previous is not None:
-            ttk.Button(actions, text="Reset Decision", command=self._reset_current).pack(side="left")
-        ttk.Button(actions, text="Save Decision", command=self._save_current).pack(side="right")
+        actions = self.detail_actions
+        if actions is not None:
+            if previous is not None:
+                ttk.Button(actions, text="Reset", command=self._reset_current).pack(side="left")
+            ttk.Label(
+                actions,
+                text="Save this item, then continue reviewing. Nothing is applied yet.",
+                foreground="gray",
+            ).pack(side="left", padx=(8, 0))
+            ttk.Button(
+                actions,
+                text="Save & Next",
+                style="Accent.TButton",
+                command=lambda: self._save_current(advance=True),
+            ).pack(side="right")
+            ttk.Button(
+                actions,
+                text="Save",
+                command=self._save_current,
+            ).pack(side="right", padx=(0, 8))
+            self._apply_submitting_state()
 
     def _default_action(self, group, previous):
         if previous is not None:
@@ -463,10 +525,21 @@ class CollectionIngestionReviewDialog:
                 self.suggestion_tree.heading(column, text=label)
                 self.suggestion_tree.column(column, width=width, minwidth=40, anchor="w")
             tree_scroll = ttk.Scrollbar(holder, orient="vertical", command=self.suggestion_tree.yview)
-            self.suggestion_tree.configure(yscrollcommand=tree_scroll.set)
-            self.suggestion_tree.grid(row=0, column=0, sticky="ew")
+            tree_hscroll = ttk.Scrollbar(holder, orient="horizontal", command=self.suggestion_tree.xview)
+            self.suggestion_tree.configure(
+                yscrollcommand=tree_scroll.set,
+                xscrollcommand=tree_hscroll.set,
+            )
+            self.suggestion_tree.grid(row=0, column=0, sticky="nsew")
             tree_scroll.grid(row=0, column=1, sticky="ns")
+            tree_hscroll.grid(row=1, column=0, sticky="ew")
             holder.columnconfigure(0, weight=1)
+            self.suggestion_detail_label = self._wrapped_label(
+                frame,
+                "Select a catalogue result to see its full details.",
+                foreground="gray",
+            )
+            self.suggestion_detail_label.pack(anchor="w", fill="x", pady=(4, 0))
             self.suggestion_tree.bind("<<TreeviewSelect>>", self._suggestion_selected)
             self._populate_suggestions(context.suggestions)
             self._restore_target_selection(previous, proposed)
@@ -527,6 +600,7 @@ class CollectionIngestionReviewDialog:
 
     def _populate_suggestions(self, suggestions):
         self._suggestion_targets = {}
+        self._suggestion_rows = {}
         if not self.suggestion_tree:
             return
         for item in self.suggestion_tree.get_children():
@@ -547,6 +621,7 @@ class CollectionIngestionReviewDialog:
                 ),
             )
             self._suggestion_targets[iid] = suggestion.target_key
+            self._suggestion_rows[iid] = suggestion
 
     def _restore_target_selection(self, previous, proposed):
         target = ""
@@ -560,9 +635,11 @@ class CollectionIngestionReviewDialog:
             if value == target:
                 self.suggestion_tree.selection_set(iid)
                 self.suggestion_tree.see(iid)
+                self._update_selected_suggestion_text()
                 return
 
     def _suggestion_selected(self, _event=None):
+        self._update_selected_suggestion_text()
         if self._action_var is None:
             return
         if self._action_var.get() not in {
@@ -571,6 +648,27 @@ class CollectionIngestionReviewDialog:
             ReviewAction.IGNORE.value,
         }:
             self._action_var.set(ReviewAction.USE_TARGET.value)
+
+    def _update_selected_suggestion_text(self):
+        if self.suggestion_tree is None or self.suggestion_detail_label is None:
+            return
+        selected = self.suggestion_tree.selection()
+        suggestion = self._suggestion_rows.get(selected[0]) if len(selected) == 1 else None
+        if suggestion is None:
+            self.suggestion_detail_label.configure(
+                text="Select a catalogue result to see its full details."
+            )
+            return
+        parts = [f"{suggestion.title} [SMWC {suggestion.target_key}]"]
+        if suggestion.difficulty:
+            parts.append(suggestion.difficulty)
+        if suggestion.hack_type:
+            parts.append(suggestion.hack_type)
+        if suggestion.exits is not None:
+            parts.append(f"{suggestion.exits} exits")
+        if suggestion.confidence:
+            parts.append(f"{suggestion.confidence:.0%} match")
+        self.suggestion_detail_label.configure(text="  •  ".join(parts))
 
     def _search_catalogue(self):
         query = self.search_var.get().strip() if self.search_var else ""
@@ -588,6 +686,7 @@ class CollectionIngestionReviewDialog:
             first = self.suggestion_tree.get_children()[0]
             self.suggestion_tree.selection_set(first)
             self.suggestion_tree.see(first)
+            self._update_selected_suggestion_text()
         else:
             self.search_status.configure(text="No results found. Try another search term or import locally.")
 
@@ -614,9 +713,10 @@ class CollectionIngestionReviewDialog:
         previous_ignored = {item.path for item in previous_selection.ignored} if previous_selection else set()
         self._rom_action_vars = {}
         self._rom_initial = {}
-        self._rom_primary_var = tk.StringVar(
-            value=previous_selection.primary_path if previous_selection else ""
-        )
+        default_primary = previous_selection.primary_path if previous_selection else ""
+        if not default_primary and len(group.rom_files) == 1:
+            default_primary = group.rom_files[0].path
+        self._rom_primary_var = tk.StringVar(value=default_primary)
 
         for rom in group.rom_files:
             row = ttk.Frame(frame)
@@ -650,7 +750,7 @@ class CollectionIngestionReviewDialog:
                 row,
                 text=f"{os.path.basename(rom.path)}  •  {rom.sha256[:12]}…",
             ).pack(side="left", fill="x", expand=True)
-            ttk.Label(frame, text=rom.path, foreground="gray", wraplength=500).pack(anchor="w", padx=(24, 0))
+            self._wrapped_label(frame, rom.path, foreground="gray").pack(anchor="w", fill="x", padx=(24, 0))
 
     def _render_user_conflicts(self, group, previous):
         conflicts = {}
@@ -847,7 +947,7 @@ class CollectionIngestionReviewDialog:
             remembered_associations=remembered,
         )
 
-    def _save_current(self):
+    def _save_current(self, *, advance=False):
         if not self._current_group_id:
             return
         group = self.model.get_group(self._current_group_id)
@@ -859,11 +959,17 @@ class CollectionIngestionReviewDialog:
             return
         current = group.group_id
         self._refresh_rows()
+        if advance:
+            if not self._select_next_unresolved(quiet=True):
+                if self.tree.exists(current):
+                    self.tree.selection_set(current)
+                    self._render_group(current)
+            return
         if self.tree.exists(current):
             self.tree.selection_set(current)
             self._render_group(current)
         else:
-            self._select_next_unresolved()
+            self._select_next_unresolved(quiet=True)
 
     def _reset_current(self):
         if not self._current_group_id:
@@ -874,6 +980,45 @@ class CollectionIngestionReviewDialog:
         if self.tree.exists(group_id):
             self.tree.selection_set(group_id)
             self._render_group(group_id)
+
+    def set_diagnostic_error(self, error):
+        self._diagnostic_error = str(error or "")
+
+    def set_converged_rom_decisions(self, decisions):
+        self._converged_rom_decisions = dict(decisions or {})
+
+    def _export_diagnostics(self):
+        destination = filedialog.asksaveasfilename(
+            parent=self.win,
+            title="Export Collection Import Diagnostics",
+            defaultextension=".json",
+            initialfile=diagnostic_filename(),
+            filetypes=(("JSON diagnostic report", "*.json"), ("All files", "*.*")),
+        )
+        if not destination:
+            return
+        try:
+            written = write_diagnostic_report(
+                destination,
+                self.model.session,
+                self.model.decisions,
+                converged_rom_decisions=self._converged_rom_decisions,
+                finalization_error=self._diagnostic_error,
+            )
+        except Exception as error:
+            messagebox.showerror(
+                "Collection Import",
+                f"Failed to export diagnostics:\n{error}",
+                parent=self.win,
+            )
+            return
+        messagebox.showinfo(
+            "Collection Import",
+            "Diagnostic report exported.\n\n"
+            "The report contains ROM filenames and SHA-256 hashes, but no absolute "
+            "paths, raw ROM bytes, or imported history record IDs.",
+            parent=self.win,
+        )
 
     def _complete(self):
         if self._submitting:

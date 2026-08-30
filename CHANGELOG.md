@@ -6,6 +6,12 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Collection import review ergonomics and diagnostics
+
+- Collection import keeps Save, Save & Next, and Reset controls visible below the scrollable detail pane so repeated review no longer requires scrolling to the bottom for every decision.
+- Single-ROM review items visibly default that ROM as primary, long catalogue-result tables can scroll horizontally, and Collection import windows use shared parent-centered/clamped placement.
+- Review sessions can export privacy-safe JSON diagnostics with matcher classifications, top suggestions, ROM filenames/SHA-256 values, saved decisions, convergence choices, and finalization errors while omitting absolute paths, raw ROM bytes, and imported history record IDs.
+
 ### Collection import convergence review and retry resilience
 
 - Separate review items that resolve to the same new Collection target now enter an explicit combined ROM-variant review before finalization, so the user chooses retained variants and one primary ROM across the full converged set.

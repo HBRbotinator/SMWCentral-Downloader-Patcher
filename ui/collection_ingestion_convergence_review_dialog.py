@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import tkinter as tk
+from ui.window_positioning import center_window_on_parent
 from tkinter import messagebox, ttk
 
 from collection_ingestion_convergence_review import (
@@ -363,22 +364,8 @@ class CollectionIngestionConvergenceReviewDialog:
         self.close()
 
     def _center(self):
-        if not self.win:
-            return
-        self.win.update_idletasks()
-        try:
-            parent_x = self.parent.winfo_rootx()
-            parent_y = self.parent.winfo_rooty()
-            parent_w = self.parent.winfo_width()
-            parent_h = self.parent.winfo_height()
-            width = self.win.winfo_width()
-            height = self.win.winfo_height()
-            x = parent_x + (parent_w - width) // 2
-            y = parent_y + (parent_h - height) // 2
-            self.win.geometry(f"+{max(0, x)}+{max(0, y)}")
-            self.win.lift()
-        except (tk.TclError, AttributeError):
-            pass
+        center_window_on_parent(self.win, self.parent)
+
 
 
 __all__ = ["CollectionIngestionConvergenceReviewDialog"]

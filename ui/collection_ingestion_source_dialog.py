@@ -4,6 +4,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from ui.window_positioning import center_window_on_parent
+
 from collection_ingestion_entrypoint import (
     CollectionIngestionEntrypointError,
     CollectionIngestionSourceSelection,
@@ -211,21 +213,8 @@ class CollectionIngestionSourceDialog:
             self.on_close()
 
     def _center(self):
-        try:
-            self.win.update_idletasks()
-            width = self.win.winfo_width()
-            height = self.win.winfo_height()
-            x = self.parent.winfo_rootx() + max(
-                0,
-                (self.parent.winfo_width() - width) // 2,
-            )
-            y = self.parent.winfo_rooty() + max(
-                0,
-                (self.parent.winfo_height() - height) // 2,
-            )
-            self.win.geometry(f"+{x}+{y}")
-        except (tk.TclError, AttributeError):
-            pass
+        center_window_on_parent(self.win, self.parent)
+
 
 
 class CollectionIngestionProgressDialog:
@@ -262,19 +251,7 @@ class CollectionIngestionProgressDialog:
         progress = ttk.Progressbar(body, mode="indeterminate", length=430)
         progress.pack(fill="x")
         progress.start(12)
-        self.win.update_idletasks()
-        try:
-            x = self.parent.winfo_rootx() + max(
-                0,
-                (self.parent.winfo_width() - self.win.winfo_width()) // 2,
-            )
-            y = self.parent.winfo_rooty() + max(
-                0,
-                (self.parent.winfo_height() - self.win.winfo_height()) // 2,
-            )
-            self.win.geometry(f"+{x}+{y}")
-        except (tk.TclError, AttributeError):
-            pass
+        center_window_on_parent(self.win, self.parent)
         return self.win
 
     def close(self):

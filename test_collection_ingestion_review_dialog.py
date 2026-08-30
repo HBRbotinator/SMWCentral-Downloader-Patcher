@@ -20,7 +20,7 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
         self.assertIn('self.win.title("Review Collection Import")', self.source)
         self.assertIn("ttk.Treeview", self.source)
         self.assertIn("Review Remaining", self.source)
-        self.assertIn("Save Decision", self.source)
+        self.assertIn("Save & Next", self.source)
         self.assertIn("Continue", self.source)
 
     def test_dialog_exposes_all_blocking_decision_families(self):
@@ -66,7 +66,6 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
             "processed.json",
             "config.json",
             "save_sync_reference_participant",
-            "filedialog",
         )
         for value in forbidden:
             with self.subTest(value=value):
@@ -86,6 +85,29 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
         self.assertNotIn("self.close()", text)
         self.assertNotIn("finalize", text)
         self.assertNotIn("apply", text)
+
+
+    def test_review_actions_stay_outside_scrollable_detail_canvas(self):
+        self.assertIn("self.detail_actions = ttk.Frame(right", self.source)
+        self.assertIn('text="Save & Next"', self.source)
+        self.assertIn('text="Save"', self.source)
+        self.assertIn("_save_current(advance=True)", self.source)
+
+    def test_suggestion_table_supports_horizontal_scrolling(self):
+        self.assertIn('orient="horizontal"', self.source)
+        self.assertIn("xscrollcommand=tree_hscroll.set", self.source)
+        self.assertIn("_update_selected_suggestion_text", self.source)
+        self.assertIn("see its full details", self.source)
+
+    def test_single_rom_defaults_to_visible_primary(self):
+        self.assertIn("if not default_primary and len(group.rom_files) == 1", self.source)
+        self.assertIn("default_primary = group.rom_files[0].path", self.source)
+
+    def test_diagnostics_export_is_metadata_only(self):
+        self.assertIn('text="Export Diagnostics..."', self.source)
+        self.assertIn("write_diagnostic_report", self.source)
+        self.assertIn("no absolute", self.source.lower())
+        self.assertNotIn("open(rom.path", self.source)
 
     def test_dialog_keeps_rom_ignore_path_hash_semantics(self):
         self.assertIn("IgnoredRomDecision(path=path, sha256=by_path[path].sha256)", self.source)
