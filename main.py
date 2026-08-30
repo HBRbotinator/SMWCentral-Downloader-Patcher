@@ -24,6 +24,7 @@ from product_identity import PRODUCT_DISPLAY_NAME, VERSION
 from update_policy import current_update_policy
 from rom_filename_policy import build_patched_rom_filename
 from rom_asset_metadata import build_tool_patch_rom_asset, merge_collection_rom_assets
+from download_identity_policy import provider_marks_obsolete, same_title_collection_ids
 import sv_ttk
 
 # Multiple approaches to suppress threading cleanup errors
@@ -396,6 +397,17 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                 if log:
 
                     log(f"📝 Updated demo from {old_demo} -> {new_demo}", "Information")
+            provider_obsolete = provider_marks_obsolete(hack)
+            if existing_hack.get("obsolete", False) != provider_obsolete:
+                old_obsolete = existing_hack.get("obsolete", False)
+                existing_hack["obsolete"] = provider_obsolete
+                metadata_updated = True
+                if log:
+                    log(
+                        f"📝 Updated provider obsolete state from "
+                        f"{old_obsolete} -> {provider_obsolete}",
+                        "Information",
+                    )
             if existing_hack.get("authors") != hack.get("authors", []):
                 old_authors = existing_hack.get("authors", [])
                 new_authors = hack.get("authors", [])
@@ -675,32 +687,30 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
                     title_clean, base_rom_ext, config, log
                 )
 
-                # Detect duplicates and handle obsolete versions
+                # Obsolescence is an explicit provider fact.  A duplicate title is
+                # advisory only: SMWC submission ID ordering does not establish
+                # version lineage or prove that one submission supersedes another.
                 current_title = clean_hack_title(hack_name)
-                should_process = detect_and_handle_duplicates(processed, hack_id, current_title, log)
-
-                # Always save hack data regardless of obsolete status - user has the files
-                is_obsolete_version = not should_process
+                is_obsolete_version = provider_marks_obsolete(hack)
+                duplicate_ids = same_title_collection_ids(
+                    processed, hack_id, current_title
+                )
 
                 if is_obsolete_version and log:
-                    log(f"⚪ Downloaded obsolete version: {hack_name} (ID {hack_id})", "Information")
+                    log(
+                        f"⚪ Downloaded provider-marked obsolete submission: "
+                        f"{hack_name} (ID {hack_id})",
+                        "Information",
+                    )
 
-                # Check for any remaining duplicate warning (different from obsolete detection)
-                duplicate_id = None
-                for existing_id, existing_data in processed.items():
-                    if (isinstance(existing_data, dict)
-                            and existing_data.get("title") == current_title
-                            and existing_id != hack_id
-                            and not existing_data.get("obsolete", False)):
-
-                        # Only warn about non-obsolete duplicates
-                        duplicate_id = existing_id
-                        break
-
-                if duplicate_id:
-                    if log:
-
-                        log(f"⚠️ Potential duplicate detected: '{current_title}' already exists as ID {duplicate_id}, but downloading with new ID {hack_id}", "Warning")
+                if duplicate_ids and log:
+                    log(
+                        f"⚠️ Same-title Collection submission detected for "
+                        f"'{current_title}': existing ID(s) "
+                        f"{', '.join(duplicate_ids)}; downloaded ID {hack_id}. "
+                        "No version relationship was inferred.",
+                        "Warning",
+                    )
 
                 # Overlay refreshed provider/download facts onto the existing Collection
                 # record so imported history, personal state, and unknown local fields survive.
@@ -778,62 +788,6 @@ def run_single_download_pipeline(selected_hacks, log=None, progress_callback=Non
     if log:
 
         log(f"✅ Download complete! {successful_downloads} processed, {skipped_hacks} skipped, {errored_hacks} errored, out of {total_hacks} hacks.", "Information")
-
-
-def detect_and_handle_duplicates(processed, current_hack_id, current_title, log=None):
-    """
-    Detect duplicate hack titles and mark older versions as obsolete.
-    Returns True if current hack should be processed, False if it should be skipped as obsolete.
-    """
-    duplicate_ids = []
-
-    # Find all hacks with the same title
-    for hack_id, hack_data in processed.items():
-        if (isinstance(hack_data, dict)
-                and hack_data.get("title") == current_title
-                and hack_id != current_hack_id):
-            duplicate_ids.append(hack_id)
-
-    if not duplicate_ids:
-        return True  # No duplicates, proceed normally
-
-    if log:
-        log(f"🔍 Found {len(duplicate_ids) + 1} versions of '{current_title}' (IDs: {', '.join(duplicate_ids + [current_hack_id])})", "Information")
-
-    # For now, use a simple heuristic: higher ID numbers are usually newer
-    # In the future, we could use date fields or API metadata to determine this more accurately
-    all_ids = duplicate_ids + [current_hack_id]
-    all_ids_int = []
-
-    try:
-        all_ids_int = [int(hack_id) for hack_id in all_ids]
-        all_ids_int.sort()
-        newest_id = str(max(all_ids_int))
-
-        # Mark all others as obsolete
-        for hack_id in all_ids:
-            if hack_id in processed and isinstance(processed[hack_id], dict):
-                if hack_id == newest_id:
-                    # This is the newest version - ensure it's not obsolete
-                    processed[hack_id]["obsolete"] = False
-                    if log and hack_id == current_hack_id:
-                        log(f"✅ '{current_title}' (ID {hack_id}) marked as current version", "Information")
-                else:
-                    # This is an older version - mark as obsolete
-                    old_obsolete = processed[hack_id].get("obsolete", False)
-                    processed[hack_id]["obsolete"] = True
-                    if not old_obsolete and log:
-
-                        # Only log if newly marked obsolete
-                        log(f"📦 '{current_title}' (ID {hack_id}) marked as obsolete (superseded by ID {newest_id})", "Information")
-
-        return current_hack_id == newest_id
-
-    except ValueError:
-        # If IDs aren't numeric, fall back to simple logic
-        if log:
-            log(f"⚠️ Cannot determine newest version of '{current_title}' - using current as active", "Warning")
-        return True
 
 
 def main():

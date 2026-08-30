@@ -6,6 +6,12 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Identity-safe duplicate-title downloads
+
+- Legacy Download no longer treats a numerically higher SMWC submission ID as proof that an equal-title submission is newer or that lower IDs are obsolete.
+- Obsolete state now comes only from explicit provider metadata; same-title Collection entries produce an advisory warning without mutating either submission's identity/status.
+- Existing downloaded entries refresh their provider obsolete flag without relocating ROMs or inferring replacement relationships.
+
 ### Same-ID current SMWC refresh
 
 - **Find Update...** now separates refreshing the current SMWC submission from explicit different-ID replacement.

@@ -619,6 +619,11 @@ small resolved sets, and the paginated `/hacks?limit=500` endpoint is used for b
 rich bulk catalogue work. This avoids both unnecessary full-catalogue transfers for sparse
 lookups and hundreds of individual detail requests for migrations/bulk refreshes.
 
+SMWC submission IDs are catalogue identities, not version numbers. Equal titles and numeric
+ID ordering never establish that one submission supersedes another; legacy Download treats
+provider-supplied obsolete state as authoritative and reports same-title submissions only as
+advisory duplicates unless the user enters an explicit replacement/update workflow.
+
 See [SAVE_DATA_SYNC.md](SAVE_DATA_SYNC.md) for the complete workflow, safety
 rules, confidence model, privacy contract, and known limitations.
 <!-- save-data-sync-guide:end -->
