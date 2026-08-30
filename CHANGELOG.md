@@ -7,6 +7,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Unified local/manual Collection metadata
+
+- Save Data Sync and ROM-folder local/manual creation now expose explicit title, type, difficulty, and exit-count fields instead of silently treating unknown local hacks as Standard / No Difficulty.
+- Local hack types are normalized to the Collection's existing internal values while the UI accepts friendly names and comma-separated multi-type input. Unknown remains genuinely unknown.
+- ROM-folder review may prefill one unambiguous difficulty hint from the scan, but the user-owned local metadata is frozen only through the explicit **Create a separate local/manual Collection entry** decision.
+- Attaching ROM/save evidence to an existing `usr_*` record does not rewrite that record's metadata. Save Sync's existing local-entry editor can now update type and difficulty as well as title/exits.
+- Save Sync automatic filename matching excludes every opaque `usr_*` record, not only legacy `local_save_entry` records, so cross-source local identity remains explicit.
+
 ### Cross-source local Collection reconciliation
 
 - ROM-folder review now surfaces plausible existing `usr_*` Collection records separately from KaizOFF results and requires an explicit **Attach to selected existing local Collection entry** choice before adding ROM assets to one.

@@ -200,6 +200,9 @@ class CollectionPlanApplyTest(unittest.TestCase):
                     target_key="usr_2222222222222222",
                     title="Super Bui Bui World",
                     authors=("Example",),
+                    difficulty="Master",
+                    hack_types=("kaizo",),
+                    exits=41,
                     source_candidate_ids=("candidate-local",),
                 ),
             ),
@@ -257,6 +260,10 @@ class CollectionPlanApplyTest(unittest.TestCase):
         persisted = json.loads(processed.read_text(encoding="utf-8"))
         record = persisted["usr_2222222222222222"]
         self.assertEqual(record["title"], "Super Bui Bui World")
+        self.assertEqual(record["current_difficulty"], "Master")
+        self.assertEqual(record["hack_type"], "kaizo")
+        self.assertEqual(record["hack_types"], ["kaizo"])
+        self.assertEqual(record["exits"], 41)
         self.assertTrue(record["completed"])
         self.assertEqual(record["file_path"], "E:/ROMs/Super Bui Bui World.sfc")
         self.assertTrue(record["files"][0]["primary"])

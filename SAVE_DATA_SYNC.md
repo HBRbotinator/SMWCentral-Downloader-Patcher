@@ -180,7 +180,7 @@ record or create a separate local entry.
 2. Choose **Local Entry...**.
 3. If plausible existing `usr_*` records are shown, explicitly choose one to
    attach to or choose **Create a separate local Collection entry**.
-4. For a new entry, enter a collection title and total exit count.
+4. For a new entry, enter the Collection title, type(s), difficulty, and total exit count. Type accepts friendly single values or comma-separated multi-type values.
 5. Confirm the prepared resolution and press **Apply Selected**.
 
 A newly created Save Sync entry is marked internally with `local_save_entry: true`
@@ -188,15 +188,17 @@ and receives the same opaque local Collection identity used by other ingestion
 sources: `usr_<16 lowercase hex characters>`. The ID is randomly allocated and
 is not derived from the save filename, entered title, ROM hash, or absolute path.
 
-A total of `0` means unknown and keeps the progress uncertain. Existing-local
-suggestions are review-only; normalized title similarity never merges records by
-itself. If an existing local record is explicitly selected, Save Sync preserves its
-identity/metadata and remembers the save association for later scans.
+A total of `0` means unknown and keeps the progress uncertain. Type and difficulty
+default to **Unknown**; Save Sync no longer labels an unclassified local hack as
+Standard / No Difficulty. Existing-local suggestions are review-only; normalized
+title similarity never merges records by itself. If an existing local record is
+explicitly selected, Save Sync preserves its identity/metadata and remembers the
+save association for later scans.
 
 On later scans the explicit saved association is used. The Completion tab can:
 
-- edit the local title or exit total while preserving the stable ID and other
-  collection metadata;
+- edit the local title, type(s), difficulty, or exit total while preserving the
+  stable ID and completion/personal metadata;
 - forget only the saved association;
 - remove the local collection record and every association targeting it.
 

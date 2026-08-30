@@ -552,9 +552,40 @@ def _local_seed_operation(
     group: ReconciliationGroup,
     target_key: str,
     target_exists: bool,
+    decision: ReviewDecision | None = None,
 ) -> LocalRecordSeedOperation | None:
     if target_exists or not is_local_collection_key(target_key):
         return None
+
+    if decision is not None and decision.local_metadata is not None:
+        metadata = decision.local_metadata
+        authors = tuple(
+            dict.fromkeys(
+                author.strip()
+                for member in group.members
+                for author in (
+                    *member.candidate.author_hints,
+                    *(
+                        value
+                        for shared in member.candidate.shared_metadata
+                        if shared.source is IngestionSource.MANUAL
+                        for value in shared.authors
+                    ),
+                )
+                if author.strip()
+            )
+        )
+        return LocalRecordSeedOperation(
+            target_key=target_key,
+            title=metadata.title,
+            authors=authors,
+            difficulty=metadata.difficulty,
+            hack_types=metadata.hack_types,
+            exits=metadata.exits,
+            source_candidate_ids=tuple(
+                sorted(member.candidate_id for member in group.members)
+            ),
+        )
 
     manual_metadata = tuple(
         (member.candidate_id, metadata)
@@ -1036,7 +1067,7 @@ def finalize_collection_change_plan(
         if catalogue is not None:
             catalogue_updates.append(catalogue)
 
-        local_seed = _local_seed_operation(group, target_key, target_exists)
+        local_seed = _local_seed_operation(group, target_key, target_exists, decision)
         if local_seed is not None:
             local_seeds.append(local_seed)
 

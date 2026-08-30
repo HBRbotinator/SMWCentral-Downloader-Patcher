@@ -10,6 +10,7 @@ from collection_ingestion import CollectionCandidate, IngestionSource, RomFileEv
 from collection_ingestion_diagnostics import build_diagnostic_report, write_diagnostic_report
 from collection_ingestion_session import CandidateReviewEntry, CollectionIngestionSession
 from collection_reconciliation import (
+    LocalRecordMetadataDecision,
     CandidateResolution,
     MatchBasis,
     ReconciliationGroup,
@@ -101,6 +102,28 @@ class CollectionIngestionDiagnosticsTest(unittest.TestCase):
         self.assertEqual(payload["report"], "smwc_collection_ingestion")
         self.assertEqual(payload["summary"]["group_count"], 1)
         self.assertFalse(payload["privacy"]["raw_rom_bytes_included"])
+
+    def test_report_includes_explicit_local_metadata_without_paths(self):
+        group = self._session().groups[0]
+        decision = ReviewDecision(
+            group_id=group.group_id,
+            action=ReviewAction.IMPORT_LOCAL,
+            local_metadata=LocalRecordMetadataDecision(
+                title="Local Hack",
+                difficulty="Expert",
+                hack_types=("kaizo",),
+                exits=12,
+            ),
+        )
+        report = build_diagnostic_report(
+            self._session(), {group.group_id: decision}
+        )
+        metadata = report["groups"][0]["decision"]["local_metadata"]
+        self.assertEqual("Local Hack", metadata["title"])
+        self.assertEqual("Expert", metadata["difficulty"])
+        self.assertEqual(["kaizo"], metadata["type"])
+        self.assertEqual(12, metadata["exits"])
+
 
 
 if __name__ == "__main__":

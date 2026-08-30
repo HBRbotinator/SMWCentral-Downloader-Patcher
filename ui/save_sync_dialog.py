@@ -22,6 +22,12 @@ from tkinter import ttk, filedialog, messagebox
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import save_sync
+from local_collection_metadata import (
+    LOCAL_DIFFICULTY_CHOICES,
+    LOCAL_HACK_TYPE_CHOICES,
+    format_local_hack_types,
+    validate_local_collection_metadata,
+)
 
 CHECKED = "☑"
 UNCHECKED = "☐"
@@ -426,6 +432,8 @@ class LocalSaveEntryDialog:
         self.on_selected = on_selected
         self.win = None
         self.title_var = None
+        self.type_var = None
+        self.difficulty_var = None
         self.exits_var = None
         self.mode_var = None
         self.local_tree = None
@@ -438,7 +446,7 @@ class LocalSaveEntryDialog:
     def show(self):
         self.win = tk.Toplevel(self.parent)
         self.win.title(f"Local Collection Entry - {self.candidate.save_name}")
-        self.win.geometry("680x440" if self.local_matches else "560x300")
+        self.win.geometry("700x520" if self.local_matches else "580x380")
         self.win.transient(self.parent)
         self.win.grab_set()
 
@@ -526,18 +534,40 @@ class LocalSaveEntryDialog:
         title_entry = ttk.Entry(form, textvariable=self.title_var)
         title_entry.grid(row=0, column=1, sticky="ew", pady=4)
 
-        ttk.Label(form, text="Total exits:").grid(
+        ttk.Label(form, text="Type(s):").grid(
             row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.type_var = tk.StringVar(value="Unknown")
+        ttk.Combobox(
+            form,
+            textvariable=self.type_var,
+            values=LOCAL_HACK_TYPE_CHOICES,
+        ).grid(row=1, column=1, sticky="ew", pady=4)
+
+        ttk.Label(form, text="Difficulty:").grid(
+            row=2, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.difficulty_var = tk.StringVar(value="Unknown")
+        ttk.Combobox(
+            form,
+            textvariable=self.difficulty_var,
+            values=LOCAL_DIFFICULTY_CHOICES,
+            state="readonly",
+        ).grid(row=2, column=1, sticky="ew", pady=4)
+
+        ttk.Label(form, text="Total exits:").grid(
+            row=3, column=0, sticky="w", padx=(0, 8), pady=4
         )
         self.exits_var = tk.StringVar(value="0")
         exits_entry = ttk.Entry(form, textvariable=self.exits_var, width=10)
-        exits_entry.grid(row=1, column=1, sticky="w", pady=4)
+        exits_entry.grid(row=3, column=1, sticky="w", pady=4)
 
         ttk.Label(
             container,
             text=(
                 "Creation fields are used only when creating a separate record. "
-                "Use 0 exits when the total is unknown."
+                "Type accepts one or more comma-separated values. Use Unknown when "
+                "type/difficulty are not known and 0 exits when the total is unknown."
             ),
             foreground="gray",
             wraplength=640,
@@ -598,6 +628,8 @@ class LocalSaveEntryDialog:
                     self.title_var.get(),
                     self.exits_var.get(),
                     self.existing_records.keys(),
+                    difficulty=self.difficulty_var.get(),
+                    hack_types=self.type_var.get(),
                 )
             except ValueError as exc:
                 messagebox.showerror(
@@ -627,12 +659,14 @@ class EditLocalSaveEntryDialog:
         self.on_saved = on_saved
         self.win = None
         self.title_var = None
+        self.type_var = None
+        self.difficulty_var = None
         self.exits_var = None
 
     def show(self):
         self.win = tk.Toplevel(self.parent)
         self.win.title(f"Edit Local Entry - {self.candidate.save_name}")
-        self.win.geometry("520x220")
+        self.win.geometry("560x330")
         self.win.transient(self.parent)
         self.win.grab_set()
 
@@ -655,12 +689,40 @@ class EditLocalSaveEntryDialog:
         title_entry = ttk.Entry(form, textvariable=self.title_var)
         title_entry.grid(row=0, column=1, sticky="ew", pady=4)
 
-        ttk.Label(form, text="Total exits:").grid(
+        ttk.Label(form, text="Type(s):").grid(
             row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.type_var = tk.StringVar(
+            value=format_local_hack_types(
+                self.entry.get("hack_types")
+                or ([self.entry.get("hack_type")] if self.entry.get("hack_type") else ())
+            )
+        )
+        ttk.Combobox(
+            form,
+            textvariable=self.type_var,
+            values=LOCAL_HACK_TYPE_CHOICES,
+        ).grid(row=1, column=1, sticky="ew", pady=4)
+
+        ttk.Label(form, text="Difficulty:").grid(
+            row=2, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        self.difficulty_var = tk.StringVar(
+            value=self.entry.get("current_difficulty", "Unknown") or "Unknown"
+        )
+        ttk.Combobox(
+            form,
+            textvariable=self.difficulty_var,
+            values=LOCAL_DIFFICULTY_CHOICES,
+            state="readonly",
+        ).grid(row=2, column=1, sticky="ew", pady=4)
+
+        ttk.Label(form, text="Total exits:").grid(
+            row=3, column=0, sticky="w", padx=(0, 8), pady=4
         )
         self.exits_var = tk.StringVar(value=str(self.entry.get("exits", 0)))
         ttk.Entry(form, textvariable=self.exits_var, width=10).grid(
-            row=1, column=1, sticky="w", pady=4
+            row=3, column=1, sticky="w", pady=4
         )
 
         buttons = ttk.Frame(container)
@@ -689,15 +751,18 @@ class EditLocalSaveEntryDialog:
 
     def _confirm(self):
         try:
-            title, exits = save_sync.validate_local_entry_fields(
-                self.title_var.get(), self.exits_var.get()
+            metadata = validate_local_collection_metadata(
+                self.title_var.get(),
+                self.difficulty_var.get(),
+                self.type_var.get(),
+                self.exits_var.get(),
             )
         except ValueError as exc:
             messagebox.showerror("Save Data Sync", str(exc), parent=self.win)
             return
 
         if self.on_saved:
-            self.on_saved(title, exits)
+            self.on_saved(metadata)
         self.win.destroy()
 
 
@@ -1001,14 +1066,19 @@ class SaveSyncDialog:
             self.win,
             candidate,
             entry,
-            on_saved=lambda title, exits: self._apply_local_entry_edit(
-                iid, candidate, title, exits
+            on_saved=lambda metadata: self._apply_local_entry_edit(
+                iid, candidate, metadata
             ),
         ).show()
 
-    def _apply_local_entry_edit(self, iid, candidate, title, exits):
+    def _apply_local_entry_edit(self, iid, candidate, metadata):
         if not save_sync.update_local_entry(
-            self.data_manager, candidate.hack_id, title, exits
+            self.data_manager,
+            candidate.hack_id,
+            metadata.title,
+            metadata.exits,
+            difficulty=metadata.difficulty,
+            hack_types=metadata.hack_types,
         ):
             messagebox.showerror(
                 "Save Data Sync",
@@ -1017,11 +1087,11 @@ class SaveSyncDialog:
             )
             return
 
-        candidate.title = title
-        candidate.total_exits = exits
+        candidate.title = metadata.title
+        candidate.total_exits = metadata.exits
         candidate.status = save_sync.classify(
             candidate.collected_exits,
-            exits,
+            metadata.exits,
             candidate.already_completed,
             self.mark_all,
         )

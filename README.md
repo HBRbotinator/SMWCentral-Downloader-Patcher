@@ -82,7 +82,7 @@ The current build contract publishes a native tarball rather than an AppImage. E
 
 ### Collection import review and diagnostics
 
-Collection ROM-folder/GiganticBucket review keeps the frequently used **Save**, **Save & Next**, and **Reset** controls fixed below the selected-item detail pane. A single retained ROM is shown as Primary automatically; long catalogue result fields remain horizontally scrollable instead of disappearing outside the review pane. When an unresolved ROM title resembles an existing opaque `usr_*` Collection record, that record is shown in a separate local-match list. Attaching the ROM to it is always an explicit review choice; title similarity never auto-merges local identities.
+Collection ROM-folder/GiganticBucket review keeps the frequently used **Save**, **Save & Next**, and **Reset** controls fixed below the selected-item detail pane. A single retained ROM is shown as Primary automatically; long catalogue result fields remain horizontally scrollable instead of disappearing outside the review pane. When an unresolved ROM title resembles an existing opaque `usr_*` Collection record, that record is shown in a separate local-match list. Attaching the ROM to it is always an explicit review choice; title similarity never auto-merges local identities. When creating a separate local/manual record, the review also captures user-owned title, type(s), difficulty, and exit count; unknown type/difficulty remain Unknown rather than being silently classified as Standard.
 
 **Export Diagnostics...** writes a troubleshooting JSON snapshot of the frozen review session, matcher classifications/suggestions, ROM filenames and SHA-256 values, saved decisions, combined-ROM choices, and any finalization error. It deliberately excludes absolute filesystem paths, raw ROM bytes, and imported history record IDs.
 
@@ -606,7 +606,9 @@ evidence, match saves to collection entries, and prepare completion updates.
 
 Manual SMWCentral selection, remembered filename associations, review-only
 startup or periodic scans, privacy-safe diagnostics, and local entries for
-non-SMWCentral hacks are supported. Save Sync uses the cached KaizOFF catalogue
+non-SMWCentral hacks are supported. Local-entry creation exposes explicit user-owned
+title, type(s), difficulty, and exit count; unknown metadata stays Unknown rather
+than defaulting to Standard. Save Sync uses the cached KaizOFF catalogue
 as its primary SMWC data source and the calibrated Collection matcher for
 checked orphan saves: only safe Exact/Strong results resolve automatically,
 while abbreviation/partial/ambiguous matches are shown for explicit review.

@@ -12,7 +12,7 @@ from collection_reconciliation import ReviewDecision
 from local_collection_matching import find_local_collection_matches
 
 
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 
 
 def diagnostic_filename(now: datetime | None = None) -> str:
@@ -54,6 +54,13 @@ def _decision_summary(decision: ReviewDecision | None) -> dict | None:
             for item in decision.remembered_associations
         ],
     }
+    if decision.local_metadata is not None:
+        row["local_metadata"] = {
+            "title": decision.local_metadata.title,
+            "difficulty": decision.local_metadata.difficulty,
+            "type": list(decision.local_metadata.hack_types),
+            "exits": decision.local_metadata.exits,
+        }
     if decision.rom_selection is not None:
         row["rom_selection"] = {
             "kept_filenames": [_basename(path) for path in decision.rom_selection.kept_paths],

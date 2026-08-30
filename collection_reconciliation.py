@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Iterable, Mapping, Sequence
 
 from collection_ingestion import CollectionCandidate, IngestionSource, UserPlaythroughEvidence
+from local_collection_metadata import validate_local_collection_metadata
 
 
 _LOCAL_ID_RE = re.compile(r"^usr_[0-9a-f]{16}$")
@@ -377,6 +378,25 @@ class RememberedAssociationDecision:
 
 
 @dataclass(frozen=True)
+class LocalRecordMetadataDecision:
+    """Explicit user-owned metadata for a newly created local Collection record."""
+
+    title: str
+    difficulty: str = "Unknown"
+    hack_types: tuple[str, ...] = ()
+    exits: int = 0
+
+    def __post_init__(self) -> None:
+        metadata = validate_local_collection_metadata(
+            self.title, self.difficulty, self.hack_types, self.exits
+        )
+        object.__setattr__(self, "title", metadata.title)
+        object.__setattr__(self, "difficulty", metadata.difficulty)
+        object.__setattr__(self, "hack_types", metadata.hack_types)
+        object.__setattr__(self, "exits", metadata.exits)
+
+
+@dataclass(frozen=True)
 class ReviewDecision:
     """All explicit choices needed to resolve one review group."""
 
@@ -387,6 +407,7 @@ class ReviewDecision:
     user_field_resolutions: tuple[UserFieldResolution, ...] = ()
     first_clear: FirstClearDecision | None = None
     remembered_associations: tuple[RememberedAssociationDecision, ...] = ()
+    local_metadata: LocalRecordMetadataDecision | None = None
 
 
 def _unique_rom_hashes(member: CandidateResolution) -> tuple[str, ...]:
@@ -626,6 +647,13 @@ def validate_review_decision(
         raise ReconciliationError("Review decision belongs to another group.")
     if decision.target_key:
         validate_collection_key(decision.target_key)
+    if (
+        decision.local_metadata is not None
+        and decision.action is not ReviewAction.IMPORT_LOCAL
+    ):
+        raise ReconciliationError(
+            "Local metadata is valid only when creating a local Collection entry."
+        )
 
     if decision.action in {ReviewAction.SKIP, ReviewAction.IGNORE}:
         if decision.action is ReviewAction.IGNORE and not group.rom_files:
@@ -740,6 +768,7 @@ __all__ = [
     "ReconciliationGroup",
     "RememberedAssociationDecision",
     "ReviewAction",
+    "LocalRecordMetadataDecision",
     "ReviewDecision",
     "ReviewIssue",
     "ReviewState",

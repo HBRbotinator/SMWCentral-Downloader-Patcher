@@ -1738,6 +1738,39 @@ class LocalSaveEntryManagementTest(unittest.TestCase):
         self.assertEqual(entry["personal_rating"], 5)
         self.assertEqual(manager.save_calls, 1)
 
+    def test_edit_can_update_local_type_and_difficulty_without_touching_user_state(self):
+        entry = {
+            "title": "Local Hack",
+            "exits": 10,
+            "current_difficulty": "Unknown",
+            "hack_type": "unknown",
+            "hack_types": [],
+            "completed": True,
+            "completed_date": "2026-01-02",
+            "notes": "keep me",
+            "personal_rating": 5,
+            "local_save_entry": True,
+        }
+        manager = self.DataManager({"usr_aaaaaaaaaaaaaaaa": entry})
+
+        changed = save_sync.update_local_entry(
+            manager,
+            "usr_aaaaaaaaaaaaaaaa",
+            "Local Hack",
+            41,
+            difficulty="Master",
+            hack_types="Kaizo, Tool-Assisted",
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual("Master", entry["current_difficulty"])
+        self.assertEqual("kaizo", entry["hack_type"])
+        self.assertEqual(["kaizo", "tool_assisted"], entry["hack_types"])
+        self.assertEqual(41, entry["exits"])
+        self.assertTrue(entry["completed"])
+        self.assertEqual("keep me", entry["notes"])
+        self.assertEqual(5, entry["personal_rating"])
+
     def test_normal_collection_entry_cannot_be_edited_or_removed(self):
         entry = {
             "title": "SMWC Hack",

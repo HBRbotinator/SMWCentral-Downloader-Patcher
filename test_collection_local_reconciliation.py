@@ -172,6 +172,11 @@ class SaveSyncLocalAttachmentTest(unittest.TestCase):
         self.assertIn("Attach to selected existing local Collection entry", review_source)
         self.assertIn("Attach this save to the selected existing local entry", save_source)
         self.assertIn("Create a separate local Collection entry", save_source)
+        self.assertIn("LOCAL_DIFFICULTY_CHOICES", review_source)
+        self.assertIn("LOCAL_HACK_TYPE_CHOICES", review_source)
+        self.assertIn("New local/manual record details", review_source)
+        self.assertIn("LOCAL_DIFFICULTY_CHOICES", save_source)
+        self.assertIn("LOCAL_HACK_TYPE_CHOICES", save_source)
 
 
 if __name__ == "__main__":

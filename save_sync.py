@@ -41,6 +41,7 @@ from save_analysis import (
     analyze_save,
 )
 from collection_reconciliation import generate_local_collection_id, is_local_collection_key
+from local_collection_metadata import validate_local_collection_metadata
 from local_collection_matching import (
     find_local_collection_matches,
     snapshot_local_collection_entries,
@@ -361,7 +362,7 @@ def build_hack_index(hacks):
         # filename association. Treating their title as an automatic match would
         # make "Forget Saved Match" ineffective and could connect unrelated
         # saves that happen to normalize to the same local title.
-        if hack.get("local_save_entry"):
+        if hack.get("local_save_entry") or is_local_collection_key(str(hack.get("id", ""))):
             continue
 
         keys = set()
@@ -896,42 +897,41 @@ def local_entry_id(save_name=None, title=None):
     return generate_local_collection_id()
 
 
-def validate_local_entry_fields(title, total_exits):
-    """Return a cleaned local title and validated exit total."""
+def validate_local_entry_fields(
+    title, total_exits, difficulty="Unknown", hack_types=()
+):
+    """Return normalized user-owned metadata for a local Collection entry."""
 
-    clean_title = str(title or "").strip()
-    if not clean_title:
-        raise ValueError("A local hack title is required.")
-    try:
-        exits = int(total_exits)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Total exits must be a whole number.") from exc
-    if exits < 0 or exits > 999:
-        raise ValueError("Total exits must be between 0 and 999.")
-    return clean_title, exits
+    metadata = validate_local_collection_metadata(
+        title, difficulty, hack_types, total_exits
+    )
+    return metadata.title, metadata.exits
 
 
-def build_local_entry(save_name, title, total_exits):
-    """Build a collection entry for a hack that is not listed on SMWCentral."""
+def build_local_entry(
+    save_name, title, total_exits, difficulty="Unknown", hack_types=()
+):
+    """Build a user-owned Collection entry for a hack not linked to SMWCentral."""
 
     from utils import get_sorted_folder_name
 
-    clean_title, exits = validate_local_entry_fields(title, total_exits)
-
-    hack_id = local_entry_id(save_name, clean_title)
+    metadata = validate_local_collection_metadata(
+        title, difficulty, hack_types, total_exits
+    )
+    hack_id = local_entry_id(save_name, metadata.title)
     return hack_id, {
-        "title": clean_title,
+        "title": metadata.title,
         "difficulty_id": "",
-        "current_difficulty": "No Difficulty",
-        "folder_name": get_sorted_folder_name("No Difficulty"),
-        "hack_type": "standard",
-        "hack_types": ["standard"],
+        "current_difficulty": metadata.difficulty,
+        "folder_name": get_sorted_folder_name(metadata.difficulty),
+        "hack_type": metadata.hack_types[0] if metadata.hack_types else "unknown",
+        "hack_types": list(metadata.hack_types),
         "hall_of_fame": False,
         "sa1_compatibility": False,
         "collaboration": False,
         "demo": False,
         "authors": [],
-        "exits": exits,
+        "exits": metadata.exits,
         "time": 0,
         "date": "",
         "obsolete": False,
@@ -941,25 +941,52 @@ def build_local_entry(save_name, title, total_exits):
     }
 
 
-def update_local_entry(data_manager, hack_id, title, total_exits):
-    """Update local metadata while preserving identity and collection state."""
+def update_local_entry(
+    data_manager, hack_id, title, total_exits, difficulty=None, hack_types=None
+):
+    """Update local metadata while preserving identity and Collection state."""
 
     hack_id = str(hack_id or "")
     entry = data_manager.data.get(hack_id) if data_manager is not None else None
     if not isinstance(entry, dict) or not entry.get("local_save_entry"):
         return False
 
-    clean_title, exits = validate_local_entry_fields(title, total_exits)
-    old_title = entry.get("title", "")
-    old_exits = entry.get("exits", 0)
-    entry["title"] = clean_title
-    entry["exits"] = exits
+    requested_difficulty = (
+        entry.get("current_difficulty", "Unknown")
+        if difficulty is None else difficulty
+    )
+    requested_types = (
+        entry.get("hack_types", ())
+        if hack_types is None else hack_types
+    )
+    metadata = validate_local_collection_metadata(
+        title, requested_difficulty, requested_types, total_exits
+    )
+    original = {
+        "title": entry.get("title", ""),
+        "exits": entry.get("exits", 0),
+        "current_difficulty": entry.get("current_difficulty", "Unknown"),
+        "hack_type": entry.get("hack_type", "unknown"),
+        "hack_types": list(entry.get("hack_types", []) or []),
+        "folder_name": entry.get("folder_name"),
+    }
+    from utils import get_sorted_folder_name
+
+    entry["title"] = metadata.title
+    entry["exits"] = metadata.exits
+    entry["current_difficulty"] = metadata.difficulty
+    entry["folder_name"] = get_sorted_folder_name(metadata.difficulty)
+    entry["hack_types"] = list(metadata.hack_types)
+    entry["hack_type"] = metadata.hack_types[0] if metadata.hack_types else "unknown"
     data_manager.unsaved_changes = True
     if data_manager.force_save():
         return True
 
-    entry["title"] = old_title
-    entry["exits"] = old_exits
+    entry.update({key: value for key, value in original.items() if key != "folder_name"})
+    if original["folder_name"] is None:
+        entry.pop("folder_name", None)
+    else:
+        entry["folder_name"] = original["folder_name"]
     data_manager.unsaved_changes = True
     data_manager.force_save()
     return False
@@ -1026,10 +1053,14 @@ def resolution_for_existing_local_entry(hack_id, records):
     }
 
 
-def resolution_for_local_entry(save_name, title, total_exits, existing_ids):
-    """Build an explicit resolution for a non-SMWC local collection entry."""
+def resolution_for_local_entry(
+    save_name, title, total_exits, existing_ids, difficulty="Unknown", hack_types=()
+):
+    """Build an explicit resolution for a non-SMWC local Collection entry."""
 
-    hack_id, entry = build_local_entry(save_name, title, total_exits)
+    hack_id, entry = build_local_entry(
+        save_name, title, total_exits, difficulty, hack_types
+    )
     existing = {str(existing_id) for existing_id in existing_ids}
     if hack_id in existing:
         return {

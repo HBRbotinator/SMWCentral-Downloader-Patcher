@@ -11,6 +11,12 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from collection_ingestion import IngestionSource
+from local_collection_metadata import (
+    LOCAL_DIFFICULTY_CHOICES,
+    LOCAL_HACK_TYPE_CHOICES,
+    format_local_hack_types,
+    validate_local_collection_metadata,
+)
 from collection_ingestion_diagnostics import diagnostic_filename, write_diagnostic_report
 from ui.window_positioning import center_window_on_parent
 from collection_ingestion_review_model import (
@@ -20,6 +26,7 @@ from collection_ingestion_review_model import (
 from collection_reconciliation import (
     FirstClearDecision,
     IgnoredRomDecision,
+    LocalRecordMetadataDecision,
     RememberedAssociationDecision,
     ReviewAction,
     ReviewDecision,
@@ -76,6 +83,10 @@ class CollectionIngestionReviewDialog:
         self._rom_primary_var = None
         self._rom_initial = {}
         self._user_field_vars = {}
+        self._local_title_var = None
+        self._local_type_var = None
+        self._local_difficulty_var = None
+        self._local_exits_var = None
         self._first_clear_var = None
         self._first_clear_values = {}
         self._remember_vars = []
@@ -393,6 +404,10 @@ class CollectionIngestionReviewDialog:
         self._rom_primary_var = None
         self._rom_initial = {}
         self._user_field_vars = {}
+        self._local_title_var = None
+        self._local_type_var = None
+        self._local_difficulty_var = None
+        self._local_exits_var = None
         self._first_clear_var = None
         self._first_clear_values = {}
         self._remember_vars = []
@@ -428,6 +443,7 @@ class CollectionIngestionReviewDialog:
 
         self._action_var = tk.StringVar(value=self._default_action(group, previous))
         self._render_identity(group, context, previous)
+        self._render_local_metadata(group, context, previous)
         self._render_roms(group, previous)
         self._render_user_conflicts(group, previous)
         self._render_first_clear(group, previous)
@@ -646,6 +662,96 @@ class CollectionIngestionReviewDialog:
                     variable=self._action_var,
                     value=ReviewAction.IGNORE.value,
                 ).pack(anchor="w")
+
+    def _render_local_metadata(self, group, context, previous):
+        states = set(group.review_states)
+        if not states.intersection(_IDENTITY_REVIEW_STATES):
+            return
+
+        previous_metadata = (
+            previous.local_metadata
+            if previous is not None and previous.action is ReviewAction.IMPORT_LOCAL
+            else None
+        )
+        title = previous_metadata.title if previous_metadata else context.row.title
+        difficulty = previous_metadata.difficulty if previous_metadata else "Unknown"
+        if previous_metadata is None:
+            hints = [
+                str(rom.difficulty_hint or "").strip()
+                for rom in group.rom_files
+                if str(rom.difficulty_hint or "").strip()
+            ]
+            if hints and len(set(hints)) == 1:
+                difficulty = hints[0]
+        type_text = (
+            format_local_hack_types(previous_metadata.hack_types)
+            if previous_metadata
+            else "Unknown"
+        )
+        exits = previous_metadata.exits if previous_metadata else 0
+
+        frame = ttk.LabelFrame(
+            self.details, text="New local/manual record details", padding=8
+        )
+        frame.pack(fill="x", pady=(0, 8))
+        ttk.Label(
+            frame,
+            text=(
+                "Used only when 'Create a separate local/manual Collection entry' "
+                "is selected. Existing local attachments keep their current metadata."
+            ),
+            foreground="gray",
+            wraplength=520,
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Label(frame, text="Title:").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=3)
+        self._local_title_var = tk.StringVar(value=title)
+        ttk.Entry(frame, textvariable=self._local_title_var).grid(
+            row=1, column=1, sticky="ew", pady=3
+        )
+
+        ttk.Label(frame, text="Type(s):").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=3)
+        self._local_type_var = tk.StringVar(value=type_text)
+        ttk.Combobox(
+            frame, textvariable=self._local_type_var, values=LOCAL_HACK_TYPE_CHOICES
+        ).grid(row=2, column=1, sticky="ew", pady=3)
+
+        ttk.Label(frame, text="Difficulty:").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=3)
+        self._local_difficulty_var = tk.StringVar(value=difficulty)
+        ttk.Combobox(
+            frame,
+            textvariable=self._local_difficulty_var,
+            values=LOCAL_DIFFICULTY_CHOICES,
+            state="readonly",
+        ).grid(row=3, column=1, sticky="ew", pady=3)
+
+        ttk.Label(frame, text="Total exits:").grid(row=4, column=0, sticky="w", padx=(0, 8), pady=3)
+        self._local_exits_var = tk.StringVar(value=str(exits))
+        ttk.Entry(frame, textvariable=self._local_exits_var, width=10).grid(
+            row=4, column=1, sticky="w", pady=3
+        )
+
+    def _build_local_metadata(self):
+        if not self._local_title_var:
+            raise CollectionIngestionReviewError(
+                "Local record details are unavailable for this review item."
+            )
+        try:
+            metadata = validate_local_collection_metadata(
+                self._local_title_var.get(),
+                self._local_difficulty_var.get(),
+                self._local_type_var.get(),
+                self._local_exits_var.get(),
+            )
+        except ValueError as error:
+            raise CollectionIngestionReviewError(str(error)) from error
+        return LocalRecordMetadataDecision(
+            title=metadata.title,
+            difficulty=metadata.difficulty,
+            hack_types=metadata.hack_types,
+            exits=metadata.exits,
+        )
 
     def _populate_local_suggestions(self, suggestions):
         self._local_targets = {}
@@ -1032,6 +1138,12 @@ class CollectionIngestionReviewDialog:
                 source_record_id=record_id,
             )
 
+        local_metadata = (
+            self._build_local_metadata()
+            if action is ReviewAction.IMPORT_LOCAL
+            else None
+        )
+
         remembered = ()
         if action in {ReviewAction.USE_TARGET, ReviewAction.ATTACH_LOCAL}:
             remembered = tuple(
@@ -1048,6 +1160,7 @@ class CollectionIngestionReviewDialog:
             user_field_resolutions=user_fields,
             first_clear=first_clear,
             remembered_associations=remembered,
+            local_metadata=local_metadata,
         )
 
     def _save_current(self, *, advance=False):
