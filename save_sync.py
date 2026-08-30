@@ -41,6 +41,7 @@ from save_analysis import (
     analyze_save,
 )
 from collection_reconciliation import generate_local_collection_id
+from collection_rating import parse_smwc_rating
 
 # --- SMW SRAM layout ---------------------------------------------------------
 
@@ -873,6 +874,7 @@ def _smwc_entry_fields(hack):
         "exits": int(raw.get("length", hack.get("length", 0)) or 0),
         "time": time_ts,
         "date": date_str,
+        "rating": parse_smwc_rating(hack.get("rating")) or 0,
         "obsolete": bool(raw.get("obsolete", False)),
         "file_path": "",
         "additional_paths": [],

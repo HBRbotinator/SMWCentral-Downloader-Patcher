@@ -309,6 +309,8 @@ class CollectionPlanApplyTest(unittest.TestCase):
         self.assertEqual(record["current_difficulty"], "Grandmaster")
         self.assertEqual(record["exits"], 28)
         self.assertEqual(record["authors"], ["Canonical Author"])
+        self.assertEqual(record["rating"], 4.625)
+        self.assertNotIn("smwc_rating", record)
         self.assertEqual(record["personal_rating"], 5)
         self.assertEqual(record["notes"], "keep personal note")
         self.assertEqual(record["time_to_beat"], 777)

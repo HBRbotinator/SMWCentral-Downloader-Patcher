@@ -907,6 +907,29 @@ def main():
         difficulty_lookup = get_difficulty_lookup(config_manager)
         set_difficulty_lookup(difficulty_lookup)
 
+        # Repair the short-lived v5.1 Collection rating field bug before any
+        # Collection-dependent UI constructs HackDataManager. This one-time,
+        # idempotent migration only touches numeric SMWC records and never
+        # overwrites an already-valid canonical ``rating`` value.
+        try:
+            from collection_rating import repair_processed_smwc_rating_file
+            from download_state_manager import set_download_active
+
+            set_download_active(True)
+            try:
+                repaired_smwc_ratings = repair_processed_smwc_rating_file(
+                    PROCESSED_JSON_PATH
+                )
+            finally:
+                set_download_active(False)
+            if repaired_smwc_ratings:
+                print(
+                    f"✅ SMWC rating repair: canonicalized {repaired_smwc_ratings} "
+                    "Collection record(s)"
+                )
+        except Exception as rating_repair_error:
+            print(f"⚠️ SMWC rating repair could not be persisted: {rating_repair_error}")
+
         # Setup UI and run - pass version to setup_ui
         download_button = setup_ui(root, run_pipeline_wrapper, toggle_theme_callback, VERSION)
 

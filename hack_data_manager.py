@@ -35,6 +35,13 @@ class HackDataManager:
         try:
             with open(self.json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                from collection_rating import repair_processed_smwc_ratings
+
+                # Canonicalize accidental v5.1 ``smwc_rating`` storage in memory
+                # before Collection UI/model consumers read this snapshot. The
+                # startup quick migration persists the same idempotent repair.
+                repair_processed_smwc_ratings(data)
+
                 # Ensure all entries have the v3.0 and v3.1 fields
                 for hack_id, hack_data in data.items():
                     if isinstance(hack_data, dict):

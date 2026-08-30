@@ -228,12 +228,13 @@ def _fake_fetch(results):
 
 
 def _smwc_hack(hid, name, difficulty="diff_4", htype="kaizo", length=10,
-               obsolete=False, time_ts=1704067200):
+               obsolete=False, time_ts=1704067200, rating=4.25):
     return {
         "id": hid,
         "name": name,
         "time": time_ts,
         "authors": ["someone"],
+        "rating": rating,
         "raw_fields": {
             "difficulty": difficulty, "type": htype, "length": length,
             "hof": False, "sa1": False, "collab": False, "demo": False,
@@ -294,6 +295,7 @@ class EntryFieldsTest(unittest.TestCase):
         self.assertEqual(fields["exits"], 6)
         self.assertEqual(fields["difficulty_id"], "diff_4")
         self.assertEqual(fields["hack_type"], "kaizo")
+        self.assertEqual(fields["rating"], 4.25)
         self.assertEqual(fields["file_path"], "")            # no local ROM yet
         # date derives from the unix timestamp (compare in local time, TZ-safe)
         from datetime import datetime
@@ -315,6 +317,7 @@ class ImportOrphanTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("777", dm.data)                        # keyed by real SMWC id
         self.assertTrue(dm.data["777"]["completed"])         # 6>=6 -> completed
+        self.assertEqual(dm.data["777"]["rating"], 4.25)
         self.assertEqual(dm.data["777"]["completed_date"], cand.completed_date)
 
     def test_import_dedupes_against_existing_id(self):

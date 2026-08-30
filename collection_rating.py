@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import math
+import os
+import tempfile
 
 
 PERSONAL_RATING_COLUMN_ID = "rating"
@@ -38,6 +41,92 @@ def smwc_rating_sort_value(value):
     """Return a stable numeric sort key, with Unrated entries at zero."""
     rating = parse_smwc_rating(value)
     return rating if rating is not None else 0.0
+
+
+def repair_record_smwc_rating(record):
+    """Canonicalize one numeric Collection record's community rating storage.
+
+    ``rating`` is the durable Collection field for the SMWC community rating.
+    A short-lived Collection ingestion bug wrote the same provider value to
+    ``smwc_rating`` instead. Preserve an already-valid canonical value; only
+    promote the legacy value when the canonical field is absent or unrated.
+    The accidental field is removed so later consumers cannot prefer stale data.
+    """
+
+    if not isinstance(record, dict) or "smwc_rating" not in record:
+        return False
+
+    canonical = parse_smwc_rating(record.get("rating"))
+    legacy = parse_smwc_rating(record.get("smwc_rating"))
+    if canonical is None and legacy is not None:
+        record["rating"] = legacy
+    record.pop("smwc_rating", None)
+    return True
+
+
+def repair_processed_smwc_ratings(data):
+    """Repair accidental ``smwc_rating`` fields on numeric SMWC records in-place.
+
+    Local ``usr_*`` records are intentionally left alone because they do not own
+    provider community metadata. Returns the number of records changed.
+    """
+
+    if not isinstance(data, dict):
+        return 0
+
+    repaired = 0
+    for hack_id, record in data.items():
+        if not str(hack_id).strip().isdigit():
+            continue
+        if repair_record_smwc_rating(record):
+            repaired += 1
+    return repaired
+
+
+def repair_processed_smwc_rating_file(path):
+    """Atomically persist the one-time canonical SMWC rating repair.
+
+    Returns the number of numeric Collection records changed. Missing files are
+    a no-op. The replacement is written beside ``processed.json`` and published
+    with ``os.replace`` so an interrupted write cannot leave a partial JSON file.
+    """
+
+    path = os.fspath(path)
+    if not os.path.exists(path):
+        return 0
+
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    repaired = repair_processed_smwc_ratings(data)
+    if not repaired:
+        return 0
+
+    parent = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(parent, exist_ok=True)
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=parent,
+            prefix=f".{os.path.basename(path)}.rating-",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = handle.name
+            json.dump(data, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        temp_path = ""
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+    return repaired
 
 
 def migrate_smwc_rating_column(visible_columns, column_order):

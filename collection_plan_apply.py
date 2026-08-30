@@ -630,6 +630,10 @@ def _apply_catalogue_metadata(
     operation: CatalogueMetadataOperation,
 ) -> None:
     metadata = operation.metadata
+    # ``rating`` is the canonical persisted SMWC community-rating field.
+    # Remove the accidental v5.1 ingestion field so stale legacy data cannot
+    # shadow future provider refreshes in compatibility consumers.
+    record.pop("smwc_rating", None)
     record.update(
         {
             "title": metadata.title,
@@ -639,7 +643,7 @@ def _apply_catalogue_metadata(
             "hack_type": metadata.hack_types[0] if metadata.hack_types else "unknown",
             "exits": metadata.exits if metadata.exits is not None else 0,
             "time": metadata.release_timestamp if metadata.release_timestamp is not None else 0,
-            "smwc_rating": metadata.rating if metadata.rating is not None else "",
+            "rating": metadata.rating if metadata.rating is not None else 0,
             "hall_of_fame": bool(metadata.hall_of_fame) if metadata.hall_of_fame is not None else False,
             "sa1_compatibility": bool(metadata.sa1_compatible) if metadata.sa1_compatible is not None else False,
             "collaboration": bool(metadata.collaboration) if metadata.collaboration is not None else False,
