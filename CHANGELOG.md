@@ -6,6 +6,12 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Collection import convergence review and retry resilience
+
+- Separate review items that resolve to the same new Collection target now enter an explicit combined ROM-variant review before finalization, so the user chooses retained variants and one primary ROM across the full converged set.
+- Identical hydrated KaizOFF metadata from converged groups is merged safely while retaining all source-candidate provenance; genuinely different provider snapshots still fail closed.
+- Collection import review decisions remain open while finalization runs. If finalization fails, nothing is applied and the existing review choices are restored for adjustment/retry instead of forcing a complete rescan and re-review.
+
 ### Collection import target reconciliation safety
 
 - Guarded/review-only catalogue suggestions no longer define reconciliation grouping identity; unrelated ROMs remain separate until the user explicitly confirms a target.

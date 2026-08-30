@@ -182,6 +182,7 @@ def finalize_collection_ingestion_review_plan(
     identity_hints: CollectionIdentityHintsStore | None = None,
     participants=None,
     id_factory=None,
+    converged_rom_decisions=None,
 ):
     """Hydrate completed review into a final immutable plan without Apply."""
 
@@ -204,6 +205,8 @@ def finalize_collection_ingestion_review_plan(
     }
     if id_factory is not None:
         kwargs["id_factory"] = id_factory
+    if converged_rom_decisions is not None:
+        kwargs["converged_rom_decisions"] = converged_rom_decisions
     return finalize_reviewed_ingestion_session(
         session,
         decisions,

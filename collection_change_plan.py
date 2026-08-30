@@ -6,6 +6,11 @@ import re
 from enum import Enum
 from typing import Iterable, Mapping, Sequence
 
+from collection_ingestion_convergence_review import (
+    ConvergedRomDecision,
+    build_converged_rom_reviews,
+    decision_map_by_target,
+)
 from collection_ingestion import (
     EvidenceStrength,
     IdentityEvidenceKind,
@@ -760,19 +765,66 @@ def _dedupe_equal_by_key(items, key, label: str):
     return tuple(result[value] for value in sorted(result))
 
 
-def _merge_rom_asset_operations(
-    items: Sequence[RomAssetsOperation],
-) -> tuple[RomAssetsOperation, ...]:
-    """Merge safe same-target ROM additions produced by separate review groups."""
+def _merge_catalogue_operations(
+    items: Sequence[CatalogueMetadataOperation],
+) -> tuple[CatalogueMetadataOperation, ...]:
+    """Merge identical same-target catalogue snapshots and retain all provenance."""
 
-    grouped: dict[str, list[RomAssetsOperation]] = {}
+    grouped: dict[str, list[CatalogueMetadataOperation]] = {}
     for item in items:
         grouped.setdefault(item.target_key, []).append(item)
 
     merged = []
     for target_key in sorted(grouped):
         operations = grouped[target_key]
-        if len(operations) == 1:
+        first = operations[0]
+        for operation in operations[1:]:
+            if operation.metadata != first.metadata or operation.source != first.source:
+                raise PlanFinalizationError(
+                    f"Conflicting catalogue metadata operations for {target_key!r}."
+                )
+        candidate_ids = tuple(
+            sorted(
+                {
+                    candidate_id
+                    for operation in operations
+                    for candidate_id in operation.source_candidate_ids
+                }
+            )
+        )
+        merged.append(
+            CatalogueMetadataOperation(
+                target_key=target_key,
+                metadata=first.metadata,
+                source=first.source,
+                source_candidate_ids=candidate_ids,
+            )
+        )
+    return tuple(merged)
+
+
+def _merge_rom_asset_operations(
+    items: Sequence[RomAssetsOperation],
+    converged_decisions: Mapping[str, ConvergedRomDecision] | None = None,
+) -> tuple[tuple[RomAssetsOperation, ...], tuple[IgnoredRomOperation, ...]]:
+    """Merge same-target ROM additions using any explicit combined review."""
+
+    converged_decisions = dict(converged_decisions or {})
+    grouped: dict[str, list[RomAssetsOperation]] = {}
+    for item in items:
+        grouped.setdefault(item.target_key, []).append(item)
+
+    unknown = set(converged_decisions).difference(grouped)
+    if unknown:
+        raise PlanFinalizationError(
+            f"Combined ROM decisions reference unknown targets: {sorted(unknown)!r}"
+        )
+
+    merged = []
+    convergence_ignored = []
+    for target_key in sorted(grouped):
+        operations = grouped[target_key]
+        if len(operations) == 1 and target_key not in converged_decisions:
             merged.append(operations[0])
             continue
 
@@ -798,6 +850,45 @@ def _merge_rom_asset_operations(
                     assets_by_path[asset.path] = asset
                     asset_order.append(asset.path)
 
+        combined = converged_decisions.get(target_key)
+        if combined is not None:
+            selection = combined.selection
+            available = set(assets_by_path)
+            unknown_paths = set(selection.kept_paths).difference(available)
+            if unknown_paths:
+                raise PlanFinalizationError(
+                    "Combined ROM review references paths that are no longer part "
+                    f"of target {target_key!r}: {sorted(unknown_paths)!r}"
+                )
+            kept_paths = tuple(selection.kept_paths)
+            if not kept_paths or selection.primary_path not in kept_paths:
+                raise PlanFinalizationError(
+                    f"Combined ROM review for {target_key!r} has no valid primary ROM."
+                )
+            for ignored in selection.ignored:
+                asset = assets_by_path.get(ignored.path)
+                if asset is None or asset.sha256 != ignored.sha256:
+                    raise PlanFinalizationError(
+                        "Combined ROM ignore decision no longer matches reviewed "
+                        f"evidence for {ignored.path!r}."
+                    )
+                if ignored.path in kept_paths:
+                    raise PlanFinalizationError(
+                        "A combined ROM cannot be both retained and ignored."
+                    )
+                convergence_ignored.append(
+                    IgnoredRomOperation(path=ignored.path, sha256=ignored.sha256)
+                )
+            merged.append(
+                RomAssetsOperation(
+                    target_key=target_key,
+                    assets=tuple(assets_by_path[path] for path in kept_paths),
+                    primary_path=selection.primary_path,
+                    preserve_existing_primary=False,
+                )
+            )
+            continue
+
         if len(primary_paths) > 1:
             raise PlanFinalizationError(
                 "Reviewed groups converged on Collection target "
@@ -807,8 +898,6 @@ def _merge_rom_asset_operations(
 
         primary_path = next(iter(primary_paths), "")
         if primary_path:
-            # An explicit primary choice is stronger than another group's default
-            # request to preserve an existing primary.
             preserve_existing_primary = False
         elif not preserve_existing_primary:
             if len(asset_order) == 1:
@@ -828,7 +917,7 @@ def _merge_rom_asset_operations(
                 preserve_existing_primary=preserve_existing_primary,
             )
         )
-    return tuple(merged)
+    return tuple(merged), tuple(convergence_ignored)
 
 
 def finalize_collection_change_plan(
@@ -837,6 +926,7 @@ def finalize_collection_change_plan(
     *,
     existing_collection_keys: Iterable[str] = (),
     local_identity_allocations: Mapping[str, str] | None = None,
+    converged_rom_decisions: Mapping[str, ConvergedRomDecision] | None = None,
     preconditions: Sequence[StorePrecondition] = (),
 ) -> CollectionChangePlan:
     """Finalize reviewed evidence without rerunning matching or making hidden choices."""
@@ -853,6 +943,20 @@ def finalize_collection_change_plan(
         raise PlanFinalizationError("Local allocations contain an unknown group ID.")
 
     existing_keys = frozenset(validate_collection_key(value) for value in existing_collection_keys)
+    try:
+        convergence_reviews = build_converged_rom_reviews(
+            ordered_groups,
+            decisions,
+            existing_collection_keys=tuple(existing_keys),
+        )
+        convergence_decisions = decision_map_by_target(
+            convergence_reviews,
+            converged_rom_decisions,
+        )
+    except ReconciliationError as error:
+        raise PlanFinalizationError(str(error)) from error
+    except ValueError as error:
+        raise PlanFinalizationError(str(error)) from error
     for allocation in allocations.values():
         if not is_local_collection_key(allocation):
             raise PlanFinalizationError("Local identity allocations must be opaque usr_* IDs.")
@@ -962,17 +1066,17 @@ def finalize_collection_change_plan(
         key=lambda item: item.target_key,
         label="record intent",
     )
-    catalogue_updates = _dedupe_equal_by_key(
-        catalogue_updates,
-        key=lambda item: item.target_key,
-        label="catalogue metadata",
-    )
+    catalogue_updates = _merge_catalogue_operations(catalogue_updates)
     local_seeds = _dedupe_equal_by_key(
         local_seeds,
         key=lambda item: item.target_key,
         label="local record seed",
     )
-    rom_updates = _merge_rom_asset_operations(rom_updates)
+    rom_updates, convergence_ignored = _merge_rom_asset_operations(
+        rom_updates,
+        convergence_decisions,
+    )
+    ignored_roms.extend(convergence_ignored)
     history_updates = _dedupe_equal_by_key(
         history_updates,
         key=lambda item: item.target_key,

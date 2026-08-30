@@ -603,7 +603,7 @@ class CollectionChangePlanTest(unittest.TestCase):
             target_key="123",
         )
 
-        with self.assertRaisesRegex(PlanFinalizationError, "converged.*primary ROM"):
+        with self.assertRaisesRegex(PlanFinalizationError, "Combined ROM review is required"):
             finalize_collection_change_plan(
                 (first, second),
                 {second.group_id: decision},

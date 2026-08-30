@@ -105,6 +105,8 @@ python tools/rom_match_calibration.py processed.json KaizOFF-API-Public-v1-Hacks
 
 The current matcher was calibrated against a legacy real-world Collection snapshot and the supplied 2,820-entry KaizOFF Index. Of 152 eligible known-ROM records, 140 were safely auto-selected and the remaining 12 were held for review; all 152 still had the correct known submission as the top suggestion, with zero wrong automatic matches. Because the held cases were ambiguous abbreviations, short/partial titles, or sequel-sensitive names, the thresholds remain deliberately conservative.
 
+When separate review items are explicitly resolved to the same **new** SMWC Collection target, their ROM files are reviewed together before the final preview is built. The combined review lets you keep, ignore, or leave out each variant and requires one primary ROM across the full set instead of silently choosing between hashes. If final plan construction fails, the original review window and its saved decisions remain available so you can adjust or retry without repeating the whole scan.
+
 ### Managing Your Collection
 1. **View your collection**: Click the "Collection" tab to see all your downloaded ROMs
 2. **Customize columns**: Click the "⚙ Columns" button to show/hide columns and reorder them via drag-and-drop

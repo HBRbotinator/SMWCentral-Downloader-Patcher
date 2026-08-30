@@ -83,6 +83,7 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
         text = ast.get_source_segment(self.source, complete)
         self.assertIn("decisions = self.model.decisions", text)
         self.assertIn("self.on_complete(decisions)", text)
+        self.assertNotIn("self.close()", text)
         self.assertNotIn("finalize", text)
         self.assertNotIn("apply", text)
 

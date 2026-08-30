@@ -15,6 +15,7 @@ import re
 from typing import Mapping, Sequence
 
 from collection_change_plan import CollectionChangePlan
+from collection_ingestion_convergence_review import ConvergedRomDecision
 from collection_identity_hints import (
     CollectionIdentityHintsStore,
     IdentityHintsSnapshot,
@@ -345,6 +346,7 @@ def finalize_ingestion_session_plan(
     *,
     local_identity_allocations: Mapping[str, str] | None = None,
     catalogue_details: Sequence[KaizOffDetailSnapshot | KaizOffHackMetadata] = (),
+    converged_rom_decisions: Mapping[str, ConvergedRomDecision] | None = None,
 ) -> CollectionChangePlan:
     """Finalize a frozen session after review without rerunning source matching."""
 
@@ -379,6 +381,7 @@ def finalize_ingestion_session_plan(
         decisions,
         existing_collection_keys=session.existing_collection_keys,
         local_identity_allocations=allocations,
+        converged_rom_decisions=converged_rom_decisions,
         preconditions=session.preconditions,
     )
 

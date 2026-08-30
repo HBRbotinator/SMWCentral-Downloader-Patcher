@@ -68,8 +68,17 @@ class CollectionIngestionSourceDialogContractTest(unittest.TestCase):
             if isinstance(node, ast.FunctionDef)
             and node.name == "_collection_ingestion_review_complete"
         )
-        text = ast.get_source_segment(self.page_source, complete)
-        self.assertIn("dict(decisions)", text)
+        complete_text = ast.get_source_segment(self.page_source, complete)
+        self.assertIn("dict(decisions)", complete_text)
+        self.assertIn("build_converged_rom_reviews", complete_text)
+
+        begin = next(
+            node
+            for node in ast.walk(self.page_tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_begin_collection_ingestion_finalization"
+        )
+        text = ast.get_source_segment(self.page_source, begin)
         self.assertIn("collection-ingestion-finalization", text)
         self.assertIn("_collection_ingestion_finalization_worker", text)
         self.assertNotIn("apply_collection_change_plan", text)

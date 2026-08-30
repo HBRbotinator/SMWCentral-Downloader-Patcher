@@ -5,6 +5,7 @@ from typing import Callable, Mapping, Sequence
 
 from collection_change_plan import CollectionChangePlan, StorePrecondition
 from collection_identity_hints import CollectionIdentityHintsStore
+from collection_ingestion_convergence_review import ConvergedRomDecision
 from collection_ingestion_session import (
     CollectionIngestionSession,
     fetch_required_catalogue_details,
@@ -118,6 +119,7 @@ def finalize_reviewed_ingestion_session(
     participants: Sequence[CollectionIdentityReferenceParticipant] = (),
     id_factory: LocalIdentityFactory = generate_local_collection_id,
     force_detail_refresh: bool = False,
+    converged_rom_decisions: Mapping[str, ConvergedRomDecision] | None = None,
 ) -> CollectionChangePlan:
     """Hydrate required details and finalize a plan without applying user state."""
 
@@ -154,6 +156,7 @@ def finalize_reviewed_ingestion_session(
         decisions,
         local_identity_allocations=allocations,
         catalogue_details=details,
+        converged_rom_decisions=converged_rom_decisions,
     )
     _preflight_reference_participants(plan, participant_tuple)
     validate_reviewed_store_state(

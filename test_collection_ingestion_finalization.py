@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from collection_identity_hints import CollectionIdentityHintsStore
-from collection_ingestion import CollectionCandidate, IngestionSource
+from collection_ingestion import CollectionCandidate, IngestionSource, RomFileEvidence
+from collection_ingestion_convergence_review import ConvergedRomDecision
 from collection_ingestion_finalization import (
     CollectionIngestionFinalizationError,
     CollectionIngestionFinalizationStaleStateError,
@@ -27,6 +28,8 @@ from collection_reconciliation import (
     ReviewDecision,
     ReviewIssue,
     ReviewState,
+    RomSelectionDecision,
+    build_reconciliation_groups,
 )
 from hack_data_manager import HackDataManager
 from kaizoff_provider import KaizOffDetailSnapshot, KaizOffHackMetadata
@@ -231,6 +234,102 @@ class CollectionIngestionFinalizationTest(unittest.TestCase):
         provider.get_hack.assert_not_called()
         self.assertEqual("41022", plan.updates[0].target_key)
 
+
+    def test_new_target_convergence_uses_explicit_combined_rom_decision(self):
+        fixture = _Fixture()
+        self.addCleanup(fixture.close)
+
+        first_resolution = CandidateResolution(
+            candidate_id="first",
+            candidate=CollectionCandidate(
+                source=IngestionSource.ROM_SCAN,
+                title_hints=("Hack",),
+                rom_files=(
+                    RomFileEvidence(
+                        path="C:/ROMs/Hack.sfc",
+                        filename="Hack.sfc",
+                        sha256="a" * 64,
+                        size_bytes=2048,
+                        title_hint="Hack",
+                    ),
+                ),
+            ),
+            match_basis=MatchBasis.AUTO_TITLE,
+            target_key="41022",
+            reason="auto",
+        )
+        second_resolution = CandidateResolution(
+            candidate_id="second",
+            candidate=CollectionCandidate(
+                source=IngestionSource.ROM_SCAN,
+                title_hints=("Hack Alt",),
+                rom_files=(
+                    RomFileEvidence(
+                        path="C:/ROMs/Hack Alt.sfc",
+                        filename="Hack Alt.sfc",
+                        sha256="b" * 64,
+                        size_bytes=2048,
+                        title_hint="Hack Alt",
+                    ),
+                ),
+            ),
+            match_basis=MatchBasis.SUGGESTED_TITLE,
+            target_key="41022",
+            reason="suggested",
+        )
+        groups = build_reconciliation_groups((first_resolution, second_resolution))
+        self.assertEqual(2, len(groups))
+        suggested = next(
+            group
+            for group in groups
+            if MatchBasis.SUGGESTED_TITLE in {member.match_basis for member in group.members}
+        )
+        decisions = {
+            suggested.group_id: ReviewDecision(
+                suggested.group_id,
+                ReviewAction.USE_TARGET,
+                target_key="41022",
+            )
+        }
+        session = CollectionIngestionSession(
+            catalogue_fetched_at=1.0,
+            catalogue_source="test",
+            catalogue_stale=False,
+            catalogue_entries=(),
+            existing_collection_keys=(),
+            preconditions=collect_store_preconditions(
+                fixture.manager, fixture.hints, fixture.participants
+            ),
+            resolutions=(first_resolution, second_resolution),
+            groups=groups,
+            review_entries=(),
+            suppressed_roms=(),
+        )
+        provider = Mock()
+        provider.get_hack.return_value = _detail(41022, "Hack")
+        combined = {
+            "41022": ConvergedRomDecision(
+                target_key="41022",
+                selection=RomSelectionDecision(
+                    kept_paths=("C:/ROMs/Hack.sfc", "C:/ROMs/Hack Alt.sfc"),
+                    primary_path="C:/ROMs/Hack.sfc",
+                ),
+            )
+        }
+
+        plan = finalize_reviewed_ingestion_session(
+            session,
+            decisions,
+            fixture.manager,
+            fixture.hints,
+            provider,
+            participants=fixture.participants,
+            converged_rom_decisions=combined,
+        )
+
+        self.assertEqual(1, len(plan.rom_updates))
+        self.assertEqual("C:/ROMs/Hack.sfc", plan.rom_updates[0].primary_path)
+        self.assertEqual(2, len(plan.rom_updates[0].assets))
 
     def test_planner_state_conflict_is_detected_during_read_only_preflight(self):
         fixture = _Fixture({LOCAL_ID: {"title": "Local Hack"}})

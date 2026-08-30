@@ -204,6 +204,7 @@ class CollectionPage:
         self.collection_ingestion_source_dialog = None
         self.collection_ingestion_progress_dialog = None
         self.collection_ingestion_review_dialog = None
+        self.collection_ingestion_convergence_review_dialog = None
         self.collection_ingestion_finalization_progress_dialog = None
         self.collection_ingestion_plan_preview_dialog = None
         self.collection_ingestion_apply_progress_dialog = None
@@ -212,6 +213,7 @@ class CollectionPage:
         self._collection_ingestion_poll_id = None
         self._active_collection_ingestion_session = None
         self._last_collection_ingestion_review_decisions = None
+        self._last_collection_ingestion_convergence_decisions = None
         self._last_collection_ingestion_plan = None
 
         # Read-only, user-initiated SMWC update/replacement discovery and planning.
@@ -2638,6 +2640,7 @@ class CollectionPage:
         self._collection_ingestion_busy = True
         self._active_collection_ingestion_session = None
         self._last_collection_ingestion_review_decisions = None
+        self._last_collection_ingestion_convergence_decisions = None
         self._last_collection_ingestion_plan = None
         parent = self.frame.winfo_toplevel()
         self.collection_ingestion_progress_dialog = CollectionIngestionProgressDialog(parent)
@@ -2749,12 +2752,13 @@ class CollectionPage:
         self.collection_ingestion_review_dialog.show()
 
     def _collection_ingestion_review_complete(self, decisions):
-        """Hydrate completed review into an immutable plan on a worker thread."""
+        """Resolve any cross-group ROM convergence before plan finalization."""
         if self._collection_ingestion_busy:
             return False
         if not self._collection_ingestion_state_is_saved():
             return False
-        if self._active_collection_ingestion_session is None:
+        session = self._active_collection_ingestion_session
+        if session is None:
             messagebox.showerror(
                 "Collection Import",
                 "The reviewed Collection import session is no longer available.",
@@ -2764,6 +2768,110 @@ class CollectionPage:
 
         self._last_collection_ingestion_review_decisions = dict(decisions)
         self._last_collection_ingestion_plan = None
+        try:
+            from collection_ingestion_convergence_review import (
+                build_converged_rom_reviews,
+            )
+
+            reviews = build_converged_rom_reviews(
+                session.groups,
+                decisions,
+                existing_collection_keys=session.existing_collection_keys,
+            )
+        except Exception as error:
+            self._log(
+                f"❌ Collection import convergence review failed: {error}",
+                "Error",
+            )
+            messagebox.showerror(
+                "Collection Import",
+                f"Could not prepare combined ROM review:\n\n{error}",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+
+        if reviews:
+            self._open_collection_ingestion_convergence_review(reviews)
+            return True
+
+        self._last_collection_ingestion_convergence_decisions = {}
+        return self._begin_collection_ingestion_finalization(decisions, {})
+
+    def _open_collection_ingestion_convergence_review(self, reviews):
+        """Collect one primary-ROM choice across groups sharing a new target."""
+        if (
+            self.collection_ingestion_convergence_review_dialog is not None
+            and self.collection_ingestion_convergence_review_dialog.is_open
+        ):
+            self.collection_ingestion_convergence_review_dialog.lift()
+            return
+
+        from ui.collection_ingestion_convergence_review_dialog import (
+            CollectionIngestionConvergenceReviewDialog,
+        )
+
+        valid_targets = {review.target_key for review in reviews}
+        previous = {
+            key: value
+            for key, value in dict(
+                self._last_collection_ingestion_convergence_decisions or {}
+            ).items()
+            if key in valid_targets
+        }
+        parent = (
+            self.collection_ingestion_review_dialog.win
+            if self.collection_ingestion_review_dialog is not None
+            and self.collection_ingestion_review_dialog.is_open
+            else self.frame.winfo_toplevel()
+        )
+        self.collection_ingestion_convergence_review_dialog = (
+            CollectionIngestionConvergenceReviewDialog(
+                parent,
+                reviews,
+                decisions=previous,
+                on_complete=self._collection_ingestion_convergence_review_complete,
+                on_close=self._collection_ingestion_convergence_review_closed,
+            )
+        )
+        self.collection_ingestion_convergence_review_dialog.show()
+
+    def _collection_ingestion_convergence_review_complete(self, decisions):
+        if self._collection_ingestion_busy:
+            return False
+        group_decisions = self._last_collection_ingestion_review_decisions
+        if group_decisions is None:
+            return False
+        self._last_collection_ingestion_convergence_decisions = dict(decisions)
+        return self._begin_collection_ingestion_finalization(
+            group_decisions,
+            decisions,
+        )
+
+    def _collection_ingestion_convergence_review_closed(self):
+        self.collection_ingestion_convergence_review_dialog = None
+        if not self._collection_ingestion_busy:
+            dialog = self.collection_ingestion_review_dialog
+            if dialog is not None and dialog.is_open:
+                dialog.set_submitting(False)
+                dialog.lift()
+
+    def _begin_collection_ingestion_finalization(
+        self,
+        decisions,
+        converged_rom_decisions,
+    ):
+        """Hydrate completed review into an immutable plan on a worker thread."""
+        if self._collection_ingestion_busy:
+            return False
+        if not self._collection_ingestion_state_is_saved():
+            return False
+        if self._active_collection_ingestion_session is None:
+            return False
+
+        review_dialog = self.collection_ingestion_review_dialog
+        if review_dialog is not None and review_dialog.is_open:
+            review_dialog.set_submitting(True)
+
         self._collection_ingestion_busy = True
         parent = self.frame.winfo_toplevel()
         from ui.collection_ingestion_plan_preview_dialog import (
@@ -2785,6 +2893,7 @@ class CollectionPage:
                 processed_json_path,
                 self._active_collection_ingestion_session,
                 dict(decisions),
+                dict(converged_rom_decisions or {}),
             ),
             daemon=True,
             name="collection-ingestion-finalization",
@@ -2798,6 +2907,7 @@ class CollectionPage:
         processed_json_path,
         session,
         decisions,
+        converged_rom_decisions,
     ):
         try:
             from collection_ingestion_entrypoint import (
@@ -2808,6 +2918,7 @@ class CollectionPage:
                 processed_json_path,
                 session,
                 decisions,
+                converged_rom_decisions=converged_rom_decisions,
             )
         except Exception as error:
             self._collection_ingestion_result_queue.put(("plan-error", error))
@@ -2823,20 +2934,32 @@ class CollectionPage:
         self._close_collection_ingestion_finalization_progress()
         self._collection_ingestion_busy = False
         self._last_collection_ingestion_plan = None
+        review_dialog = self.collection_ingestion_review_dialog
+        if review_dialog is not None and review_dialog.is_open:
+            review_dialog.set_submitting(False)
+            review_dialog.lift()
         self._log(f"❌ Collection import plan finalization failed: {error}", "Error")
         messagebox.showerror(
             "Collection Import Preview",
             "Could not build the final Collection import preview:\n\n"
             f"{error}\n\n"
-            "Nothing was applied. If reviewed Collection or dependent state changed, "
+            "Nothing was applied. Your review choices are still open and can be "
+            "adjusted or retried. If reviewed Collection or dependent state changed, "
             "start a new import review.",
-            parent=self.frame.winfo_toplevel(),
+            parent=(
+                review_dialog.win
+                if review_dialog is not None and review_dialog.is_open
+                else self.frame.winfo_toplevel()
+            ),
         )
 
     def _collection_ingestion_plan_ready(self, plan):
         self._close_collection_ingestion_finalization_progress()
         self._collection_ingestion_busy = False
         self._last_collection_ingestion_plan = plan
+        review_dialog = self.collection_ingestion_review_dialog
+        if review_dialog is not None and review_dialog.is_open:
+            review_dialog.close()
         self._log(
             "✅ Final Collection import plan ready for preview and explicit confirmation",
             "Information",
@@ -3140,6 +3263,7 @@ class CollectionPage:
     def _clear_collection_ingestion_review_state(self):
         self._active_collection_ingestion_session = None
         self._last_collection_ingestion_review_decisions = None
+        self._last_collection_ingestion_convergence_decisions = None
         self._last_collection_ingestion_plan = None
 
     def _collection_ingestion_plan_preview_closed(self):

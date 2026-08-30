@@ -73,6 +73,7 @@ class CollectionIngestionReviewDialog:
         self._first_clear_values = {}
         self._remember_vars = []
         self._closed = False
+        self._submitting = False
 
     @property
     def is_open(self):
@@ -205,6 +206,26 @@ class CollectionIngestionReviewDialog:
             self.win.focus_force()
         except tk.TclError:
             pass
+
+    def set_submitting(self, submitting: bool):
+        """Keep reviewed decisions alive while detached finalization runs."""
+
+        self._submitting = bool(submitting)
+        if self.done_button is not None:
+            self.done_button.configure(
+                state="disabled" if self._submitting else "normal"
+            )
+        if self._submitting:
+            try:
+                self.win.configure(cursor="watch")
+            except (tk.TclError, AttributeError):
+                pass
+        else:
+            try:
+                self.win.configure(cursor="")
+            except (tk.TclError, AttributeError):
+                pass
+            self._update_summary()
 
     def close(self):
         if self._closed:
@@ -855,6 +876,8 @@ class CollectionIngestionReviewDialog:
             self._render_group(group_id)
 
     def _complete(self):
+        if self._submitting:
+            return
         unresolved = self.model.unresolved_group_ids()
         if unresolved:
             messagebox.showwarning(
@@ -869,7 +892,6 @@ class CollectionIngestionReviewDialog:
             result = self.on_complete(decisions)
             if result is False:
                 return
-        self.close()
 
 
 __all__ = ["CollectionIngestionReviewDialog"]
