@@ -134,8 +134,12 @@ When separate review items are explicitly resolved to the same **new** SMWC Coll
    - Enable "Show version picker" in Settings to get a picker dialog instead, letting you choose which ROM to launch
    - Change the default version any time via the Edit Hack dialog → ROM Files section
 10. **Filter and sort**: Use filters to find specific hacks, or click column headers to sort
-11. **Check a known SMWC entry for a possible replacement**: Select a numeric SMWC Collection row and click **Find Update...**
-   - The app refreshes the lightweight KaizOFF Index and ranks/searches possible related submissions
+11. **Refresh or replace a known SMWC entry**: Select a numeric SMWC Collection row and click **Find Update...**
+   - **Refresh / Re-download Current...** handles the current SMWC ID separately: it hydrates fresh KaizOFF detail for that exact active submission and keeps Collection identity unchanged
+   - The same-ID preview can apply catalogue metadata only, or **Acquire Current ROM...** can download/patch the current archive first. Existing ROM filenames are never overwritten; a collision receives a numbered sibling, while byte-identical duplicates are discarded
+   - A newly acquired same-ID ROM becomes the reviewed primary only when the transactional refresh is applied; older ROM assets remain retained with their existing per-ROM provenance
+   - Apply for current-submission refresh is network-free and contains no identity/reference migration
+   - For a different submission, the app refreshes the lightweight KaizOFF Index and ranks/searches possible related submissions
    - A different SMWC ID is never automatically treated as a newer version; you must recognize and confirm the relationship yourself
    - After you explicitly confirm a relationship, only that target's rich KaizOFF detail is hydrated and an immutable replacement plan is shown
    - The replacement plan preview now requires an explicit **Apply Replacement...** confirmation before the reviewed numeric identity migration is written transactionally

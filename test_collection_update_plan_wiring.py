@@ -63,7 +63,10 @@ class CollectionUpdatePlanWiringTests(unittest.TestCase):
 
     def test_replacement_apply_does_not_redo_discovery_hydration_or_rom_acquisition(self):
         apply_start = self.update_plan_wiring.index("    def _collection_update_apply_requested")
-        apply_source = self.update_plan_wiring[apply_start:]
+        current_refresh_start = self.update_plan_wiring.index(
+            "    def _collection_update_current_refresh_requested", apply_start
+        )
+        apply_source = self.update_plan_wiring[apply_start:current_refresh_start]
         forbidden = (
             "KaizOffCatalogueProvider",
             "get_hack(",

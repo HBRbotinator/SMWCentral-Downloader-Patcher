@@ -86,12 +86,13 @@ class CollectionUpdateDiscoveryProgressDialog:
 class CollectionUpdateDiscoveryDialog:
     """Browse one frozen Index and explicitly choose a possible replacement target."""
 
-    def __init__(self, parent, discovery, *, on_select=None, on_close=None):
+    def __init__(self, parent, discovery, *, on_select=None, on_refresh_current=None, on_close=None):
         if not isinstance(discovery, CollectionUpdateDiscovery):
             raise TypeError("discovery must be CollectionUpdateDiscovery")
         self.parent = parent
         self.discovery = discovery
         self.on_select = on_select
+        self.on_refresh_current = on_refresh_current
         self.on_close = on_close
         self.win = None
         self.tree = None
@@ -149,7 +150,27 @@ class CollectionUpdateDiscoveryDialog:
 
         freshness = _freshness_text(self.discovery)
         self.status_label = ttk.Label(root, text=freshness)
-        self.status_label.pack(anchor="w", pady=(0, 10))
+        self.status_label.pack(anchor="w", pady=(0, 8))
+
+        current_frame = ttk.LabelFrame(root, text="Current SMWC submission", padding=8)
+        current_frame.pack(fill="x", pady=(0, 10))
+        ttk.Label(
+            current_frame,
+            text=(
+                f"SMWC {source.smwc_submission_id} — {source.title}. Refresh this exact active "
+                "submission when you want current metadata or the current downloadable ROM without "
+                "changing Collection identity."
+            ),
+            wraplength=870,
+        ).pack(side="left", fill="x", expand=True)
+        current_button = ttk.Button(
+            current_frame,
+            text="Refresh / Re-download Current...",
+            command=self._refresh_current,
+        )
+        current_button.pack(side="right", padx=(10, 0))
+        if self.on_refresh_current is None:
+            current_button.configure(state="disabled")
 
         search = ttk.Frame(root)
         search.pack(fill="x", pady=(0, 8))
@@ -339,6 +360,29 @@ class CollectionUpdateDiscoveryDialog:
         self.details.delete("1.0", "end")
         self.details.insert("1.0", "\n".join(lines))
         self.details.configure(state="disabled")
+
+    def _refresh_current(self):
+        if self.on_refresh_current is None:
+            return False
+        source = self.discovery.source_entry
+        confirmed = messagebox.askyesno(
+            "Refresh Current SMWC Submission",
+            (
+                f"Refresh the current data for SMWC {source.smwc_submission_id} — "
+                f"{source.title}?\n\n"
+                "This is not a replacement and does not infer any version lineage. The next "
+                "step freezes current KaizOFF metadata for this same submission ID. You can then "
+                "optionally re-download/patch its current ROM before Apply.\n\n"
+                "Nothing is changed at this step."
+            ),
+            parent=self.win,
+        )
+        if not confirmed:
+            return False
+        accepted = self.on_refresh_current(self.discovery) is not False
+        if accepted:
+            self.close()
+        return accepted
 
     def _choose_selected(self):
         selected = self.tree.selection()

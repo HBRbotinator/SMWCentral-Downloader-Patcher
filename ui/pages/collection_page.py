@@ -239,6 +239,13 @@ class CollectionPage:
         self._collection_update_rom_acquisition_poll_id = None
         self._last_collection_update_plan = None
 
+        # Same-SMWC-ID refresh/re-download stays separate from replacement semantics.
+        self.collection_current_refresh_preview_dialog = None
+        self.collection_current_refresh_progress_dialog = None
+        self._collection_current_refresh_queue = queue.Queue()
+        self._collection_current_refresh_poll_id = None
+        self._last_collection_current_refresh_plan = None
+
         # Debounce timer for scrollbar toggle
         self.scrollbar_toggle_timer = None
 
@@ -408,6 +415,18 @@ class CollectionPage:
         if self.collection_update_rom_acquisition_progress_dialog is not None:
             self.collection_update_rom_acquisition_progress_dialog.close()
             self.collection_update_rom_acquisition_progress_dialog = None
+        if self.collection_current_refresh_preview_dialog is not None:
+            self.collection_current_refresh_preview_dialog.close()
+            self.collection_current_refresh_preview_dialog = None
+        if self.collection_current_refresh_progress_dialog is not None:
+            self.collection_current_refresh_progress_dialog.close()
+            self.collection_current_refresh_progress_dialog = None
+        if self._collection_current_refresh_poll_id is not None and self.frame:
+            try:
+                self.frame.after_cancel(self._collection_current_refresh_poll_id)
+            except tk.TclError:
+                pass
+            self._collection_current_refresh_poll_id = None
         if self._collection_update_plan_poll_id is not None and self.frame:
             try:
                 self.frame.after_cancel(self._collection_update_plan_poll_id)
@@ -1797,6 +1816,12 @@ class CollectionPage:
             self.collection_update_plan_preview_dialog.lift()
             return
         if (
+            self.collection_current_refresh_preview_dialog is not None
+            and self.collection_current_refresh_preview_dialog.is_open
+        ):
+            self.collection_current_refresh_preview_dialog.lift()
+            return
+        if (
             self.collection_update_discovery_dialog is not None
             and self.collection_update_discovery_dialog.is_open
         ):
@@ -1924,6 +1949,7 @@ class CollectionPage:
             self.frame.winfo_toplevel(),
             discovery,
             on_select=self._collection_update_candidate_selected,
+            on_refresh_current=self._collection_update_current_refresh_requested,
             on_close=self._collection_update_discovery_closed,
         )
         self.collection_update_discovery_dialog.show()
@@ -2544,6 +2570,438 @@ class CollectionPage:
             parent=parent,
         )
 
+    def _collection_update_current_refresh_requested(self, discovery):
+        """Build a same-SMWC-ID immutable refresh plan from the active discovery snapshot."""
+        if (
+            self._collection_update_plan_busy
+            or self._collection_update_apply_busy
+            or self._collection_update_rom_acquisition_busy
+        ):
+            return False
+        if not self._collection_update_state_is_saved():
+            return False
+
+        source_key = str(discovery.source_collection_key)
+        parent = self.frame.winfo_toplevel()
+        from ui.collection_update_current_refresh_dialog import (
+            CollectionCurrentRefreshProgressDialog,
+        )
+
+        self._collection_update_plan_busy = True
+        self._last_collection_current_refresh_plan = None
+        self.collection_current_refresh_progress_dialog = CollectionCurrentRefreshProgressDialog(
+            parent,
+            title="Refresh Current SMWC Submission",
+            message=(
+                f"Loading current KaizOFF detail for SMWC {source_key} and freezing a same-ID "
+                "metadata refresh plan. Collection identity and ROM files are unchanged."
+            ),
+        )
+        self.collection_current_refresh_progress_dialog.show()
+        processed_json_path = str(self.data_manager.json_path)
+        self._log(
+            f"🔄 Building same-ID current-submission refresh plan for SMWC {source_key}",
+            "Information",
+        )
+
+        def worker():
+            try:
+                from collection_update_current_refresh import (
+                    finalize_current_submission_refresh_plan,
+                )
+
+                finalized = finalize_current_submission_refresh_plan(
+                    processed_json_path,
+                    source_key,
+                    force_detail_refresh=True,
+                )
+                self._collection_current_refresh_queue.put(("plan_ready", finalized))
+            except Exception as error:
+                self._collection_current_refresh_queue.put(("plan_error", error))
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="collection-current-submission-refresh-plan",
+        ).start()
+        self._poll_collection_current_refresh()
+        return True
+
+    def _poll_collection_current_refresh(self):
+        try:
+            status, payload = self._collection_current_refresh_queue.get_nowait()
+        except queue.Empty:
+            self._collection_current_refresh_poll_id = self.frame.after(
+                100,
+                self._poll_collection_current_refresh,
+            )
+            return
+
+        self._collection_current_refresh_poll_id = None
+        if self.collection_current_refresh_progress_dialog is not None:
+            self.collection_current_refresh_progress_dialog.close()
+            self.collection_current_refresh_progress_dialog = None
+
+        if status == "plan_ready":
+            self._collection_update_plan_busy = False
+            self._show_collection_current_refresh_preview(payload)
+            return
+        if status == "plan_error":
+            self._collection_update_plan_busy = False
+            self._last_collection_current_refresh_plan = None
+            self._log(f"❌ Current SMWC refresh planning failed: {payload}", "Error")
+            messagebox.showerror(
+                "Current SMWC Refresh",
+                f"Could not build the same-ID refresh plan:\n\n{payload}\n\nNothing was applied.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+        if status == "acquire_ready":
+            self._collection_update_rom_acquisition_busy = False
+            result = payload
+            self._last_collection_current_refresh_plan = result.finalized
+            self._close_collection_current_refresh_preview()
+            self._show_collection_current_refresh_preview(result.finalized)
+            if result.identical_to_existing:
+                self._log(
+                    "✅ Current SMWC download matches existing verified Collection ROM bytes",
+                    "Information",
+                )
+                messagebox.showinfo(
+                    "Current ROM Already Matches",
+                    (
+                        "The current SMWC download patched to bytes already represented by a verified "
+                        "ROM asset in Collection. The temporary duplicate was removed.\n\n"
+                        "You may still Apply Current Refresh to update the frozen catalogue metadata."
+                    ),
+                    parent=self.frame.winfo_toplevel(),
+                )
+            else:
+                self._log(
+                    f"✅ Current SMWC ROM acquired for immutable refresh preview: {result.primary_path}",
+                    "Information",
+                )
+                messagebox.showinfo(
+                    "Current ROM Acquired",
+                    (
+                        f"Created {len(result.created_paths)} non-overwriting patched ROM file(s).\n\n"
+                        f"New primary after Apply:\n{result.primary_path}\n\n"
+                        "Existing ROM assets remain retained. Collection is still unchanged until Apply."
+                    ),
+                    parent=self.frame.winfo_toplevel(),
+                )
+            return
+        if status == "acquire_error":
+            self._collection_update_rom_acquisition_busy = False
+            from collection_update_current_refresh_acquisition import (
+                CollectionCurrentRefreshAcquisitionStaleStateError,
+            )
+
+            if isinstance(payload, CollectionCurrentRefreshAcquisitionStaleStateError):
+                self._log(f"⚠️ Current-ROM acquisition became stale: {payload}", "Warning")
+                self._close_collection_current_refresh_preview()
+                self._last_collection_current_refresh_plan = None
+                messagebox.showerror(
+                    "Current ROM Acquisition Changed",
+                    f"{payload}\n\nNo Collection refresh was applied. Restart the update check.",
+                    parent=self.frame.winfo_toplevel(),
+                )
+                return
+            if (
+                self.collection_current_refresh_preview_dialog is not None
+                and self.collection_current_refresh_preview_dialog.is_open
+            ):
+                self.collection_current_refresh_preview_dialog.set_busy(False)
+            self._log(f"❌ Current-ROM acquisition failed: {payload}", "Error")
+            messagebox.showerror(
+                "Current ROM Acquisition Failed",
+                (
+                    f"Could not acquire the current SMWC ROM:\n\n{payload}\n\n"
+                    "Collection state was not changed and existing ROM files were not overwritten."
+                ),
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+
+    def _show_collection_current_refresh_preview(self, finalized):
+        from ui.collection_update_current_refresh_dialog import (
+            CollectionCurrentRefreshPreviewDialog,
+        )
+
+        self._last_collection_current_refresh_plan = finalized
+        self.collection_current_refresh_preview_dialog = CollectionCurrentRefreshPreviewDialog(
+            self.frame.winfo_toplevel(),
+            finalized,
+            on_acquire=self._collection_current_refresh_acquire_requested,
+            on_apply=self._collection_current_refresh_apply_requested,
+            on_close=self._collection_current_refresh_preview_closed,
+        )
+        self.collection_current_refresh_preview_dialog.show()
+
+    def _collection_current_refresh_preview_closed(self):
+        self.collection_current_refresh_preview_dialog = None
+
+    def _collection_current_refresh_acquire_requested(self):
+        if (
+            self._collection_update_plan_busy
+            or self._collection_update_apply_busy
+            or self._collection_update_rom_acquisition_busy
+        ):
+            return False
+        finalized = self._last_collection_current_refresh_plan
+        if finalized is None:
+            return False
+        if not self._collection_update_state_is_saved():
+            return False
+
+        config = ConfigManager()
+        base_rom_path = str(config.get("base_rom_path", "") or "")
+        output_dir = str(config.get("output_dir", "") or "")
+        if not base_rom_path or not os.path.isfile(base_rom_path):
+            messagebox.showerror(
+                "Acquire Current ROM",
+                "Configure a valid clean base ROM in Settings before acquiring the current ROM.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+        if not output_dir or not os.path.isdir(output_dir):
+            messagebox.showerror(
+                "Acquire Current ROM",
+                "Configure a valid ROM output directory in Settings before acquiring the current ROM.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+
+        from ui.collection_update_current_refresh_dialog import (
+            CollectionCurrentRefreshProgressDialog,
+        )
+        from ui.components.multi_patch_dialog import make_multi_patch_callback
+
+        parent = self.frame.winfo_toplevel()
+        callback = make_multi_patch_callback(parent)
+        self._collection_update_rom_acquisition_busy = True
+        self.collection_current_refresh_progress_dialog = CollectionCurrentRefreshProgressDialog(
+            parent,
+            title="Acquire Current SMWC ROM",
+            message=(
+                "Downloading the current reviewed SMWC archive, patching against the configured "
+                "clean base ROM, hashing the result, and publishing without overwriting existing files."
+            ),
+        )
+        self.collection_current_refresh_progress_dialog.show()
+        self._log("⬇️ Acquiring current same-ID SMWC ROM", "Information")
+
+        def worker():
+            try:
+                from collection_update_current_refresh_acquisition import (
+                    acquire_current_submission_rom,
+                )
+
+                result = acquire_current_submission_rom(
+                    str(self.data_manager.json_path),
+                    finalized,
+                    base_rom_path=base_rom_path,
+                    output_dir=output_dir,
+                    include_smwc_id_in_filename=bool(
+                        config.get("include_smwc_id_in_filename", False)
+                    ),
+                    multi_patch_callback=callback,
+                )
+                self._collection_current_refresh_queue.put(("acquire_ready", result))
+            except Exception as error:
+                self._collection_current_refresh_queue.put(("acquire_error", error))
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="collection-current-submission-rom-acquisition",
+        ).start()
+        self._poll_collection_current_refresh()
+        return True
+
+    def _collection_current_refresh_apply_requested(self):
+        if (
+            self._collection_update_plan_busy
+            or self._collection_update_apply_busy
+            or self._collection_update_rom_acquisition_busy
+        ):
+            return False
+        if self._last_collection_current_refresh_plan is None:
+            return False
+        if not self._collection_update_state_is_saved():
+            return False
+
+        from ui.collection_update_current_refresh_dialog import (
+            CollectionCurrentRefreshProgressDialog,
+        )
+
+        self._collection_update_apply_busy = True
+        parent = self.frame.winfo_toplevel()
+        self.collection_current_refresh_progress_dialog = CollectionCurrentRefreshProgressDialog(
+            parent,
+            title="Apply Current SMWC Refresh",
+            message=(
+                "Applying the frozen same-ID catalogue/ROM plan transactionally. No provider, "
+                "download, matching, or patching work occurs during Apply."
+            ),
+        )
+        self.collection_current_refresh_progress_dialog.show()
+        self._log("💾 Applying same-ID current SMWC refresh transactionally", "Information")
+        self.frame.after(1, self._execute_collection_current_refresh_apply)
+        return True
+
+    def _execute_collection_current_refresh_apply(self):
+        from collection_plan_apply import CollectionPlanRecoveryError, CollectionPlanStaleStateError
+
+        finalized = self._last_collection_current_refresh_plan
+        if finalized is None:
+            self._collection_current_refresh_apply_failed(
+                RuntimeError("Finalized current-submission refresh plan is missing.")
+            )
+            return
+        try:
+            from collection_update_current_refresh_apply import (
+                apply_finalized_current_submission_refresh,
+            )
+            from collection_update_apply import (
+                collection_update_apply_recovery_pending,
+                recover_collection_update_apply,
+            )
+
+            result = apply_finalized_current_submission_refresh(
+                str(self.data_manager.json_path),
+                finalized,
+                manager=self.data_manager,
+            )
+        except CollectionPlanStaleStateError as error:
+            self._collection_current_refresh_apply_stale(error)
+            return
+        except CollectionPlanRecoveryError as error:
+            self._collection_current_refresh_recovery_required(error)
+            return
+        except Exception as error:
+            self._collection_current_refresh_apply_failed(error)
+            return
+
+        cleanup_error = None
+        if collection_update_apply_recovery_pending(self.data_manager.json_path):
+            try:
+                recover_collection_update_apply(self.data_manager.json_path)
+            except Exception as error:
+                cleanup_error = error
+        self._collection_current_refresh_apply_succeeded(result, cleanup_error)
+
+    def _close_collection_current_refresh_progress(self):
+        if self.collection_current_refresh_progress_dialog is not None:
+            self.collection_current_refresh_progress_dialog.close()
+        self.collection_current_refresh_progress_dialog = None
+
+    def _collection_current_refresh_apply_succeeded(self, result, cleanup_error=None):
+        finalized = self._last_collection_current_refresh_plan
+        source_key = finalized.source_collection_key if finalized is not None else "current"
+        self._close_collection_current_refresh_progress()
+        self._collection_update_apply_busy = False
+        self._reload_collection_ingestion_live_state()
+        self._close_collection_current_refresh_preview()
+        self._last_collection_current_refresh_plan = None
+        cleanup_note = ""
+        if cleanup_error is not None:
+            cleanup_note = (
+                f"\n\nThe refresh committed, but journal cleanup failed: {cleanup_error}. "
+                "Recover that journal before starting another Collection transaction."
+            )
+        self._log(f"✅ Current SMWC {source_key} refresh applied transactionally", "Information")
+        messagebox.showinfo(
+            "Current SMWC Refresh Applied",
+            (
+                f"SMWC {source_key} was refreshed without changing Collection identity.\n\n"
+                f"Files written transactionally: {len(result.written_files)}\n"
+                f"Identity migrations: {result.identity_migration_count}\n\n"
+                "Existing ROM assets were retained. If a newly acquired ROM was in the plan, "
+                "it is now primary; Apply itself performed no network or patching work."
+                f"{cleanup_note}"
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _collection_current_refresh_apply_stale(self, error):
+        self._close_collection_current_refresh_progress()
+        self._collection_update_apply_busy = False
+        self._log(f"⚠️ Current SMWC refresh became stale: {error}", "Warning")
+        self._close_collection_current_refresh_preview()
+        self._last_collection_current_refresh_plan = None
+        messagebox.showerror(
+            "Current SMWC Refresh Changed",
+            f"{error}\n\nNothing from the stale same-ID refresh plan was applied. Restart the update check.",
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _collection_current_refresh_apply_failed(self, error):
+        self._close_collection_current_refresh_progress()
+        self._collection_update_apply_busy = False
+        if (
+            self.collection_current_refresh_preview_dialog is not None
+            and self.collection_current_refresh_preview_dialog.is_open
+        ):
+            self.collection_current_refresh_preview_dialog.set_busy(False)
+        self._log(f"❌ Current SMWC refresh Apply failed: {error}", "Error")
+        messagebox.showerror(
+            "Current SMWC Refresh Failed",
+            (
+                f"The transactional same-ID refresh could not be committed.\n\n{error}\n\n"
+                "No reviewed refresh change was committed. You may retry after correcting the problem."
+            ),
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _collection_current_refresh_recovery_required(self, error):
+        self._close_collection_current_refresh_progress()
+        self._collection_update_apply_busy = False
+        if (
+            self.collection_current_refresh_preview_dialog is not None
+            and self.collection_current_refresh_preview_dialog.is_open
+        ):
+            self.collection_current_refresh_preview_dialog.set_busy(False)
+        self._log(f"⚠️ Current SMWC refresh recovery required: {error}", "Warning")
+        recover_now = messagebox.askyesno(
+            "Collection Transaction Recovery Required",
+            (
+                "A coordinated Collection transaction journal already exists. Close every other "
+                "SMWC Downloader & Patcher instance first. Only recover after confirming no other "
+                f"instance is applying Collection changes.\n\n{error}\n\nRecover now?"
+            ),
+            icon="warning",
+            parent=self.frame.winfo_toplevel(),
+        )
+        if not recover_now:
+            return
+        try:
+            from collection_update_apply import recover_collection_update_apply
+
+            recover_collection_update_apply(self.data_manager.json_path)
+        except Exception as recovery_error:
+            self._log(f"❌ Current refresh recovery failed: {recovery_error}", "Error")
+            messagebox.showerror(
+                "Collection Recovery Failed",
+                str(recovery_error),
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
+        self._reload_collection_ingestion_live_state()
+        self._close_collection_current_refresh_preview()
+        self._last_collection_current_refresh_plan = None
+        messagebox.showinfo(
+            "Collection Recovery Complete",
+            "The interrupted Collection transaction was recovered. Start a fresh update check before applying anything else.",
+            parent=self.frame.winfo_toplevel(),
+        )
+
+    def _close_collection_current_refresh_preview(self):
+        dialog = self.collection_current_refresh_preview_dialog
+        self.collection_current_refresh_preview_dialog = None
+        if dialog is not None and dialog.is_open:
+            dialog.close()
+
     def _close_collection_update_plan_preview(self):
         dialog = self.collection_update_plan_preview_dialog
         self.collection_update_plan_preview_dialog = None
@@ -2555,6 +3013,7 @@ class CollectionPage:
         self._last_collection_update_merge_review = None
         self._last_collection_update_merge_decision = None
         self._last_collection_update_plan = None
+        self._last_collection_current_refresh_plan = None
 
     def _collection_update_state_is_saved(self):
         parent = self.frame.winfo_toplevel()

@@ -6,6 +6,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Same-ID current SMWC refresh
+
+- **Find Update...** now separates refreshing the current SMWC submission from explicit different-ID replacement.
+- The current numeric Collection ID can hydrate a fresh KaizOFF detail snapshot and preview a metadata-only same-ID update without identity/reference migration.
+- **Acquire Current ROM...** can download and patch the current submission before Apply; existing filenames are never overwritten, occupied names receive a numbered sibling, and byte-identical duplicates are discarded.
+- A newly acquired different ROM is added as a modern `files[]` asset with the same per-ROM SMWC provenance and becomes primary only through the reviewed transactional Apply.
+- Apply remains provider/network-free, preserves existing ROM assets and user/local fields, and fails closed on stale Collection/dependent state or changed acquired ROM bytes.
+
 ### Calibrated Save Data Sync orphan matching
 
 - Checked unmatched saves now reuse the conservative `CatalogueMatcher` and one frozen KaizOFF Index snapshot instead of exact-title-only matching.
