@@ -602,9 +602,12 @@ evidence, match saves to collection entries, and prepare completion updates.
 Manual SMWCentral selection, remembered filename associations, review-only
 startup or periodic scans, privacy-safe diagnostics, and local entries for
 non-SMWCentral hacks are supported. Save Sync uses the cached KaizOFF catalogue
-as its primary SMWC data source; direct SMWC search is reserved for explicit
-manual fallback when KaizOFF cannot satisfy the request. Save files are never
-modified, and no collection change is made until **Apply Selected** is pressed.
+as its primary SMWC data source and the calibrated Collection matcher for
+checked orphan saves: only safe Exact/Strong results resolve automatically,
+while abbreviation/partial/ambiguous matches are shown for explicit review.
+Direct SMWC search is reserved for explicit manual fallback when KaizOFF cannot
+satisfy the request. Save files are never modified, and no collection change is
+made until **Apply Selected** is pressed.
 
 Across the application, KaizOFF catalogue access is tiered by workload: the lightweight
 `/hacks/index` endpoint is used for interactive name discovery, `/hacks/{id}` hydrates

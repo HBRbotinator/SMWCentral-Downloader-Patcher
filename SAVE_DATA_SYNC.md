@@ -95,15 +95,20 @@ overwritten, and SNES saves do not provide a reliable play-time value.
 ## Matching existing collection entries
 
 Normal collection matching uses conservative normalized title and known local
-ROM-path forms. Automatic orphan resolution against SMWCentral remains strict:
-ambiguous and non-exact results are never selected silently.
+ROM-path forms. Automatic orphan resolution uses the same calibrated
+`CatalogueMatcher` as Collection ROM ingestion: Exact/Strong matches may resolve
+automatically, while abbreviations, partial titles, ambiguous candidates, and
+other guarded fuzzy matches remain explicit review suggestions. Matcher
+thresholds are not relaxed for Save Sync.
 
 Save Data Sync uses the KaizOFF public catalogue as its primary SMWC data
 provider. **Look up checked on SMWC** loads one cached KaizOFF Index snapshot
-for the review, performs strict exact-title matching locally, and fetches rich
-KaizOFF metadata only for submission IDs that actually resolve. The checked-row
-batch never fans out into direct SMWCentral API searches if KaizOFF is
-unavailable; this avoids exhausting SMWC's comparatively small rate limit.
+for the review, runs the calibrated matcher locally, and fetches rich KaizOFF
+metadata only for safe automatic resolutions. Review-only suggestions use Index
+metadata and do not trigger rich per-ID requests until the user explicitly
+selects a result. The checked-row batch never fans out into direct SMWCentral
+API searches if KaizOFF is unavailable; this avoids exhausting SMWC's
+comparatively small rate limit.
 
 An explicit manual search also uses the shared KaizOFF Index first. Direct
 SMWCentral API search is retained only as a logged fallback when KaizOFF cannot
@@ -122,12 +127,16 @@ authoritative, which allows the association to be forgotten later.
 
 ## Manual SMWCentral search
 
-For one unresolved save:
+For one unresolved or review-suggested save:
 
-1. Select the save on the unresolved/import tab.
+1. Select the save on the unresolved/import tab. Review-suggested rows show the
+   top candidate and matcher confidence but are never checked automatically.
 2. Choose **Search Selected...**.
-3. Enter a free-text query.
-4. Review ranked catalogue results and whether each SMWC ID is already in the collection. KaizOFF Index rows may show a neutral **Catalogue** release state until the selected ID is hydrated.
+3. Enter a free-text query if the filename-derived query needs adjustment.
+4. Review ranked catalogue results and whether each SMWC ID is already in the
+   collection. When a checked lookup produced a review suggestion, that SMWC ID
+   is preselected if it is present in the manual result set. KaizOFF Index rows
+   may show a neutral **Catalogue** release state until the selected ID is hydrated.
 5. Explicitly choose **Use Selected**.
 6. Keep the row checked and press **Apply Selected**.
 

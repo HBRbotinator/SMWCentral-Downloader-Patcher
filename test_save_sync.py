@@ -777,6 +777,34 @@ class DiagnosticReportTest(unittest.TestCase):
             {"exists": 1, "no_match": 1, "not_attempted": 1, "resolved": 1},
         )
 
+    def test_report_includes_review_only_catalogue_suggestion_evidence(self):
+        candidate = self._candidate(
+            save_name="CR2.srm",
+            hack_id="",
+            resolution=save_sync.RESOLUTION_REVIEW,
+        )
+        candidate.suggested_hack_id = "40504"
+        candidate.suggested_title = "Chain Reaction 2"
+        candidate.suggested_difficulty = "Advanced"
+        candidate.suggested_classification = "Abbreviation - review"
+        candidate.suggested_confidence = 0.92
+        candidate.suggested_margin = 0.20
+        candidate.suggested_candidates = (
+            {"hack_id": "40504", "title": "Chain Reaction 2", "score": 0.92},
+        )
+
+        report = save_sync.build_diagnostic_report([candidate])
+        row = report["candidates"][0]
+
+        self.assertFalse(row["match"]["effective"])
+        self.assertEqual("review", row["resolution"]["status"])
+        self.assertEqual("40504", row["resolution"]["suggestion"]["hack_id"])
+        self.assertEqual(
+            "Abbreviation - review",
+            row["resolution"]["suggestion"]["classification"],
+        )
+        self.assertEqual(0.92, row["resolution"]["suggestion"]["confidence"])
+
     def test_candidate_rows_expose_effective_match_source(self):
         candidates = [
             self._candidate(save_name="Direct.srm", hack_id="42"),

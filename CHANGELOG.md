@@ -6,6 +6,12 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Calibrated Save Data Sync orphan matching
+
+- Checked unmatched saves now reuse the conservative `CatalogueMatcher` and one frozen KaizOFF Index snapshot instead of exact-title-only matching.
+- Safe Exact/Strong results resolve automatically; abbreviation, partial-title, ambiguous, and guarded fuzzy candidates remain unchecked review suggestions with match confidence.
+- Review suggestions do not hydrate rich metadata until explicit selection, manual search preselects the suggested SMWC ID when available, and diagnostics retain the ranked suggestion evidence.
+
 ### Collection import review ergonomics and diagnostics
 
 - Collection import keeps Save, Save & Next, and Reset controls visible below the scrollable detail pane so repeated review no longer requires scrolling to the bottom for every decision.

@@ -113,6 +113,71 @@ class KaizOffFirstAutomaticLookupTest(unittest.TestCase):
         self.assertEqual([100, 200], provider.detail_calls)
         self.assertEqual([], fallback_calls)
 
+
+    def test_checked_lookup_uses_calibrated_filename_normalization_for_safe_matches(self):
+        entries = (
+            CatalogueEntry(100, "Deep Sea Retrograde", "Expert", "Kaizo", 12),
+            CatalogueEntry(200, "Ultra Kaizo World 2", "Advanced", "Kaizo", 20),
+            CatalogueEntry(300, "Flying Horse", "Advanced", "Kaizo", 8),
+        )
+        provider = FakeProvider(
+            entries,
+            {
+                100: _metadata(100, "Deep Sea Retrograde"),
+                200: _metadata(200, "Ultra Kaizo World 2"),
+                300: _metadata(300, "Flying Horse"),
+            },
+        )
+        lookup = SaveSyncCatalogueLookup(provider=provider)
+
+        deep = lookup.resolve_automatic("DeepSeaRetrograde1.1.srm", set())
+        ultra = lookup.resolve_automatic("UltraKaizoWorld2 1.2 (Censored).srm", set())
+        horse = lookup.resolve_automatic("Flying Horse1.0.srm", set())
+
+        self.assertEqual(("100", "200", "300"), tuple(
+            result["hack_id"] for result in (deep, ultra, horse)
+        ))
+        self.assertTrue(all(result["status"] == save_sync.RESOLUTION_RESOLVED
+                            for result in (deep, ultra, horse)))
+        self.assertTrue(all(result["match_classification"] in {"Exact", "Strong"}
+                            for result in (deep, ultra, horse)))
+        self.assertEqual([100, 200, 300], provider.detail_calls)
+        self.assertEqual(1, provider.index_calls)
+
+    def test_abbreviation_is_suggested_for_review_without_rich_lookup(self):
+        entries = (
+            CatalogueEntry(100, "Chain Reaction 2", "Advanced", "Kaizo", 12),
+            CatalogueEntry(200, "Another Hack", "Expert", "Kaizo", 20),
+        )
+        provider = FakeProvider(
+            entries,
+            {100: _metadata(100, "Chain Reaction 2")},
+        )
+        lookup = SaveSyncCatalogueLookup(provider=provider)
+
+        resolution = lookup.resolve_automatic("CR2.srm", set())
+
+        self.assertEqual(save_sync.RESOLUTION_REVIEW, resolution["status"])
+        self.assertEqual("100", resolution["suggestion"]["hack_id"])
+        self.assertEqual("Chain Reaction 2", resolution["suggestion"]["title"])
+        self.assertEqual("Abbreviation - review", resolution["suggestion"]["classification"])
+        self.assertGreater(resolution["suggestion"]["confidence"], 0.80)
+        self.assertEqual([], provider.detail_calls)
+
+    def test_weak_unmatched_guess_is_not_presented_as_review_suggestion(self):
+        entries = (
+            CatalogueEntry(100, "Bunbun World", "Advanced", "Kaizo", 12),
+            CatalogueEntry(200, "Some Other Hack", "Expert", "Kaizo", 20),
+        )
+        provider = FakeProvider(entries)
+        lookup = SaveSyncCatalogueLookup(provider=provider)
+
+        resolution = lookup.resolve_automatic("Bui Bui World.srm", set())
+
+        self.assertEqual(save_sync.RESOLUTION_NO_MATCH, resolution["status"])
+        self.assertNotIn("suggestion", resolution)
+        self.assertEqual([], provider.detail_calls)
+
     def test_bulk_lookup_does_not_fall_back_to_direct_smwc_when_index_is_unavailable(self):
         provider = FakeProvider(())
         provider.index_error = KaizOffProviderError("offline")
@@ -226,6 +291,9 @@ class SaveSyncKaizOffUiContractTest(unittest.TestCase):
         self.assertIn("lookup_service.search_manual", source)
         self.assertIn("lookup_service.resolve_selected_option", source)
         self.assertIn("manual search can use SMWC fallback", source)
+        self.assertIn('save_sync.RESOLUTION_REVIEW: "Review suggested"', source)
+        self.assertIn('label = f"{classification} {score:.0%}"', source)
+        self.assertIn("suggested_hack_id", source)
 
 
 if __name__ == "__main__":

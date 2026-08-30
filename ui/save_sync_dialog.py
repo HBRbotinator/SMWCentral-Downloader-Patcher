@@ -51,6 +51,7 @@ _RESOLUTION_LABEL = {
     save_sync.RESOLUTION_EXISTS: "In collection",
     save_sync.RESOLUTION_NO_MATCH: "No match",
     save_sync.RESOLUTION_AMBIGUOUS: "Ambiguous",
+    save_sync.RESOLUTION_REVIEW: "Review suggested",
     save_sync.RESOLUTION_ERROR: "Lookup error",
     save_sync.RESOLUTION_LOCAL: "Create local",
 }
@@ -287,6 +288,10 @@ class ManualSmwcSearchDialog:
             return
 
         options = result.get("options", [])
+        suggested_iid = None
+        suggested_hack_id = str(
+            getattr(self.candidate, "suggested_hack_id", "") or ""
+        )
         for option in options:
             obsolete = option.get("obsolete")
             if obsolete is True:
@@ -307,6 +312,13 @@ class ManualSmwcSearchDialog:
                 ),
             )
             self.options[iid] = option
+            if str(option.get("hack_id", "")) == suggested_hack_id:
+                suggested_iid = iid
+
+        if suggested_iid is not None:
+            self.result_tree.selection_set(suggested_iid)
+            self.result_tree.focus(suggested_iid)
+            self.result_tree.see(suggested_iid)
 
         if result.get("status") == save_sync.RESOLUTION_ERROR:
             message = "SMWC catalogue search failed. Check the log and try again."
@@ -999,10 +1011,10 @@ class SaveSyncDialog:
 
         ttk.Label(
             tab,
-            text="These saves matched no hack in your collection. Use the checked "
-                 "lookup for strict exact-title matches, or select one row and search "
-                 "SMWCentral manually for abbreviations and alternate names, "
-                 "or create a local entry for a non-SMWC hack.",
+            text="These saves matched no hack in your collection. Checked lookup uses "
+                 "the calibrated KaizOFF matcher: safe matches resolve automatically, "
+                 "while abbreviations and other plausible matches are suggested for "
+                 "review. Select a row to search manually or create a local entry.",
             wraplength=780, foreground="gray",
         ).pack(anchor="w", pady=(0, 8))
 
@@ -1015,7 +1027,7 @@ class SaveSyncDialog:
                 "check": ("", 34, "center", False),
                 "file": ("Save File", 220, "w", True),
                 "confidence": ("Confidence", 92, "center", False),
-                "result": ("Result", 105, "w", False),
+                "result": ("Result", 145, "w", False),
                 "hack": ("Resolved Hack", 215, "w", True),
                 "difficulty": ("Difficulty", 105, "w", False),
             },
@@ -1270,7 +1282,15 @@ class SaveSyncDialog:
         label = _RESOLUTION_LABEL.get(cand.resolution, cand.resolution)
         hack_name = cand.title if cand.resolution in _ORPHAN_ACTIONABLE else ""
         difficulty = ""
-        if cand.resolution == save_sync.RESOLUTION_RESOLVED and cand.resolved_hack:
+        if cand.resolution == save_sync.RESOLUTION_REVIEW:
+            score = float(getattr(cand, "suggested_confidence", 0.0) or 0.0)
+            classification = str(
+                getattr(cand, "suggested_classification", "") or "Review"
+            )
+            label = f"{classification} {score:.0%}"
+            hack_name = str(getattr(cand, "suggested_title", "") or "")
+            difficulty = str(getattr(cand, "suggested_difficulty", "") or "")
+        elif cand.resolution == save_sync.RESOLUTION_RESOLVED and cand.resolved_hack:
             difficulty = save_sync._smwc_entry_fields(
                 cand.resolved_hack
             )["current_difficulty"]

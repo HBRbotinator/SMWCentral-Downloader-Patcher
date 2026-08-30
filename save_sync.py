@@ -76,6 +76,7 @@ RESOLUTION_RESOLVED = "resolved"     # confident single SMWC match, not in colle
 RESOLUTION_EXISTS = "exists"         # resolved to a hack already in the collection
 RESOLUTION_NO_MATCH = "no_match"     # SMWC search returned no exact-title match
 RESOLUTION_AMBIGUOUS = "ambiguous"   # multiple exact matches, can't auto-pick
+RESOLUTION_REVIEW = "review"       # plausible catalogue suggestion; explicit choice required
 RESOLUTION_ERROR = "error"           # network / API error during lookup
 RESOLUTION_LOCAL = "local"           # user-defined non-SMWC collection entry
 SEARCH_RESULTS = "results"         # manual search returned options
@@ -405,6 +406,14 @@ class SyncCandidate:
     local_entry: object = None
     match_source: str = ""
     manual_selection: bool = False
+    # Detached catalogue suggestion evidence for review-only Save Sync matches.
+    suggested_hack_id: str = ""
+    suggested_title: str = ""
+    suggested_difficulty: str = ""
+    suggested_classification: str = ""
+    suggested_confidence: float = 0.0
+    suggested_margin: float = 0.0
+    suggested_candidates: tuple[dict, ...] = ()
 
     @property
     def completed_date(self):
@@ -562,6 +571,19 @@ def _diagnostic_candidate(candidate):
         "resolution": {
             "status": str(candidate.resolution or RESOLUTION_NONE),
             "resolved_hack_id": str(candidate.resolved_hack_id or ""),
+            "suggestion": (
+                {
+                    "hack_id": str(candidate.suggested_hack_id or ""),
+                    "title": str(candidate.suggested_title or ""),
+                    "difficulty": str(candidate.suggested_difficulty or ""),
+                    "classification": str(candidate.suggested_classification or ""),
+                    "confidence": round(float(candidate.suggested_confidence or 0.0), 6),
+                    "margin": round(float(candidate.suggested_margin or 0.0), 6),
+                    "candidates": [dict(item) for item in candidate.suggested_candidates],
+                }
+                if candidate.suggested_hack_id
+                else None
+            ),
         },
     }
 
@@ -1170,6 +1192,35 @@ def attach_resolution(candidate, resolution, data_manager, mark_all=False):
     candidate.resolved_hack = hack
     candidate.resolved_hack_id = hack_id
     candidate.local_entry = local_entry
+
+    suggestion = resolution.get("suggestion")
+    if isinstance(suggestion, dict):
+        candidate.suggested_hack_id = str(suggestion.get("hack_id", "") or "")
+        candidate.suggested_title = str(suggestion.get("title", "") or "")
+        candidate.suggested_difficulty = str(suggestion.get("difficulty", "") or "")
+        candidate.suggested_classification = str(
+            suggestion.get("classification", "") or ""
+        )
+        try:
+            candidate.suggested_confidence = float(suggestion.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            candidate.suggested_confidence = 0.0
+        try:
+            candidate.suggested_margin = float(suggestion.get("margin", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            candidate.suggested_margin = 0.0
+        raw_candidates = suggestion.get("candidates") or ()
+        candidate.suggested_candidates = tuple(
+            dict(item) for item in raw_candidates if isinstance(item, dict)
+        )
+    else:
+        candidate.suggested_hack_id = ""
+        candidate.suggested_title = ""
+        candidate.suggested_difficulty = ""
+        candidate.suggested_classification = ""
+        candidate.suggested_confidence = 0.0
+        candidate.suggested_margin = 0.0
+        candidate.suggested_candidates = ()
 
     if status == RESOLUTION_EXISTS and hack_id in data_manager.data:
         existing = data_manager.data[hack_id]

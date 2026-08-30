@@ -68,11 +68,12 @@ class SaveSyncCatalogueLookup:
         return self._entries
 
     def resolve_automatic(self, save_name: str, existing_ids: Iterable[str]) -> dict:
-        """Resolve one save strictly through the shared KaizOFF catalogue.
+        """Resolve one save through the shared KaizOFF Index and calibrated matcher.
 
-        Direct SMWCentral fallback is intentionally disabled here because this
-        method is used by the multi-row lookup button and could otherwise issue
-        one rate-limited SMWC request per checked save.
+        Only matcher results already classified as safe automatic selections are
+        hydrated and resolved. Plausible abbreviation/partial/fuzzy results are
+        returned as review-only suggestions without any rich-detail request.
+        Direct SMWCentral fallback remains disabled for this bulk path.
         """
 
         query = save_sync.make_search_query(save_name)
@@ -93,31 +94,86 @@ class SaveSyncCatalogueLookup:
                 error=str(exc),
             )
 
-        target = save_sync._normalize(save_name)
-        exact = [entry for entry in entries if save_sync._normalize(entry.title) == target]
-        if not exact:
-            return self._resolution(save_sync.RESOLUTION_NO_MATCH)
+        matcher = CatalogueMatcher(entries)
+        match = matcher.find(query)
 
-        hydrated = []
-        for entry in exact:
+        # Preserve the established duplicate-exact-title behavior: if the only
+        # ambiguity is multiple identical title rows, rich active/obsolete state
+        # may safely identify one current submission.
+        exact_rows = tuple(
+            ranked.entry for ranked in match.ranked if ranked.exact
+        )
+        if match.classification == "Ambiguous" and len(exact_rows) > 1:
+            hydrated = []
+            for entry in exact_rows:
+                try:
+                    hydrated.append(
+                        self._legacy_hack(
+                            self.provider.get_hack(entry.smwc_submission_id).metadata
+                        )
+                    )
+                except Exception as exc:
+                    self._write_log(
+                        f"KaizOFF detail lookup failed for SMWC "
+                        f"{entry.smwc_submission_id}: {exc}",
+                        "Error",
+                    )
+                    return self._resolution(save_sync.RESOLUTION_ERROR, error=str(exc))
+            live = [
+                hack
+                for hack in hydrated
+                if not (hack.get("raw_fields", {}) or {}).get("obsolete")
+            ]
+            if len(live) == 1:
+                return self._resolved_hack(live[0], existing_ids)
+
+        if match.auto_selected and match.selected is not None:
             try:
-                hydrated.append(self._legacy_hack(self.provider.get_hack(entry.smwc_submission_id).metadata))
+                hack = self._legacy_hack(
+                    self.provider.get_hack(match.selected.smwc_submission_id).metadata
+                )
             except Exception as exc:
                 self._write_log(
-                    f"KaizOFF detail lookup failed for SMWC {entry.smwc_submission_id}: {exc}",
+                    f"KaizOFF detail lookup failed for SMWC "
+                    f"{match.selected.smwc_submission_id}: {exc}",
                     "Error",
                 )
                 return self._resolution(save_sync.RESOLUTION_ERROR, error=str(exc))
+            result = self._resolved_hack(hack, existing_ids)
+            result.update(
+                match_classification=match.classification,
+                match_confidence=float(match.confidence),
+                match_margin=float(match.margin),
+            )
+            return result
 
-        if len(hydrated) > 1:
-            live = [hack for hack in hydrated if not (hack.get("raw_fields", {}) or {}).get("obsolete")]
-            if len(live) == 1:
-                hydrated = live
-            else:
-                return self._resolution(save_sync.RESOLUTION_AMBIGUOUS)
+        if match.suggestion is not None and match.classification != "Unmatched":
+            suggestion = self._suggestion_payload(match)
+            self._write_log(
+                f"Save Data Sync suggests SMWC {suggestion['hack_id']} "
+                f"'{suggestion['title']}' for '{save_name}' "
+                f"({match.classification}, {match.confidence:.0%}); review required.",
+                "Debug",
+            )
+            return self._resolution(
+                save_sync.RESOLUTION_REVIEW,
+                suggestion=suggestion,
+                match_classification=match.classification,
+                match_confidence=float(match.confidence),
+                match_margin=float(match.margin),
+            )
 
-        hack = hydrated[0]
+        return self._resolution(
+            save_sync.RESOLUTION_NO_MATCH,
+            match_classification=match.classification,
+            match_confidence=float(match.confidence),
+            match_margin=float(match.margin),
+        )
+
+    def _resolved_hack(self, hack: dict, existing_ids: Iterable[str]) -> dict:
         hack_id = str(hack.get("id", ""))
+        if not hack_id:
+            return self._resolution(save_sync.RESOLUTION_NO_MATCH)
         existing = {str(value) for value in existing_ids}
         status = (
             save_sync.RESOLUTION_EXISTS
@@ -125,6 +181,37 @@ class SaveSyncCatalogueLookup:
             else save_sync.RESOLUTION_RESOLVED
         )
         return self._resolution(status, hack=hack, hack_id=hack_id)
+
+    @staticmethod
+    def _suggestion_payload(match) -> dict:
+        suggestion = match.suggestion
+        candidates = []
+        for ranked in match.ranked[:5]:
+            if ranked.score < 0.48 and not (
+                ranked.exact
+                or ranked.core_exact
+                or ranked.articleless_exact
+                or ranked.abbreviation_match
+                or ranked.phrase_match
+            ):
+                continue
+            candidates.append(
+                {
+                    "hack_id": str(ranked.entry.smwc_submission_id),
+                    "title": ranked.entry.title,
+                    "difficulty": ranked.entry.difficulty,
+                    "score": round(float(ranked.score), 6),
+                }
+            )
+        return {
+            "hack_id": str(suggestion.smwc_submission_id),
+            "title": suggestion.title,
+            "difficulty": suggestion.difficulty,
+            "classification": match.classification,
+            "confidence": round(float(match.confidence), 6),
+            "margin": round(float(match.margin), 6),
+            "candidates": candidates,
+        }
 
     def search_manual(self, query: str, existing_ids: Iterable[str], limit: int = 50) -> dict:
         """Search the KaizOFF Index locally, falling back once to direct SMWC."""
