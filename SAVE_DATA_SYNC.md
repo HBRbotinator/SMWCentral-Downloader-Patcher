@@ -173,21 +173,25 @@ Associations whose target no longer exists are pruned safely.
 
 ## Local save-backed entries
 
-A save for a hack outside SMWCentral can create an explicit local collection
-entry.
+A save for a hack outside SMWCentral can attach to an existing local Collection
+record or create a separate local entry.
 
 1. Select one unresolved save.
-2. Choose **Create Local Entry...**.
-3. Enter a collection title and total exit count.
-4. Confirm the prepared resolution.
-5. Press **Apply Selected**.
+2. Choose **Local Entry...**.
+3. If plausible existing `usr_*` records are shown, explicitly choose one to
+   attach to or choose **Create a separate local Collection entry**.
+4. For a new entry, enter a collection title and total exit count.
+5. Confirm the prepared resolution and press **Apply Selected**.
 
-The entry is marked internally with `local_save_entry: true` and receives the
-same opaque local Collection identity used by other ingestion sources:
-`usr_<16 lowercase hex characters>`. The ID is randomly allocated and is not
-derived from the save filename, entered title, ROM hash, or absolute path.
+A newly created Save Sync entry is marked internally with `local_save_entry: true`
+and receives the same opaque local Collection identity used by other ingestion
+sources: `usr_<16 lowercase hex characters>`. The ID is randomly allocated and
+is not derived from the save filename, entered title, ROM hash, or absolute path.
 
-A total of `0` means unknown and keeps the progress uncertain.
+A total of `0` means unknown and keeps the progress uncertain. Existing-local
+suggestions are review-only; normalized title similarity never merges records by
+itself. If an existing local record is explicitly selected, Save Sync preserves its
+identity/metadata and remembers the save association for later scans.
 
 On later scans the explicit saved association is used. The Completion tab can:
 

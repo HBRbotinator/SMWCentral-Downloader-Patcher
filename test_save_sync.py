@@ -1558,7 +1558,7 @@ class LocalSaveEntryTest(unittest.TestCase):
             Path(__file__).parent / "ui" / "save_sync_dialog.py"
         ).read_text(encoding="utf-8")
         self.assertIn("class LocalSaveEntryDialog", source)
-        self.assertIn('text="Create Local Entry..."', source)
+        self.assertIn('text="Local Entry..."', source)
         self.assertIn("save_sync.resolution_for_local_entry", source)
         self.assertIn("save_sync.import_local_orphan", source)
         self.assertIn("Apply Selected", source)

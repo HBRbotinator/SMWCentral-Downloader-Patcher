@@ -47,6 +47,10 @@ from giganticbucket_ingestion import (
     resolve_giganticbucket_hack_against_catalogue,
 )
 from hack_data_manager import HackDataManager
+from local_collection_matching import (
+    LocalCollectionEntry,
+    snapshot_local_collection_entries,
+)
 from kaizoff_provider import (
     KaizOffCatalogueProvider,
     KaizOffDetailSnapshot,
@@ -126,6 +130,7 @@ class CollectionIngestionSession:
     groups: tuple[ReconciliationGroup, ...]
     review_entries: tuple[CandidateReviewEntry, ...]
     suppressed_roms: tuple[SuppressedRom, ...]
+    local_collection_entries: tuple[LocalCollectionEntry, ...] = ()
 
     @property
     def blocking_groups(self) -> tuple[ReconciliationGroup, ...]:
@@ -259,6 +264,7 @@ def build_collection_ingestion_session(
         groups=groups,
         review_entries=tuple(sorted(reviews, key=lambda item: item.candidate_id)),
         suppressed_roms=tuple(sorted(suppressed, key=lambda item: (item.path.casefold(), item.sha256))),
+        local_collection_entries=snapshot_local_collection_entries(state.records),
     )
 
 

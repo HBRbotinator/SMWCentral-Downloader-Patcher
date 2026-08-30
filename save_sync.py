@@ -40,7 +40,11 @@ from save_analysis import (
     SaveAnalysis,
     analyze_save,
 )
-from collection_reconciliation import generate_local_collection_id
+from collection_reconciliation import generate_local_collection_id, is_local_collection_key
+from local_collection_matching import (
+    find_local_collection_matches,
+    snapshot_local_collection_entries,
+)
 from collection_rating import parse_smwc_rating
 
 # --- SMW SRAM layout ---------------------------------------------------------
@@ -993,6 +997,33 @@ def remove_local_entry(data_manager, config_manager, hack_id):
     if config_manager is not None and retained != associations:
         config_manager.set(ASSOCIATION_CONFIG_KEY, associations)
     return False, 0
+
+
+def local_collection_matches(records, title_hints, limit=5):
+    """Return review-only suggestions among existing opaque local records."""
+
+    entries = snapshot_local_collection_entries(records)
+    return find_local_collection_matches(title_hints, entries, limit=limit)
+
+
+def resolution_for_existing_local_entry(hack_id, records):
+    """Build an explicit resolution attaching a save to an existing usr_* record."""
+
+    target = str(hack_id or "")
+    record = dict(records or {}).get(target)
+    if not is_local_collection_key(target) or not isinstance(record, dict):
+        return {
+            "status": RESOLUTION_NO_MATCH,
+            "hack": None,
+            "hack_id": "",
+            "local_entry": None,
+        }
+    return {
+        "status": RESOLUTION_EXISTS,
+        "hack": None,
+        "hack_id": target,
+        "local_entry": None,
+    }
 
 
 def resolution_for_local_entry(save_name, title, total_exits, existing_ids):

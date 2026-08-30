@@ -9,6 +9,7 @@ from typing import Mapping
 
 from collection_ingestion_session import CollectionIngestionSession
 from collection_reconciliation import ReviewDecision
+from local_collection_matching import find_local_collection_matches
 
 
 REPORT_VERSION = 1
@@ -117,6 +118,17 @@ def build_diagnostic_report(
 
     groups = []
     for group in session.groups:
+        local_hints = tuple(
+            dict.fromkeys(
+                str(title).strip()
+                for member in group.members
+                for title in member.candidate.title_hints
+                if str(title).strip()
+            )
+        )
+        local_matches = find_local_collection_matches(
+            local_hints, session.local_collection_entries
+        )
         members = []
         for member in group.members:
             review = review_by_id.get(member.candidate_id)
@@ -161,6 +173,17 @@ def build_diagnostic_report(
                     for issue in group.issues
                 ],
                 "rom_hash_count": len(group.rom_hashes),
+                "existing_local_suggestions": [
+                    {
+                        "collection_id": item.target_key,
+                        "title": item.title,
+                        "confidence": item.confidence,
+                        "difficulty": item.difficulty,
+                        "type": list(item.hack_types),
+                        "exits": item.exits,
+                    }
+                    for item in local_matches
+                ],
                 "members": members,
                 "decision": _decision_summary(decision_map.get(group.group_id)),
             }

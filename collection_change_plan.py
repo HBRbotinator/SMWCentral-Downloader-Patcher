@@ -1011,6 +1011,14 @@ def finalize_collection_change_plan(
             raise PlanFinalizationError(str(error)) from error
         if target_key is None:
             raise PlanFinalizationError("Non-skipped group finalized without a target.")
+        if (
+            decision is not None
+            and decision.action is ReviewAction.ATTACH_LOCAL
+            and target_key not in existing_keys
+        ):
+            raise PlanFinalizationError(
+                "Local attachment target is not in the reviewed Collection state."
+            )
 
         migration, reference_migration = _identity_migration_operation(
             group,

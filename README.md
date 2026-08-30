@@ -82,7 +82,7 @@ The current build contract publishes a native tarball rather than an AppImage. E
 
 ### Collection import review and diagnostics
 
-Collection ROM-folder/GiganticBucket review keeps the frequently used **Save**, **Save & Next**, and **Reset** controls fixed below the selected-item detail pane. A single retained ROM is shown as Primary automatically; long catalogue result fields remain horizontally scrollable instead of disappearing outside the review pane.
+Collection ROM-folder/GiganticBucket review keeps the frequently used **Save**, **Save & Next**, and **Reset** controls fixed below the selected-item detail pane. A single retained ROM is shown as Primary automatically; long catalogue result fields remain horizontally scrollable instead of disappearing outside the review pane. When an unresolved ROM title resembles an existing opaque `usr_*` Collection record, that record is shown in a separate local-match list. Attaching the ROM to it is always an explicit review choice; title similarity never auto-merges local identities.
 
 **Export Diagnostics...** writes a troubleshooting JSON snapshot of the frozen review session, matcher classifications/suggestions, ROM filenames and SHA-256 values, saved decisions, combined-ROM choices, and any finalization error. It deliberately excludes absolute filesystem paths, raw ROM bytes, and imported history record IDs.
 

@@ -68,6 +68,8 @@ class CollectionIngestionReviewDialog:
         self.suggestion_detail_label = None
         self._suggestion_targets = {}
         self._suggestion_rows = {}
+        self.local_tree = None
+        self._local_targets = {}
         self._current_group_id = None
         self._action_var = None
         self._rom_action_vars = {}
@@ -384,6 +386,8 @@ class CollectionIngestionReviewDialog:
         self.suggestion_detail_label = None
         self._suggestion_targets = {}
         self._suggestion_rows = {}
+        self.local_tree = None
+        self._local_targets = {}
         self._action_var = None
         self._rom_action_vars = {}
         self._rom_primary_var = None
@@ -544,6 +548,44 @@ class CollectionIngestionReviewDialog:
             self._populate_suggestions(context.suggestions)
             self._restore_target_selection(previous, proposed)
 
+        if needs_identity and context.local_suggestions:
+            ttk.Label(
+                frame,
+                text="Existing local Collection matches (suggestions only)",
+                font=("Segoe UI", 9, "bold"),
+            ).pack(anchor="w", pady=(8, 3))
+            local_holder = ttk.Frame(frame)
+            local_holder.pack(fill="x")
+            local_columns = ("title", "id", "difficulty", "type", "exits", "score")
+            self.local_tree = ttk.Treeview(
+                local_holder,
+                columns=local_columns,
+                show="headings",
+                height=min(3, len(context.local_suggestions)),
+                selectmode="browse",
+            )
+            local_specs = {
+                "title": ("Local hack", 210),
+                "id": ("Collection ID", 145),
+                "difficulty": ("Difficulty", 90),
+                "type": ("Type", 75),
+                "exits": ("Exits", 45),
+                "score": ("Match", 55),
+            }
+            for column, (label, width) in local_specs.items():
+                self.local_tree.heading(column, text=label)
+                self.local_tree.column(column, width=width, minwidth=40, anchor="w")
+            local_scroll = ttk.Scrollbar(
+                local_holder, orient="horizontal", command=self.local_tree.xview
+            )
+            self.local_tree.configure(xscrollcommand=local_scroll.set)
+            self.local_tree.grid(row=0, column=0, sticky="ew")
+            local_scroll.grid(row=1, column=0, sticky="ew")
+            local_holder.columnconfigure(0, weight=1)
+            self._populate_local_suggestions(context.local_suggestions)
+            self.local_tree.bind("<<TreeviewSelect>>", self._local_suggestion_selected)
+            self._restore_local_selection(previous)
+
         if needs_identity:
             ttk.Radiobutton(
                 frame,
@@ -551,9 +593,16 @@ class CollectionIngestionReviewDialog:
                 variable=self._action_var,
                 value=ReviewAction.USE_TARGET.value,
             ).pack(anchor="w", pady=(6, 0))
+            if context.local_suggestions:
+                ttk.Radiobutton(
+                    frame,
+                    text="Attach to selected existing local Collection entry",
+                    variable=self._action_var,
+                    value=ReviewAction.ATTACH_LOCAL.value,
+                ).pack(anchor="w")
             ttk.Radiobutton(
                 frame,
-                text="Import as a local/manual Collection entry",
+                text="Create a separate local/manual Collection entry",
                 variable=self._action_var,
                 value=ReviewAction.IMPORT_LOCAL.value,
             ).pack(anchor="w")
@@ -597,6 +646,46 @@ class CollectionIngestionReviewDialog:
                     variable=self._action_var,
                     value=ReviewAction.IGNORE.value,
                 ).pack(anchor="w")
+
+    def _populate_local_suggestions(self, suggestions):
+        self._local_targets = {}
+        if not self.local_tree:
+            return
+        for item in self.local_tree.get_children():
+            self.local_tree.delete(item)
+        for index, suggestion in enumerate(suggestions):
+            iid = f"local:{index}:{suggestion.target_key}"
+            self.local_tree.insert(
+                "",
+                "end",
+                iid=iid,
+                values=(
+                    suggestion.title,
+                    suggestion.target_key,
+                    suggestion.difficulty or "-",
+                    ", ".join(suggestion.hack_types) or "-",
+                    "-" if suggestion.exits is None else suggestion.exits,
+                    f"{suggestion.confidence:.0%}",
+                ),
+            )
+            self._local_targets[iid] = suggestion.target_key
+
+    def _restore_local_selection(self, previous):
+        if (
+            previous is None
+            or previous.action is not ReviewAction.ATTACH_LOCAL
+            or not self.local_tree
+        ):
+            return
+        for iid, target in self._local_targets.items():
+            if target == previous.target_key:
+                self.local_tree.selection_set(iid)
+                self.local_tree.see(iid)
+                return
+
+    def _local_suggestion_selected(self, _event=None):
+        if self._action_var is not None:
+            self._action_var.set(ReviewAction.ATTACH_LOCAL.value)
 
     def _populate_suggestions(self, suggestions):
         self._suggestion_targets = {}
@@ -864,6 +953,14 @@ class CollectionIngestionReviewDialog:
             return ""
         return self._suggestion_targets.get(selected[0], "")
 
+    def _selected_local_target(self):
+        if not self.local_tree:
+            return ""
+        selected = self.local_tree.selection()
+        if len(selected) != 1:
+            return ""
+        return self._local_targets.get(selected[0], "")
+
     def _build_rom_selection(self, group):
         if not self._rom_action_vars:
             return None
@@ -908,6 +1005,12 @@ class CollectionIngestionReviewDialog:
             target = self._selected_target()
             if not target:
                 raise CollectionIngestionReviewError("Select a KaizOFF result first.")
+        elif action is ReviewAction.ATTACH_LOCAL:
+            target = self._selected_local_target()
+            if not target:
+                raise CollectionIngestionReviewError(
+                    "Select an existing local Collection entry first."
+                )
 
         rom_selection = self._build_rom_selection(group)
         user_fields = tuple(
@@ -930,7 +1033,7 @@ class CollectionIngestionReviewDialog:
             )
 
         remembered = ()
-        if action is ReviewAction.USE_TARGET:
+        if action in {ReviewAction.USE_TARGET, ReviewAction.ATTACH_LOCAL}:
             remembered = tuple(
                 RememberedAssociationDecision(source=source, value=value)
                 for source, value, var in self._remember_vars

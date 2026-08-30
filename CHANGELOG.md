@@ -7,6 +7,13 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Cross-source local Collection reconciliation
+
+- ROM-folder review now surfaces plausible existing `usr_*` Collection records separately from KaizOFF results and requires an explicit **Attach to selected existing local Collection entry** choice before adding ROM assets to one.
+- Save Data Sync's local-entry dialog likewise offers review-only existing-local suggestions before creating another opaque local record, and an explicit attachment remembers the save association for later scans.
+- Local title similarity is suggestion evidence only: it never merges, renames, or derives a `usr_*` identity automatically.
+- Collection import diagnostics include the existing-local candidates and match confidence shown during review.
+
 ### Identity-safe duplicate-title downloads
 
 - Legacy Download no longer treats a numerically higher SMWC submission ID as proof that an equal-title submission is newer or that lower IDs are obsolete.

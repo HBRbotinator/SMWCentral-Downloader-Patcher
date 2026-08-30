@@ -417,21 +417,28 @@ class ManualSmwcSearchDialog:
 
 
 class LocalSaveEntryDialog:
-    """Modal editor for a non-SMWC save-backed collection entry."""
+    """Choose an existing local Collection record or create a separate one."""
 
-    def __init__(self, parent, candidate, existing_ids, on_selected=None):
+    def __init__(self, parent, candidate, existing_records, on_selected=None):
         self.parent = parent
         self.candidate = candidate
-        self.existing_ids = set(existing_ids)
+        self.existing_records = dict(existing_records or {})
         self.on_selected = on_selected
         self.win = None
         self.title_var = None
         self.exits_var = None
+        self.mode_var = None
+        self.local_tree = None
+        self.local_targets = {}
+        self.local_matches = save_sync.local_collection_matches(
+            self.existing_records,
+            save_sync.make_search_query(self.candidate.save_name),
+        )
 
     def show(self):
         self.win = tk.Toplevel(self.parent)
-        self.win.title(f"Create Local Entry - {self.candidate.save_name}")
-        self.win.geometry("520x230")
+        self.win.title(f"Local Collection Entry - {self.candidate.save_name}")
+        self.win.geometry("680x440" if self.local_matches else "560x300")
         self.win.transient(self.parent)
         self.win.grab_set()
 
@@ -439,10 +446,73 @@ class LocalSaveEntryDialog:
         container.pack(fill="both", expand=True)
         ttk.Label(
             container,
-            text="Create a collection entry for a hack that is not listed on "
-                 "SMWCentral. The save file remains unchanged.",
-            wraplength=480,
-        ).pack(anchor="w", pady=(0, 12))
+            text=(
+                "This save is not being linked to SMWCentral. Attach it to an "
+                "existing local Collection entry when it is the same hack, or "
+                "create a separate local record. Title similarity is never an "
+                "automatic identity decision."
+            ),
+            wraplength=640,
+        ).pack(anchor="w", pady=(0, 10))
+
+        self.mode_var = tk.StringVar(value="" if self.local_matches else "create")
+        if self.local_matches:
+            ttk.Radiobutton(
+                container,
+                text="Attach this save to the selected existing local entry",
+                variable=self.mode_var,
+                value="attach",
+            ).pack(anchor="w", pady=(0, 4))
+            holder = ttk.Frame(container)
+            holder.pack(fill="x", pady=(0, 10))
+            columns = ("title", "id", "difficulty", "type", "exits", "score")
+            self.local_tree = ttk.Treeview(
+                holder,
+                columns=columns,
+                show="headings",
+                height=min(4, len(self.local_matches)),
+                selectmode="browse",
+            )
+            specs = {
+                "title": ("Local hack", 220),
+                "id": ("Collection ID", 145),
+                "difficulty": ("Difficulty", 90),
+                "type": ("Type", 75),
+                "exits": ("Exits", 45),
+                "score": ("Match", 55),
+            }
+            for column, (label, width) in specs.items():
+                self.local_tree.heading(column, text=label)
+                self.local_tree.column(column, width=width, minwidth=40, anchor="w")
+            hscroll = ttk.Scrollbar(holder, orient="horizontal", command=self.local_tree.xview)
+            self.local_tree.configure(xscrollcommand=hscroll.set)
+            self.local_tree.grid(row=0, column=0, sticky="ew")
+            hscroll.grid(row=1, column=0, sticky="ew")
+            holder.columnconfigure(0, weight=1)
+            for index, match in enumerate(self.local_matches):
+                iid = f"local:{index}:{match.target_key}"
+                self.local_tree.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    values=(
+                        match.title,
+                        match.target_key,
+                        match.difficulty or "-",
+                        ", ".join(match.hack_types) or "-",
+                        "-" if match.exits is None else match.exits,
+                        f"{match.confidence:.0%}",
+                    ),
+                )
+                self.local_targets[iid] = match.target_key
+            self.local_tree.bind("<<TreeviewSelect>>", self._local_selected)
+
+        ttk.Radiobutton(
+            container,
+            text="Create a separate local Collection entry",
+            variable=self.mode_var,
+            value="create",
+        ).pack(anchor="w", pady=(2, 4))
 
         form = ttk.Frame(container)
         form.pack(fill="x")
@@ -465,17 +535,17 @@ class LocalSaveEntryDialog:
 
         ttk.Label(
             container,
-            text="Use 0 when the total is unknown. Progress will remain "
-                 "uncertain until a total is supplied.",
+            text=(
+                "Creation fields are used only when creating a separate record. "
+                "Use 0 exits when the total is unknown."
+            ),
             foreground="gray",
-            wraplength=480,
-        ).pack(anchor="w", pady=(8, 0))
+            wraplength=640,
+        ).pack(anchor="w", pady=(6, 0))
 
         buttons = ttk.Frame(container)
-        buttons.pack(fill="x", pady=(14, 0))
-        ttk.Button(buttons, text="Create", command=self._confirm).pack(
-            side="right"
-        )
+        buttons.pack(fill="x", pady=(12, 0))
+        ttk.Button(buttons, text="Continue", command=self._confirm).pack(side="right")
         ttk.Button(buttons, text="Cancel", command=self.win.destroy).pack(
             side="right", padx=(0, 8)
         )
@@ -495,17 +565,50 @@ class LocalSaveEntryDialog:
         title_entry.selection_range(0, "end")
         return self.win
 
+    def _local_selected(self, _event=None):
+        if self.mode_var is not None:
+            self.mode_var.set("attach")
+
+    def _selected_local_target(self):
+        if self.local_tree is None:
+            return ""
+        selected = self.local_tree.selection()
+        if len(selected) != 1:
+            return ""
+        return self.local_targets.get(selected[0], "")
+
     def _confirm(self):
-        try:
-            resolution = save_sync.resolution_for_local_entry(
-                self.candidate.save_name,
-                self.title_var.get(),
-                self.exits_var.get(),
-                self.existing_ids,
+        mode = self.mode_var.get().strip() if self.mode_var is not None else ""
+        if mode == "attach":
+            target = self._selected_local_target()
+            if not target:
+                messagebox.showerror(
+                    "Save Data Sync",
+                    "Select the existing local Collection entry to attach this save to.",
+                    parent=self.win,
+                )
+                return
+            resolution = save_sync.resolution_for_existing_local_entry(
+                target, self.existing_records
             )
-        except ValueError as exc:
+        elif mode == "create":
+            try:
+                resolution = save_sync.resolution_for_local_entry(
+                    self.candidate.save_name,
+                    self.title_var.get(),
+                    self.exits_var.get(),
+                    self.existing_records.keys(),
+                )
+            except ValueError as exc:
+                messagebox.showerror(
+                    "Save Data Sync", str(exc), parent=self.win
+                )
+                return
+        else:
             messagebox.showerror(
-                "Save Data Sync", str(exc), parent=self.win
+                "Save Data Sync",
+                "Choose whether to attach to an existing local entry or create a separate one.",
+                parent=self.win,
             )
             return
 
@@ -1059,7 +1162,7 @@ class SaveSyncDialog:
         )
         self.manual_search_button.pack(side="left", padx=(12, 0))
         self.local_entry_button = ttk.Button(
-            controls, text="Create Local Entry...",
+            controls, text="Local Entry...",
             command=self._create_local_entry_selected,
         )
         self.local_entry_button.pack(side="left", padx=(8, 0))
@@ -1159,7 +1262,7 @@ class SaveSyncDialog:
         dialog = LocalSaveEntryDialog(
             self.win,
             candidate,
-            self.data_manager.data.keys(),
+            self.data_manager.data,
             on_selected=lambda resolution: self._set_orphan_resolution(
                 iid, resolution, manual=True
             ),

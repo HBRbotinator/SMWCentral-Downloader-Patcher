@@ -81,6 +81,7 @@ class ReviewAction(str, Enum):
 
     ACCEPT = "accept"
     USE_TARGET = "use_target"
+    ATTACH_LOCAL = "attach_local"
     IMPORT_LOCAL = "import_local"
     CONFIRM_MIGRATION = "confirm_migration"
     KEEP_SEPARATE = "keep_separate"
@@ -639,10 +640,16 @@ def validate_review_decision(
         ReviewState.UNMATCHED,
     }
     if states.intersection(identity_states):
-        if decision.action not in {ReviewAction.USE_TARGET, ReviewAction.IMPORT_LOCAL}:
+        if decision.action not in {
+            ReviewAction.USE_TARGET,
+            ReviewAction.ATTACH_LOCAL,
+            ReviewAction.IMPORT_LOCAL,
+        }:
             raise ReconciliationError("Identity review requires a target or local import.")
-        if decision.action is ReviewAction.USE_TARGET and not decision.target_key:
-            raise ReconciliationError("USE_TARGET requires an explicit Collection key.")
+        if decision.action in {ReviewAction.USE_TARGET, ReviewAction.ATTACH_LOCAL} and not decision.target_key:
+            raise ReconciliationError("Selected-target review requires an explicit Collection key.")
+        if decision.action is ReviewAction.ATTACH_LOCAL and not is_local_collection_key(decision.target_key):
+            raise ReconciliationError("ATTACH_LOCAL requires an existing opaque usr_* target.")
 
     if ReviewState.IDENTITY_MIGRATION in states:
         if decision.action not in {
@@ -704,7 +711,10 @@ def resolved_target_key(
         if not is_local_collection_key(local_identity):
             raise ReconciliationError("Local import allocation must use opaque usr_* identity.")
         return local_identity
-    if decision is not None and decision.action is ReviewAction.USE_TARGET:
+    if decision is not None and decision.action in {
+        ReviewAction.USE_TARGET,
+        ReviewAction.ATTACH_LOCAL,
+    }:
         return decision.target_key
     if decision is not None and decision.action in {
         ReviewAction.CONFIRM_MIGRATION,

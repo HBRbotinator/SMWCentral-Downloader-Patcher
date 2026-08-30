@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from collection_ingestion import IngestionSource
+from local_collection_matching import (
+    LocalCollectionMatch,
+    find_local_collection_matches,
+)
 from collection_ingestion_session import (
     CatalogueSuggestion,
     CollectionIngestionSession,
@@ -91,6 +95,7 @@ class GroupReviewContext:
     group: ReconciliationGroup
     row: ReviewRow
     suggestions: tuple[CatalogueSuggestion, ...]
+    local_suggestions: tuple[LocalCollectionMatch, ...]
     candidate_reasons: tuple[str, ...]
     rememberable_aliases: tuple[tuple[IngestionSource, str], ...]
 
@@ -239,10 +244,23 @@ class CollectionIngestionReviewModel:
                 key=lambda item: (-item.confidence, _target_sort_key(item.target_key)),
             )
         )
+        local_hints = tuple(
+            dict.fromkeys(
+                str(title).strip()
+                for member in group.members
+                for title in member.candidate.title_hints
+                if str(title).strip()
+            )
+        )
+        local_suggestions = find_local_collection_matches(
+            local_hints,
+            self.session.local_collection_entries,
+        )
         return GroupReviewContext(
             group=group,
             row=self._row_for_group(group),
             suggestions=ordered,
+            local_suggestions=local_suggestions,
             candidate_reasons=tuple(reasons),
             rememberable_aliases=tuple(aliases),
         )
@@ -300,6 +318,9 @@ class CollectionIngestionReviewModel:
         for entry in self.session.catalogue_entries:
             if str(entry.smwc_submission_id) == target_key:
                 return entry.title
+        for entry in self.session.local_collection_entries:
+            if entry.target_key == target_key:
+                return entry.title
         return f"SMWC {target_key}" if target_key.isdecimal() else target_key
 
 
@@ -322,7 +343,7 @@ def _display_target(
     decision: ReviewDecision | None,
 ) -> str:
     if decision is not None:
-        if decision.action is ReviewAction.USE_TARGET:
+        if decision.action in {ReviewAction.USE_TARGET, ReviewAction.ATTACH_LOCAL}:
             return decision.target_key
         if decision.action is ReviewAction.IMPORT_LOCAL:
             return "Local entry"
