@@ -212,6 +212,39 @@ class CollectionReconciliationTest(unittest.TestCase):
         self.assertEqual((ReviewState.AMBIGUOUS,), ambiguous.review_states)
         self.assertEqual((ReviewState.IDENTITY_CONFLICT,), conflict.review_states)
 
+    def test_guarded_suggestion_does_not_share_identity_bucket_with_safe_match(self):
+        groups = build_reconciliation_groups(
+            (
+                _resolution(
+                    "bunbun",
+                    _candidate(
+                        "Bunbun World",
+                        roms=(_rom("C:/ROMs/bunbunworld1.0.sfc", "a" * 64),),
+                    ),
+                    MatchBasis.AUTO_TITLE,
+                    "20177",
+                ),
+                _resolution(
+                    "bui-bui",
+                    _candidate(
+                        "Bui Bui World",
+                        roms=(_rom("C:/ROMs/Bui Bui World.sfc", "b" * 64),),
+                    ),
+                    MatchBasis.SUGGESTED_TITLE,
+                    "20177",
+                ),
+            )
+        )
+
+        self.assertEqual(2, len(groups))
+        by_member = {group.members[0].candidate_id: group for group in groups}
+        self.assertEqual("proposal:20177", by_member["bunbun"].group_id)
+        self.assertTrue(by_member["bui-bui"].group_id.startswith("review-sha256:"))
+        self.assertEqual(
+            (ReviewState.NEEDS_CONFIRMATION,),
+            by_member["bui-bui"].review_states,
+        )
+
     def test_unmatched_item_may_resolve_to_explicit_local_allocation(self):
         group = build_reconciliation_groups(
             (_resolution("local", _candidate("Super Bui Bui World"), MatchBasis.UNMATCHED),)

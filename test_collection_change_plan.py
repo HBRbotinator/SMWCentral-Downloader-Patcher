@@ -522,6 +522,93 @@ class CollectionChangePlanTest(unittest.TestCase):
         self.assertEqual("C:/ROMs/Hack.sfc", plan.ignored_roms[0].path)
         self.assertEqual("a" * 64, plan.ignored_roms[0].sha256)
 
+    def test_existing_target_merges_rom_assets_from_separate_review_groups(self):
+        direct_group = build_reconciliation_groups(
+            (
+                _resolution(
+                    "akogare-exact",
+                    _candidate(
+                        "Akogare Mario World",
+                        roms=(_rom("C:/ROMs/Akogare Mario World v1.0.sfc", "a" * 64),),
+                    ),
+                    MatchBasis.DIRECT,
+                    "18612",
+                    existing_collection_key="18612",
+                ),
+            )
+        )[0]
+        review_group = build_reconciliation_groups(
+            (
+                _resolution(
+                    "akogare-short",
+                    _candidate(
+                        "Akogare",
+                        roms=(_rom("C:/ROMs/Akogare v1.2.sfc", "b" * 64),),
+                    ),
+                    MatchBasis.SUGGESTED_TITLE,
+                    "18612",
+                    existing_collection_key="18612",
+                ),
+            )
+        )[0]
+        decision = ReviewDecision(
+            group_id=review_group.group_id,
+            action=ReviewAction.USE_TARGET,
+            target_key="18612",
+        )
+
+        plan = finalize_collection_change_plan(
+            (direct_group, review_group),
+            {review_group.group_id: decision},
+            existing_collection_keys=("18612",),
+        )
+
+        self.assertEqual(1, len(plan.rom_updates))
+        operation = plan.rom_updates[0]
+        self.assertEqual("18612", operation.target_key)
+        self.assertTrue(operation.preserve_existing_primary)
+        self.assertEqual("", operation.primary_path)
+        self.assertEqual(
+            {
+                "C:/ROMs/Akogare Mario World v1.0.sfc",
+                "C:/ROMs/Akogare v1.2.sfc",
+            },
+            {asset.path for asset in operation.assets},
+        )
+
+    def test_new_target_convergence_with_multiple_primary_choices_fails_actionably(self):
+        first = build_reconciliation_groups(
+            (
+                _resolution(
+                    "first",
+                    _candidate(roms=(_rom("C:/ROMs/Hack.sfc", "a" * 64),)),
+                    MatchBasis.AUTO_TITLE,
+                    "123",
+                ),
+            )
+        )[0]
+        second = build_reconciliation_groups(
+            (
+                _resolution(
+                    "second",
+                    _candidate(roms=(_rom("C:/ROMs/Hack Alt.sfc", "b" * 64),)),
+                    MatchBasis.SUGGESTED_TITLE,
+                    "123",
+                ),
+            )
+        )[0]
+        decision = ReviewDecision(
+            group_id=second.group_id,
+            action=ReviewAction.USE_TARGET,
+            target_key="123",
+        )
+
+        with self.assertRaisesRegex(PlanFinalizationError, "converged.*primary ROM"):
+            finalize_collection_change_plan(
+                (first, second),
+                {second.group_id: decision},
+            )
+
     def test_source_scoped_remembered_match_is_part_of_final_plan(self):
         group = _group(
             _resolution(

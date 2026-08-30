@@ -6,6 +6,12 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Collection import target reconciliation safety
+
+- Guarded/review-only catalogue suggestions no longer define reconciliation grouping identity; unrelated ROMs remain separate until the user explicitly confirms a target.
+- Separate reviewed groups that converge on an existing Collection target now safely merge their ROM asset additions while preserving the existing primary ROM.
+- Unsafe convergence with competing primary choices fails closed with an explicit combined-ROM review message instead of a generic conflicting-operation error.
+
 ### KaizOFF-first core catalogue access
 
 - Moderated SMWC catalogue reads now choose the cheapest suitable KaizOFF public endpoint: Index + per-ID detail for sparse name searches, and the cached paginated full-record catalogue for broad/rich/bulk workloads.

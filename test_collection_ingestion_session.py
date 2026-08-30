@@ -219,6 +219,57 @@ class CollectionIngestionSessionTest(unittest.TestCase):
         self.assertNotEqual("19279", resolution.target_key)
         self.assertIn(ReviewState.NEEDS_CONFIRMATION, session.groups[0].review_states)
 
+    def test_weak_bui_bui_suggestion_stays_separate_from_bunbun_world_match(self):
+        fixture = _Fixture()
+        self.addCleanup(fixture.close)
+        scan = RomLibraryScan(
+            root="C:/ROMs",
+            roms=(
+                _rom(
+                    "C:/ROMs/bunbunworld1.0.sfc",
+                    "a" * 64,
+                    "bunbunworld1.0",
+                ),
+                _rom(
+                    "C:/ROMs/Bui Bui World.sfc",
+                    "b" * 64,
+                    "Bui Bui World",
+                ),
+            ),
+            duplicate_groups=(),
+        )
+
+        session = build_collection_ingestion_session(
+            fixture.manager,
+            fixture.hints_store,
+            _index(
+                _entry(20177, "Bunbun World", "Advanced"),
+                _entry(24356, "Bunbun World 2", "Advanced"),
+            ),
+            rom_scan=scan,
+        )
+
+        self.assertEqual(2, len(session.groups))
+        resolutions = {
+            member.candidate.title_hints[0]: member
+            for group in session.groups
+            for member in group.members
+        }
+        self.assertEqual(MatchBasis.AUTO_TITLE, resolutions["bunbunworld1.0"].match_basis)
+        self.assertEqual(MatchBasis.SUGGESTED_TITLE, resolutions["Bui Bui World"].match_basis)
+        self.assertEqual("20177", resolutions["Bui Bui World"].target_key)
+        bui_group = next(
+            group
+            for group in session.groups
+            if any(
+                member.candidate.title_hints[0] == "Bui Bui World"
+                for member in group.members
+            )
+        )
+        self.assertEqual(1, len(bui_group.rom_files))
+        self.assertIn(ReviewState.NEEDS_CONFIRMATION, bui_group.review_states)
+        self.assertNotIn(ReviewState.ROM_SELECTION_REQUIRED, bui_group.review_states)
+
     def test_title_matched_different_rom_hashes_share_review_group_but_require_selection(self):
         fixture = _Fixture()
         self.addCleanup(fixture.close)

@@ -760,6 +760,77 @@ def _dedupe_equal_by_key(items, key, label: str):
     return tuple(result[value] for value in sorted(result))
 
 
+def _merge_rom_asset_operations(
+    items: Sequence[RomAssetsOperation],
+) -> tuple[RomAssetsOperation, ...]:
+    """Merge safe same-target ROM additions produced by separate review groups."""
+
+    grouped: dict[str, list[RomAssetsOperation]] = {}
+    for item in items:
+        grouped.setdefault(item.target_key, []).append(item)
+
+    merged = []
+    for target_key in sorted(grouped):
+        operations = grouped[target_key]
+        if len(operations) == 1:
+            merged.append(operations[0])
+            continue
+
+        assets_by_path: dict[str, PlannedRomAsset] = {}
+        asset_order: list[str] = []
+        primary_paths = set()
+        preserve_existing_primary = False
+        for operation in operations:
+            preserve_existing_primary = (
+                preserve_existing_primary or operation.preserve_existing_primary
+            )
+            if operation.primary_path:
+                primary_paths.add(operation.primary_path)
+            for asset in operation.assets:
+                previous = assets_by_path.get(asset.path)
+                if previous is not None and previous != asset:
+                    raise PlanFinalizationError(
+                        "Reviewed groups converged on Collection target "
+                        f"{target_key!r} with conflicting ROM evidence for "
+                        f"{asset.path!r}."
+                    )
+                if previous is None:
+                    assets_by_path[asset.path] = asset
+                    asset_order.append(asset.path)
+
+        if len(primary_paths) > 1:
+            raise PlanFinalizationError(
+                "Reviewed groups converged on Collection target "
+                f"{target_key!r} with more than one primary ROM choice. "
+                "Review the converged ROM variants together before finalizing."
+            )
+
+        primary_path = next(iter(primary_paths), "")
+        if primary_path:
+            # An explicit primary choice is stronger than another group's default
+            # request to preserve an existing primary.
+            preserve_existing_primary = False
+        elif not preserve_existing_primary:
+            if len(asset_order) == 1:
+                primary_path = asset_order[0]
+            else:
+                raise PlanFinalizationError(
+                    "Reviewed groups converged on new Collection target "
+                    f"{target_key!r} with multiple ROM variants. Review the "
+                    "combined variants and choose one primary ROM before finalizing."
+                )
+
+        merged.append(
+            RomAssetsOperation(
+                target_key=target_key,
+                assets=tuple(assets_by_path[path] for path in asset_order),
+                primary_path=primary_path,
+                preserve_existing_primary=preserve_existing_primary,
+            )
+        )
+    return tuple(merged)
+
+
 def finalize_collection_change_plan(
     groups: Sequence[ReconciliationGroup],
     decisions: Mapping[str, ReviewDecision] | None = None,
@@ -901,11 +972,7 @@ def finalize_collection_change_plan(
         key=lambda item: item.target_key,
         label="local record seed",
     )
-    rom_updates = _dedupe_equal_by_key(
-        rom_updates,
-        key=lambda item: item.target_key,
-        label="ROM asset",
-    )
+    rom_updates = _merge_rom_asset_operations(rom_updates)
     history_updates = _dedupe_equal_by_key(
         history_updates,
         key=lambda item: item.target_key,

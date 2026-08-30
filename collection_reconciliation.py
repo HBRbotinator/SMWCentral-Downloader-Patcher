@@ -408,6 +408,17 @@ def _bucket_key(
 ) -> str:
     if member.migration is not None:
         return f"migration:{member.migration.source_key}->{member.migration.target_key}"
+
+    # Guarded title suggestions are review evidence, not established identity.
+    # Keep them isolated until the user explicitly confirms a target so an
+    # unrelated ROM cannot be folded into another hack merely because that
+    # hack was its least-bad catalogue suggestion.
+    if member.match_basis is MatchBasis.SUGGESTED_TITLE:
+        hashes = _unique_rom_hashes(member)
+        if len(hashes) == 1:
+            return f"review-sha256:{hashes[0]}"
+        return f"review-candidate:{member.candidate_id}"
+
     if member.target_key:
         if member.target_key in established_targets:
             return f"target:{member.target_key}"
