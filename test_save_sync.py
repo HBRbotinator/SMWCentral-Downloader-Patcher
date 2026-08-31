@@ -1053,6 +1053,7 @@ class ManualOrphanSearchUiTest(unittest.TestCase):
         self.assertIn("save_sync.search_orphan_options", source)
         self.assertIn("save_sync.resolution_for_selected_hack", source)
         self.assertIn("No result is chosen automatically.", source)
+        self.assertIn("self.win.after_idle(self._start_search)", source)
 
     def test_manual_search_runs_off_tk_main_thread(self):
         source = self._source()
@@ -1397,6 +1398,18 @@ class StartupSaveScanTest(unittest.TestCase):
             "self.frame.after(2000, self.start_save_sync_auto_scan)",
             source,
         )
+
+    def test_scan_proactively_matches_unresolved_saves_before_review(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("lookup_service.resolve_automatic_many(", source)
+        self.assertIn("save_sync.attach_resolution(", source)
+        self.assertIn("lookup_service=lookup_service", source)
+        self.assertIn("Save Data Sync initial catalogue lookup failed", source)
+        self.assertNotIn("apply_candidates(candidates", source)
 
     def test_startup_scan_is_noninteractive_and_retains_review_candidates(self):
         from pathlib import Path

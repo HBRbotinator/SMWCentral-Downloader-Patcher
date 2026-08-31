@@ -37,6 +37,7 @@ class SettingsPage:
         self._auto_scan_started = False
         self._auto_scan_running = False
         self._pending_auto_scan_candidates = []
+        self._pending_auto_scan_lookup_service = None
         self._periodic_scan_job = None
 
     def update_theme_colors(self):
@@ -1727,6 +1728,7 @@ class SettingsPage:
             return
         if not auto:
             self._pending_auto_scan_candidates = []
+            self._pending_auto_scan_lookup_service = None
 
         available = self._available_save_directories(interactive=not auto)
         if not available:
@@ -1762,6 +1764,7 @@ class SettingsPage:
         def worker():
             error = None
             candidates = []
+            lookup_service = None
             try:
                 hacks = data_manager.get_all_hacks(include_obsolete=False)
                 existing_ids = {str(hack.get("id", "")) for hack in hacks}
@@ -1782,19 +1785,43 @@ class SettingsPage:
                     mark_all=mark_all,
                     associations=associations,
                 )
+
+                unmatched = [candidate for candidate in candidates if not candidate.hack_id]
+                if unmatched:
+                    try:
+                        from save_sync_catalogue import SaveSyncCatalogueLookup
+
+                        lookup_service = SaveSyncCatalogueLookup(
+                            processed_json_path=getattr(data_manager, "json_path", None),
+                            log=self.logger.log if self.logger else None,
+                        )
+                        resolutions = lookup_service.resolve_automatic_many(
+                            [candidate.save_name for candidate in unmatched],
+                            existing_ids,
+                        )
+                        for candidate, resolution in zip(unmatched, resolutions):
+                            save_sync.attach_resolution(
+                                candidate, resolution, data_manager, mark_all
+                            )
+                    except Exception as lookup_error:
+                        if self.logger:
+                            self.logger.log(
+                                f"Save Data Sync initial catalogue lookup failed: {lookup_error}",
+                                "Warning",
+                            )
             except Exception as exc:
                 error = exc
 
             self.frame.after(
                 0,
                 lambda: self._on_scan_complete(
-                    candidates, error, auto=auto
+                    candidates, error, auto=auto, lookup_service=lookup_service
                 ),
             )
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_scan_complete(self, candidates, error, auto=False):
+    def _on_scan_complete(self, candidates, error, auto=False, lookup_service=None):
         """Handle manual results or retain startup results for later review."""
 
         import save_sync
@@ -1827,7 +1854,9 @@ class SettingsPage:
                 collection=collection,
             )
             self._pending_auto_scan_candidates = review_candidates
+            self._pending_auto_scan_lookup_service = lookup_service
             if not review_candidates:
+                self._pending_auto_scan_lookup_service = None
                 self.review_auto_scan_button.config(state="disabled")
                 self.save_sync_status_label.config(
                     text="Auto-scan: no changes to review",
@@ -1839,14 +1868,14 @@ class SettingsPage:
                 candidate.status == save_sync.STATUS_COMPLETED
                 for candidate in review_candidates
             )
-            unmatched = sum(
+            imports_or_review = sum(
                 not candidate.hack_id for candidate in review_candidates
             )
             self.review_auto_scan_button.config(state="normal")
             self.save_sync_status_label.config(
                 text=(
                     f"Auto-scan ready: {completions} completion(s) · "
-                    f"{unmatched} unmatched"
+                    f"{imports_or_review} import/review"
                 ),
                 foreground=STATUS_COLOR_SUCCESS,
             )
@@ -1870,10 +1899,13 @@ class SettingsPage:
             candidate for candidate in candidates if not candidate.hack_id
         ]
         self.save_sync_status_label.config(
-            text=f"{len(matched)} matched · {len(unmatched)} unmatched",
+            text=(
+                f"{len(matched)} collection match(es) · "
+                f"{len(unmatched)} import/review"
+            ),
             foreground=STATUS_COLOR_SUCCESS,
         )
-        self._show_save_sync_dialog(candidates)
+        self._show_save_sync_dialog(candidates, lookup_service=lookup_service)
 
     def _review_auto_scan(self):
         """Open retained results only when they still require review."""
@@ -1886,6 +1918,8 @@ class SettingsPage:
             collection=collection,
         )
         self._pending_auto_scan_candidates = []
+        lookup_service = self._pending_auto_scan_lookup_service
+        self._pending_auto_scan_lookup_service = None
         self.review_auto_scan_button.config(state="disabled")
         if not candidates:
             self.save_sync_status_label.config(
@@ -1893,9 +1927,9 @@ class SettingsPage:
                 foreground=STATUS_COLOR_SUCCESS,
             )
             return
-        self._show_save_sync_dialog(candidates)
+        self._show_save_sync_dialog(candidates, lookup_service=lookup_service)
 
-    def _show_save_sync_dialog(self, candidates):
+    def _show_save_sync_dialog(self, candidates, lookup_service=None):
         """Open the existing review dialog; no scan path applies directly."""
 
         from ui.save_sync_dialog import SaveSyncDialog
@@ -1909,5 +1943,6 @@ class SettingsPage:
             on_applied=reload_cb,
             mark_all=self.save_sync_mark_all_var.get(),
             config_manager=self.setup_section.config,
+            lookup_service=lookup_service,
         )
         dialog.show()

@@ -9,6 +9,9 @@ from kaizoff_provider import KaizOffCatalogueProvider, KaizOffProviderError
 from rom_title_matching import CatalogueEntry, CatalogueMatcher
 
 
+BULK_RICH_DETAIL_THRESHOLD = 25
+
+
 class SaveSyncCatalogueLookup:
     """Share one KaizOFF catalogue snapshot across a Save Data Sync review.
 
@@ -37,6 +40,7 @@ class SaveSyncCatalogueLookup:
         self._entries: tuple[CatalogueEntry, ...] | None = None
         self._index_error: Exception | None = None
         self._fallback_announced = False
+        self._bulk_details: dict[int, Any] = {}
 
     def _write_log(self, message: str, level: str = "Information") -> None:
         if not self.log:
@@ -95,6 +99,21 @@ class SaveSyncCatalogueLookup:
             )
 
         matcher = CatalogueMatcher(entries)
+        return self._resolve_automatic_with_matcher(
+            save_name, existing_ids, matcher, query=query
+        )
+
+    def _resolve_automatic_with_matcher(
+        self,
+        save_name: str,
+        existing_ids: Iterable[str],
+        matcher: CatalogueMatcher,
+        *,
+        query: str | None = None,
+    ) -> dict:
+        query = query if query is not None else save_sync.make_search_query(save_name)
+        if not query:
+            return self._resolution(save_sync.RESOLUTION_NO_MATCH)
         match = matcher.find(query)
 
         # Preserve the established duplicate-exact-title behavior: if the only
@@ -109,7 +128,7 @@ class SaveSyncCatalogueLookup:
                 try:
                     hydrated.append(
                         self._legacy_hack(
-                            self.provider.get_hack(entry.smwc_submission_id).metadata
+                            self._detail_metadata(entry.smwc_submission_id)
                         )
                     )
                 except Exception as exc:
@@ -130,7 +149,7 @@ class SaveSyncCatalogueLookup:
         if match.auto_selected and match.selected is not None:
             try:
                 hack = self._legacy_hack(
-                    self.provider.get_hack(match.selected.smwc_submission_id).metadata
+                    self._detail_metadata(match.selected.smwc_submission_id)
                 )
             except Exception as exc:
                 self._write_log(
@@ -169,6 +188,101 @@ class SaveSyncCatalogueLookup:
             match_confidence=float(match.confidence),
             match_margin=float(match.margin),
         )
+
+    def resolve_automatic_many(
+        self,
+        save_names: Iterable[str],
+        existing_ids: Iterable[str],
+        *,
+        bulk_detail_threshold: int = BULK_RICH_DETAIL_THRESHOLD,
+    ) -> tuple[dict, ...]:
+        """Resolve a scan batch through one frozen KaizOFF Index snapshot.
+
+        Matching itself is local.  When more than ``bulk_detail_threshold``
+        distinct safe/duplicate-exact matches need rich metadata, prime those
+        details from KaizOFF's paginated rich catalogue once instead of issuing
+        dozens of singular detail requests.  Missing catalogue rows (for
+        example obsolete submissions) still fall back to KaizOFF per-ID detail.
+        Direct SMWCentral fallback remains disabled for this automatic path.
+        """
+
+        names = tuple(str(name or "") for name in save_names)
+        existing = {str(value) for value in existing_ids}
+        if not names:
+            return ()
+        try:
+            entries = self._index()
+        except KaizOffProviderError as exc:
+            self._write_log(
+                "KaizOFF catalogue is unavailable for Save Data Sync automatic scan lookup; "
+                "direct SMWCentral fallback was not started to avoid rate limiting. "
+                "Use manual search for an explicit fallback lookup.",
+                "Warning",
+            )
+            return tuple(
+                self._resolution(
+                    save_sync.RESOLUTION_ERROR,
+                    catalogue_unavailable=True,
+                    error=str(exc),
+                )
+                for _name in names
+            )
+
+        matcher = CatalogueMatcher(entries)
+        detail_ids: set[int] = set()
+        for save_name in names:
+            query = save_sync.make_search_query(save_name)
+            if not query:
+                continue
+            match = matcher.find(query)
+            exact_rows = tuple(ranked.entry for ranked in match.ranked if ranked.exact)
+            if match.classification == "Ambiguous" and len(exact_rows) > 1:
+                detail_ids.update(entry.smwc_submission_id for entry in exact_rows)
+            elif match.auto_selected and match.selected is not None:
+                detail_ids.add(match.selected.smwc_submission_id)
+
+        threshold = max(1, int(bulk_detail_threshold))
+        if len(detail_ids) > threshold:
+            self._prime_bulk_details(detail_ids)
+
+        return tuple(
+            self._resolve_automatic_with_matcher(name, existing, matcher)
+            for name in names
+        )
+
+    def _prime_bulk_details(self, identifiers: Iterable[int]) -> None:
+        wanted = {int(identifier) for identifier in identifiers}
+        if not wanted:
+            return
+        try:
+            snapshot = self.provider.get_catalogue()
+        except Exception as exc:
+            self._write_log(
+                f"KaizOFF bulk catalogue hydration failed; falling back to "
+                f"per-hack KaizOFF details: {exc}",
+                "Warning",
+            )
+            return
+
+        loaded = 0
+        for metadata in snapshot.records:
+            identifier = int(metadata.smwc_submission_id)
+            if identifier in wanted:
+                self._bulk_details[identifier] = metadata
+                loaded += 1
+        stale = " stale-cache" if snapshot.stale else ""
+        self._write_log(
+            f"Save Data Sync bulk-hydrated {loaded}/{len(wanted)} matched hacks "
+            f"from KaizOFF catalogue ({snapshot.source}{stale}).",
+            "Debug",
+        )
+
+    def _detail_metadata(self, identifier: int):
+        identifier = int(identifier)
+        metadata = self._bulk_details.get(identifier)
+        if metadata is not None:
+            return metadata
+        return self.provider.get_hack(identifier).metadata
 
     def _resolved_hack(self, hack: dict, existing_ids: Iterable[str]) -> dict:
         hack_id = str(hack.get("id", ""))

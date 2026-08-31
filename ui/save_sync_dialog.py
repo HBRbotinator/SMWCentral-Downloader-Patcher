@@ -189,7 +189,8 @@ class ManualSmwcSearchDialog:
 
         ttk.Label(
             container,
-            text="Search SMWCentral manually, select the correct hack, then "
+            text="The initial search runs automatically using this save name. "
+                 "Change the search text if needed, select the correct hack, then "
                  "confirm the selection. No result is chosen automatically.",
             wraplength=720,
         ).pack(anchor="w", pady=(0, 10))
@@ -252,6 +253,7 @@ class ManualSmwcSearchDialog:
         self._center()
         entry.focus_set()
         entry.selection_range(0, "end")
+        self.win.after_idle(self._start_search)
         return self.win
 
     def _start_search(self):
@@ -1184,10 +1186,11 @@ class SaveSyncDialog:
 
         ttk.Label(
             tab,
-            text="These saves matched no hack in your collection. Checked lookup uses "
-                 "the calibrated KaizOFF matcher: safe matches resolve automatically, "
-                 "while abbreviations and other plausible matches are suggested for "
-                 "review. Select a row to search manually or create a local entry.",
+            text="These saves matched no hack in your collection. An initial KaizOFF "
+                 "catalogue match runs automatically during the scan: safe matches "
+                 "resolve automatically, while abbreviations and other plausible "
+                 "matches are suggested for review. Select a row to refine the search "
+                 "or create a local entry.",
             wraplength=780, foreground="gray",
         ).pack(anchor="w", pady=(0, 8))
 
@@ -1238,7 +1241,7 @@ class SaveSyncDialog:
         self.local_entry_button.pack(side="left", padx=(8, 0))
 
         self.lookup_button = ttk.Button(
-            controls, text="Look up checked on SMWC", command=self._toggle_lookup
+            controls, text="Retry checked lookup", command=self._toggle_lookup
         )
         self.lookup_button.pack(side="right")
         self.lookup_status = ttk.Label(controls, text="", foreground="gray")
@@ -1257,6 +1260,8 @@ class SaveSyncDialog:
             self.orph_cand[iid] = cand
             self.orph_checked[iid] = False
             self.orph_iid[id(cand)] = iid
+            if cand.resolution != save_sync.RESOLUTION_NONE:
+                self._render_orphan_candidate(iid, cand)
         self._update_orph_header()
 
     def _orph_locked(self, cand):
@@ -1402,7 +1407,7 @@ class SaveSyncDialog:
         if not targets:
             messagebox.showinfo(
                 "Save Data Sync",
-                "Check one or more unmatched saves to look up first.",
+                "Check one or more lookup-error saves to retry.",
                 parent=self.win,
             )
             return
@@ -1451,7 +1456,9 @@ class SaveSyncDialog:
         save_sync.attach_resolution(
             cand, resolution, self.data_manager, self.mark_all
         )
+        return self._render_orphan_candidate(iid, cand, manual=manual)
 
+    def _render_orphan_candidate(self, iid, cand, manual=False):
         label = _RESOLUTION_LABEL.get(cand.resolution, cand.resolution)
         hack_name = cand.title if cand.resolution in _ORPHAN_ACTIONABLE else ""
         difficulty = ""
@@ -1509,7 +1516,7 @@ class SaveSyncDialog:
         self._lookup_running = False
         self._cancel_lookup = False
         try:
-            self.lookup_button.config(text="Look up checked on SMWC", state="normal")
+            self.lookup_button.config(text="Retry checked lookup", state="normal")
             self.manual_search_button.config(state="normal")
             self.local_entry_button.config(state="normal")
             self.lookup_status.config(

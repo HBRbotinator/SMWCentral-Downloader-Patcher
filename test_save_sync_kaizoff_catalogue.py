@@ -42,8 +42,10 @@ class FakeProvider:
         self.entries = tuple(entries)
         self.metadata = dict(metadata or {})
         self.index_calls = 0
+        self.catalogue_calls = 0
         self.detail_calls = []
         self.index_error = None
+        self.catalogue_error = None
         self.detail_error_ids = set()
 
     def get_index(self):
@@ -52,6 +54,16 @@ class FakeProvider:
             raise self.index_error
         return SimpleNamespace(
             entries=self.entries,
+            source="network",
+            stale=False,
+        )
+
+    def get_catalogue(self):
+        self.catalogue_calls += 1
+        if self.catalogue_error:
+            raise self.catalogue_error
+        return SimpleNamespace(
+            records=tuple(self.metadata.values()),
             source="network",
             stale=False,
         )
@@ -197,6 +209,103 @@ class KaizOffFirstAutomaticLookupTest(unittest.TestCase):
         self.assertEqual(1, provider.index_calls)
         self.assertEqual([], fallback_calls)
 
+    def test_scan_batch_index_failure_returns_reviewable_errors_without_smwc_fallback(self):
+        provider = FakeProvider(())
+        provider.index_error = KaizOffProviderError("offline")
+        fallback_calls = []
+
+        def fallback(*args, **kwargs):
+            fallback_calls.append((args, kwargs))
+            raise AssertionError("automatic batch must not use direct SMWC fallback")
+
+        lookup = SaveSyncCatalogueLookup(provider=provider, fallback_fetch_fn=fallback)
+        resolutions = lookup.resolve_automatic_many(["Alpha.srm", "Beta.srm"], set())
+
+        self.assertEqual(2, len(resolutions))
+        self.assertTrue(all(result["status"] == save_sync.RESOLUTION_ERROR for result in resolutions))
+        self.assertTrue(all(result["catalogue_unavailable"] for result in resolutions))
+        self.assertEqual(1, provider.index_calls)
+        self.assertEqual([], fallback_calls)
+
+    def test_large_scan_batch_uses_paginated_catalogue_for_rich_hydration(self):
+        entries = tuple(
+            CatalogueEntry(identifier, f"Batch Hack {identifier}", "Advanced", "Kaizo", 12)
+            for identifier in range(1, 27)
+        )
+        provider = FakeProvider(
+            entries,
+            {
+                identifier: _metadata(identifier, f"Batch Hack {identifier}")
+                for identifier in range(1, 27)
+            },
+        )
+        lookup = SaveSyncCatalogueLookup(provider=provider)
+
+        resolutions = lookup.resolve_automatic_many(
+            [f"Batch Hack {identifier}.srm" for identifier in range(1, 27)],
+            set(),
+        )
+
+        self.assertEqual(26, len(resolutions))
+        self.assertTrue(
+            all(result["status"] == save_sync.RESOLUTION_RESOLVED for result in resolutions)
+        )
+        self.assertEqual(1, provider.index_calls)
+        self.assertEqual(1, provider.catalogue_calls)
+        self.assertEqual([], provider.detail_calls)
+
+    def test_bulk_catalogue_failure_falls_back_to_kaizoff_per_hack_details(self):
+        entries = tuple(
+            CatalogueEntry(identifier, f"Fallback Hack {identifier}", "Advanced", "Kaizo", 12)
+            for identifier in range(1, 27)
+        )
+        provider = FakeProvider(
+            entries,
+            {
+                identifier: _metadata(identifier, f"Fallback Hack {identifier}")
+                for identifier in range(1, 27)
+            },
+        )
+        provider.catalogue_error = KaizOffProviderError("catalogue unavailable")
+        lookup = SaveSyncCatalogueLookup(provider=provider)
+
+        resolutions = lookup.resolve_automatic_many(
+            [f"Fallback Hack {identifier}.srm" for identifier in range(1, 27)],
+            set(),
+        )
+
+        self.assertTrue(
+            all(result["status"] == save_sync.RESOLUTION_RESOLVED for result in resolutions)
+        )
+        self.assertEqual(1, provider.catalogue_calls)
+        self.assertEqual(list(range(1, 27)), provider.detail_calls)
+
+    def test_small_scan_batch_keeps_sparse_per_hack_details(self):
+        entries = tuple(
+            CatalogueEntry(identifier, f"Small Hack {identifier}", "Advanced", "Kaizo", 12)
+            for identifier in range(1, 4)
+        )
+        provider = FakeProvider(
+            entries,
+            {
+                identifier: _metadata(identifier, f"Small Hack {identifier}")
+                for identifier in range(1, 4)
+            },
+        )
+        lookup = SaveSyncCatalogueLookup(provider=provider)
+
+        resolutions = lookup.resolve_automatic_many(
+            [f"Small Hack {identifier}.srm" for identifier in range(1, 4)],
+            set(),
+        )
+
+        self.assertTrue(
+            all(result["status"] == save_sync.RESOLUTION_RESOLVED for result in resolutions)
+        )
+        self.assertEqual(1, provider.index_calls)
+        self.assertEqual(0, provider.catalogue_calls)
+        self.assertEqual([1, 2, 3], provider.detail_calls)
+
     def test_duplicate_exact_titles_use_rich_status_to_prefer_one_live_submission(self):
         entries = (
             CatalogueEntry(100, "Colors"),
@@ -285,9 +394,10 @@ class KaizOffFirstManualLookupTest(unittest.TestCase):
 class SaveSyncKaizOffUiContractTest(unittest.TestCase):
     def test_dialog_keeps_smwc_user_wording_but_routes_production_lookup_through_shared_service(self):
         source = Path("ui/save_sync_dialog.py").read_text(encoding="utf-8")
-        self.assertIn('text="Look up checked on SMWC"', source)
+        self.assertIn('text="Retry checked lookup"', source)
         self.assertIn("SaveSyncCatalogueLookup", source)
         self.assertIn("lookup.resolve_automatic", source)
+        self.assertIn("self.win.after_idle(self._start_search)", source)
         self.assertIn("lookup_service.search_manual", source)
         self.assertIn("lookup_service.resolve_selected_option", source)
         self.assertIn("manual search can use SMWC fallback", source)

@@ -102,13 +102,17 @@ other guarded fuzzy matches remain explicit review suggestions. Matcher
 thresholds are not relaxed for Save Sync.
 
 Save Data Sync uses the KaizOFF public catalogue as its primary SMWC data
-provider. **Look up checked on SMWC** loads one cached KaizOFF Index snapshot
-for the review, runs the calibrated matcher locally, and fetches rich KaizOFF
-metadata only for safe automatic resolutions. Review-only suggestions use Index
-metadata and do not trigger rich per-ID requests until the user explicitly
-selects a result. The checked-row batch never fans out into direct SMWCentral
-API searches if KaizOFF is unavailable; this avoids exhausting SMWC's
-comparatively small rate limit.
+provider. The initial scan automatically loads one cached KaizOFF Index snapshot
+and runs the calibrated matcher for every unresolved save before the review opens.
+Safe automatic resolutions fetch rich KaizOFF metadata immediately; review-only
+suggestions use Index metadata and do not trigger rich detail until the user
+explicitly selects a result. When more than 25 distinct safe/duplicate-exact
+matches require rich metadata, Save Sync primes them from KaizOFF's paginated
+rich catalogue instead of issuing dozens of singular detail requests. Missing
+rows, such as obsolete submissions omitted from the active catalogue, still use
+KaizOFF per-ID detail. The automatic batch never fans out into direct SMWCentral
+API searches if KaizOFF is unavailable; **Retry checked lookup** retries errors
+without changing that provider policy.
 
 An explicit manual search also uses the shared KaizOFF Index first. Direct
 SMWCentral API search is retained only as a logged fallback when KaizOFF cannot
@@ -131,8 +135,9 @@ For one unresolved or review-suggested save:
 
 1. Select the save on the unresolved/import tab. Review-suggested rows show the
    top candidate and matcher confidence but are never checked automatically.
-2. Choose **Search Selected...**.
-3. Enter a free-text query if the filename-derived query needs adjustment.
+2. Choose **Search Selected...**. The filename-derived query is searched
+   automatically when the dialog opens.
+3. Change the free-text query only if the initial results need adjustment.
 4. Review ranked catalogue results and whether each SMWC ID is already in the
    collection. When a checked lookup produced a review suggestion, that SMWC ID
    is preselected if it is present in the manual result set. KaizOFF Index rows
