@@ -67,6 +67,9 @@ class CollectionIngestionReviewDialog:
         self.catalogue_label = None
         self.details = None
         self.detail_actions = None
+        self.review_win = None
+        self.review_button = None
+        self.selection_label = None
         self.done_button = None
         self.attention_var = None
         self.search_var = None
@@ -111,8 +114,8 @@ class CollectionIngestionReviewDialog:
 
         self.win = tk.Toplevel(self.parent)
         self.win.title("Review Collection Import")
-        self.win.geometry("1180x760")
-        self.win.minsize(940, 620)
+        self.win.geometry("1120x700")
+        self.win.minsize(820, 520)
         self.win.transient(self.parent)
         self.win.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -157,54 +160,58 @@ class CollectionIngestionReviewDialog:
             text="Review Remaining",
             command=self._select_next_unresolved,
         ).pack(side="right")
+        self.review_button = ttk.Button(
+            toolbar,
+            text="Review Selected...",
+            command=self._open_selected_review,
+            state="disabled",
+        )
+        self.review_button.pack(side="right", padx=(0, 8))
 
-        pane = ttk.Panedwindow(root, orient="horizontal")
-        pane.pack(fill="both", expand=True)
-
-        left = ttk.Frame(pane, padding=(0, 0, 8, 0))
-        right = ttk.Frame(pane, padding=(8, 0, 0, 0))
-        pane.add(left, weight=3)
-        pane.add(right, weight=4)
-
+        list_frame = ttk.Frame(root)
+        list_frame.pack(fill="both", expand=True)
         columns = ("status", "item", "source", "target", "details")
-        self.tree = ttk.Treeview(left, columns=columns, show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(
+            list_frame, columns=columns, show="headings", selectmode="browse"
+        )
         headings = {
-            "status": ("Status", 120, False),
-            "item": ("Item", 220, True),
-            "source": ("Source", 120, False),
-            "target": ("Match / target", 210, True),
-            "details": ("Evidence", 100, False),
+            "status": ("Status", 130, False),
+            "item": ("Item", 300, True),
+            "source": ("Source", 140, False),
+            "target": ("Match / target", 300, True),
+            "details": ("Evidence", 120, False),
         }
         for column, (label, width, stretch) in headings.items():
             self.tree.heading(column, text=label)
-            self.tree.column(column, width=width, minwidth=70, stretch=stretch, anchor="w")
-        scroll = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
+            self.tree.column(
+                column, width=width, minwidth=70, stretch=stretch, anchor="w"
+            )
+        vscroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
+        hscroll = ttk.Scrollbar(list_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(
+            yscrollcommand=vscroll.set,
+            xscrollcommand=hscroll.set,
+        )
         self.tree.grid(row=0, column=0, sticky="nsew")
-        scroll.grid(row=0, column=1, sticky="ns")
-        left.rowconfigure(0, weight=1)
-        left.columnconfigure(0, weight=1)
+        vscroll.grid(row=0, column=1, sticky="ns")
+        hscroll.grid(row=1, column=0, sticky="ew")
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+        self.tree.tag_configure("resolved", foreground="gray")
         self.tree.bind("<<TreeviewSelect>>", self._on_row_selected)
+        self.tree.bind("<Double-1>", lambda _event: self._open_selected_review())
 
-        detail_canvas = tk.Canvas(right, highlightthickness=0)
-        detail_scroll = ttk.Scrollbar(right, orient="vertical", command=detail_canvas.yview)
-        self.details = ttk.Frame(detail_canvas)
-        detail_window = detail_canvas.create_window((0, 0), window=self.details, anchor="nw")
-        detail_canvas.configure(yscrollcommand=detail_scroll.set)
-        detail_canvas.grid(row=0, column=0, sticky="nsew")
-        detail_scroll.grid(row=0, column=1, sticky="ns")
-        self.detail_actions = ttk.Frame(right, padding=(0, 8, 0, 0))
-        self.detail_actions.grid(row=1, column=0, columnspan=2, sticky="ew")
-        right.rowconfigure(0, weight=1)
-        right.columnconfigure(0, weight=1)
-        self.details.bind(
-            "<Configure>",
-            lambda _event: detail_canvas.configure(scrollregion=detail_canvas.bbox("all")),
+        selection = ttk.Frame(root, padding=(0, 8, 0, 0))
+        selection.pack(fill="x")
+        self.selection_label = ttk.Label(
+            selection,
+            text=(
+                "Select an item and choose Review Selected, or double-click it, "
+                "to open the full-width decision workspace."
+            ),
+            foreground="gray",
         )
-        detail_canvas.bind(
-            "<Configure>",
-            lambda event: detail_canvas.itemconfigure(detail_window, width=event.width),
-        )
+        self.selection_label.pack(anchor="w")
 
         footer = ttk.Frame(root)
         footer.pack(fill="x", pady=(10, 0))
@@ -261,6 +268,7 @@ class CollectionIngestionReviewDialog:
         if self._closed:
             return
         self._closed = True
+        self._close_item_review()
         try:
             if self.win and self.win.winfo_exists():
                 self.win.destroy()
@@ -275,10 +283,16 @@ class CollectionIngestionReviewDialog:
     def _refresh_rows(self):
         if not self.tree:
             return
-        selected = self._current_group_id
+        selected = self._selected_group_id() or self._current_group_id
         for item in self.tree.get_children():
             self.tree.delete(item)
-        rows = self.model.rows(attention_only=bool(self.attention_var.get()))
+
+        rows = self.model.rows(attention_only=False)
+        if self.attention_var and self.attention_var.get():
+            # "Needs attention" is a work queue: once a blocking item has a valid
+            # saved decision it leaves this view.  It remains available from All.
+            rows = tuple(row for row in rows if row.blocking and not row.resolved)
+
         for row in rows:
             target = row.target_title
             if row.target_key and row.target_key.isdecimal():
@@ -288,6 +302,7 @@ class CollectionIngestionReviewDialog:
                 details.append(f"{row.rom_count} ROM")
             if row.history_count:
                 details.append(f"{row.history_count} play")
+            tags = ("resolved",) if row.resolved else ()
             self.tree.insert(
                 "",
                 "end",
@@ -299,15 +314,18 @@ class CollectionIngestionReviewDialog:
                     target,
                     ", ".join(details) or "-",
                 ),
+                tags=tags,
             )
+
         if selected and self.tree.exists(selected):
             self.tree.selection_set(selected)
+            self.tree.focus(selected)
             self.tree.see(selected)
         elif rows:
             self.tree.selection_set(rows[0].group_id)
+            self.tree.focus(rows[0].group_id)
             self.tree.see(rows[0].group_id)
-        else:
-            self._clear_details("No review items match the current filter.")
+        self._update_selected_row_state()
         self._update_summary()
 
     def _update_summary(self):
@@ -337,7 +355,11 @@ class CollectionIngestionReviewDialog:
         unresolved = self.model.unresolved_group_ids()
         if not unresolved:
             if not quiet:
-                messagebox.showinfo("Collection Import", "All required review decisions are resolved.", parent=self.win)
+                messagebox.showinfo(
+                    "Collection Import",
+                    "All required review decisions are resolved.",
+                    parent=self.review_win if self.review_win else self.win,
+                )
             return False
         if self.attention_var and not self.attention_var.get():
             self.attention_var.set(True)
@@ -347,17 +369,133 @@ class CollectionIngestionReviewDialog:
                 self.tree.selection_set(group_id)
                 self.tree.focus(group_id)
                 self.tree.see(group_id)
-                self._render_group(group_id)
+                self._open_group_review(group_id)
                 return True
         return False
 
-    def _on_row_selected(self, _event=None):
+    def _selected_group_id(self):
+        if self.tree is None:
+            return None
         selected = self.tree.selection()
-        if len(selected) != 1:
+        return selected[0] if len(selected) == 1 else None
+
+    def _on_row_selected(self, _event=None):
+        self._update_selected_row_state()
+
+    def _update_selected_row_state(self):
+        group_id = self._selected_group_id()
+        state = "normal" if group_id else "disabled"
+        if self.review_button is not None:
+            self.review_button.configure(state=state)
+        if self.selection_label is None:
             return
-        self._render_group(selected[0])
+        if not group_id:
+            text = "No item is selected."
+        else:
+            context = self.model.context(group_id)
+            row = context.row
+            target = row.target_title or row.target_key or "No target selected"
+            text = f"{row.title}  •  {row.status}  •  {target}"
+        self.selection_label.configure(text=text)
+
+    def _open_selected_review(self):
+        group_id = self._selected_group_id()
+        if not group_id:
+            return False
+        self._open_group_review(group_id)
+        return True
+
+    def _open_group_review(self, group_id):
+        self.model.get_group(group_id)
+        if self.review_win is None or not self._item_review_is_open():
+            self.review_win = tk.Toplevel(self.win)
+            self.review_win.title("Review Collection Import Item")
+            self._size_item_review_window()
+            self.review_win.transient(self.win)
+            self.review_win.protocol("WM_DELETE_WINDOW", self._close_item_review)
+
+            workspace = ttk.Frame(self.review_win, padding=14)
+            workspace.pack(fill="both", expand=True)
+            ttk.Label(
+                workspace,
+                text="Review selected import item",
+                font=("Segoe UI", 14, "bold"),
+            ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+            item_canvas = tk.Canvas(workspace, highlightthickness=0)
+            item_scroll = ttk.Scrollbar(
+                workspace, orient="vertical", command=item_canvas.yview
+            )
+            self.details = ttk.Frame(item_canvas)
+            item_window = item_canvas.create_window(
+                (0, 0), window=self.details, anchor="nw"
+            )
+            item_canvas.configure(yscrollcommand=item_scroll.set)
+            item_canvas.grid(row=1, column=0, sticky="nsew")
+            item_scroll.grid(row=1, column=1, sticky="ns")
+            self.detail_actions = ttk.Frame(workspace, padding=(0, 8, 0, 0))
+            self.detail_actions.grid(row=2, column=0, columnspan=2, sticky="ew")
+            workspace.rowconfigure(1, weight=1)
+            workspace.columnconfigure(0, weight=1)
+            self.details.bind(
+                "<Configure>",
+                lambda _event: item_canvas.configure(
+                    scrollregion=item_canvas.bbox("all")
+                ),
+            )
+            item_canvas.bind(
+                "<Configure>",
+                lambda event: item_canvas.itemconfigure(
+                    item_window, width=event.width
+                ),
+            )
+            center_window_on_parent(self.review_win, self.win)
+
+        self._render_group(group_id)
+        try:
+            self.review_win.deiconify()
+            self.review_win.lift()
+            self.review_win.focus_force()
+        except tk.TclError:
+            pass
+
+    def _size_item_review_window(self):
+        # Use most of the available desktop on smaller displays instead of forcing
+        # the previous desktop-sized geometry off-screen.
+        try:
+            screen_width = int(self.review_win.winfo_vrootwidth())
+            screen_height = int(self.review_win.winfo_vrootheight())
+        except (tk.TclError, TypeError, ValueError):
+            screen_width = int(self.review_win.winfo_screenwidth())
+            screen_height = int(self.review_win.winfo_screenheight())
+        width = min(1180, max(760, screen_width - 80))
+        height = min(820, max(540, screen_height - 120))
+        self.review_win.geometry(f"{width}x{height}")
+        self.review_win.minsize(min(760, width), min(540, height))
+
+    def _item_review_is_open(self):
+        try:
+            return bool(self.review_win and self.review_win.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def _close_item_review(self):
+        try:
+            if self.review_win and self.review_win.winfo_exists():
+                self.review_win.destroy()
+        except tk.TclError:
+            pass
+        self.review_win = None
+        self.details = None
+        self.detail_actions = None
+        self._current_group_id = None
 
     def _clear_details(self, message="Select an item to review."):
+        if self.details is None:
+            if self.selection_label is not None:
+                self.selection_label.configure(text=message)
+            self._current_group_id = None
+            return
         for child in self.details.winfo_children():
             child.destroy()
         self._clear_detail_actions()
@@ -437,7 +575,16 @@ class CollectionIngestionReviewDialog:
             self._rom_detail_label.configure(text=f"ROM path: {path}")
 
     def _render_group(self, group_id):
+        if self.details is None:
+            self._open_group_review(group_id)
+            return
         self._current_group_id = group_id
+        if self.review_win is not None:
+            try:
+                context_for_title = self.model.context(group_id)
+                self.review_win.title(f"Review {context_for_title.row.title}")
+            except (tk.TclError, CollectionIngestionReviewError):
+                pass
         self.search_var = None
         self.search_status = None
         self.suggestion_tree = None
@@ -569,12 +716,12 @@ class CollectionIngestionReviewDialog:
             holder.pack(fill="x")
             self.suggestion_tree = ttk.Treeview(holder, columns=columns, show="headings", height=4, selectmode="browse")
             specs = {
-                "title": ("Hack", 210),
-                "id": ("SMWC ID", 75),
-                "difficulty": ("Difficulty", 90),
-                "type": ("Type", 75),
-                "exits": ("Exits", 45),
-                "score": ("Match", 55),
+                "title": ("Hack", 360),
+                "id": ("SMWC ID", 85),
+                "difficulty": ("Difficulty", 120),
+                "type": ("Type", 110),
+                "exits": ("Exits", 60),
+                "score": ("Match", 70),
             }
             for column, (label, width) in specs.items():
                 self.suggestion_tree.heading(column, text=label)
@@ -616,12 +763,12 @@ class CollectionIngestionReviewDialog:
                 selectmode="browse",
             )
             local_specs = {
-                "title": ("Local hack", 210),
-                "id": ("Collection ID", 145),
-                "difficulty": ("Difficulty", 90),
-                "type": ("Type", 75),
-                "exits": ("Exits", 45),
-                "score": ("Match", 55),
+                "title": ("Local hack", 340),
+                "id": ("Collection ID", 175),
+                "difficulty": ("Difficulty", 120),
+                "type": ("Type", 110),
+                "exits": ("Exits", 60),
+                "score": ("Match", 70),
             }
             for column, (label, width) in local_specs.items():
                 self.local_tree.heading(column, text=label)
@@ -1254,21 +1401,26 @@ class CollectionIngestionReviewDialog:
             decision = self._build_decision(group)
             self.model.set_decision(group.group_id, decision)
         except (CollectionIngestionReviewError, ValueError) as error:
-            messagebox.showerror("Review Incomplete", str(error), parent=self.win)
+            messagebox.showerror(
+                "Review Incomplete",
+                str(error),
+                parent=self.review_win if self.review_win else self.win,
+            )
             return
         current = group.group_id
         self._refresh_rows()
         if advance:
             if not self._select_next_unresolved(quiet=True):
-                if self.tree.exists(current):
-                    self.tree.selection_set(current)
-                    self._render_group(current)
+                self._close_item_review()
             return
         if self.tree.exists(current):
             self.tree.selection_set(current)
+            self.tree.focus(current)
+        # A saved blocking row intentionally disappears from the attention queue,
+        # but the full-width workspace stays open so the decision can be reviewed
+        # or reset until the user closes it.
+        if self._item_review_is_open():
             self._render_group(current)
-        else:
-            self._select_next_unresolved(quiet=True)
 
     def _reset_current(self):
         if not self._current_group_id:
@@ -1278,6 +1430,9 @@ class CollectionIngestionReviewDialog:
         self._refresh_rows()
         if self.tree.exists(group_id):
             self.tree.selection_set(group_id)
+            self.tree.focus(group_id)
+            self.tree.see(group_id)
+        if self._item_review_is_open():
             self._render_group(group_id)
 
     def set_diagnostic_error(self, error):

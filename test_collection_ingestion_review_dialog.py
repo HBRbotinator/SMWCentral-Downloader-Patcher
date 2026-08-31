@@ -1,4 +1,4 @@
-"""Source contracts for the non-persisting Collection ingestion review dialog."""
+"""Source contracts for the non-persisting Collection ingestion review workspace."""
 from __future__ import annotations
 
 import ast
@@ -19,9 +19,47 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
         self.assertIn("class CollectionIngestionReviewDialog:", self.source)
         self.assertIn('self.win.title("Review Collection Import")', self.source)
         self.assertIn("ttk.Treeview", self.source)
+        self.assertIn("Review Selected...", self.source)
         self.assertIn("Review Remaining", self.source)
         self.assertIn("Save & Next", self.source)
         self.assertIn("Continue", self.source)
+
+    def test_item_decisions_use_a_dedicated_full_width_workspace(self):
+        required = (
+            "self.review_win = tk.Toplevel(self.win)",
+            "self._size_item_review_window()",
+            "screen_width - 80",
+            "screen_height - 120",
+            "width = min(1180, max(760",
+            "height = min(820, max(540",
+            'text="Review selected import item"',
+            "full-width decision workspace",
+            'self.tree.bind("<Double-1>"',
+            "self._open_selected_review",
+            "center_window_on_parent(self.review_win, self.win)",
+        )
+        for value in required:
+            with self.subTest(value=value):
+                self.assertIn(value, self.source)
+        self.assertNotIn("ttk.Panedwindow(root", self.source)
+
+    def test_needs_attention_is_an_unresolved_work_queue(self):
+        self.assertIn("rows = self.model.rows(attention_only=False)", self.source)
+        self.assertIn("row.blocking and not row.resolved", self.source)
+        self.assertIn('tags = ("resolved",) if row.resolved else ()', self.source)
+        self.assertIn('self.tree.tag_configure("resolved", foreground="gray")', self.source)
+        self.assertIn("It remains available from All.", self.source)
+
+    def test_save_and_next_advances_the_dedicated_workspace(self):
+        save = next(
+            node
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_save_current"
+        )
+        text = ast.get_source_segment(self.source, save)
+        self.assertIn("self._select_next_unresolved(quiet=True)", text)
+        self.assertIn("self._close_item_review()", text)
+        self.assertIn("self._render_group(current)", text)
 
     def test_dialog_exposes_all_blocking_decision_families(self):
         required = (
@@ -86,19 +124,15 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
         self.assertNotIn("finalize", text)
         self.assertNotIn("apply", text)
 
-
-    def test_review_actions_stay_outside_scrollable_detail_canvas(self):
-        self.assertIn("self.detail_actions = ttk.Frame(right", self.source)
+    def test_review_actions_stay_outside_scrollable_item_canvas(self):
+        self.assertIn("item_canvas = tk.Canvas(workspace", self.source)
+        self.assertIn("self.detail_actions = ttk.Frame(workspace", self.source)
         self.assertIn('text="Reset"', self.source)
         self.assertIn('text="Save & Next"', self.source)
         self.assertIn('text="Save"', self.source)
         self.assertIn("_save_current(advance=True)", self.source)
-        self.assertNotIn(
-            "Save this item, then continue reviewing. Nothing is applied yet.",
-            self.source,
-        )
 
-    def test_decision_sections_are_compact_and_bounded(self):
+    def test_decision_sections_remain_compact_and_bounded(self):
         required = (
             'text="Review context"',
             "height=min(4, max(2, len(lines)))",
@@ -118,11 +152,12 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
             self.source.index("self._render_local_metadata(group, context, previous)"),
         )
 
-    def test_suggestion_table_supports_horizontal_scrolling(self):
+    def test_full_width_tables_allocate_more_room_for_titles(self):
+        self.assertIn('"title": ("Hack", 360)', self.source)
+        self.assertIn('"title": ("Local hack", 340)', self.source)
         self.assertIn('orient="horizontal"', self.source)
         self.assertIn("xscrollcommand=tree_hscroll.set", self.source)
         self.assertIn("_update_selected_suggestion_text", self.source)
-        self.assertIn("see its full details", self.source)
 
     def test_single_rom_defaults_to_visible_primary(self):
         self.assertIn("if not default_primary and len(group.rom_files) == 1", self.source)
