@@ -17,6 +17,7 @@ class CurrentRefreshUiContractTests(unittest.TestCase):
     def test_user_facing_update_language_replaces_acquire_refresh_buttons(self):
         self.assertIn('"Download Current ROM..."', self.source)
         self.assertIn('"Apply Update..."', self.source)
+        self.assertIn('"Choose ROM Handling..."', self.source)
         self.assertIn('"Update Current Entry"', self.source)
         self.assertNotIn('"Acquire Current ROM..."', self.source)
         self.assertNotIn('"Apply Current Refresh..."', self.source)

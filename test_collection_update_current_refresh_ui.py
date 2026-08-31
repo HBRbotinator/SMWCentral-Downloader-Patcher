@@ -19,6 +19,7 @@ class CurrentSubmissionRefreshUiContractTests(unittest.TestCase):
         self.assertIn("This updates the existing Collection entry for this same SMWC ID", PREVIEW)
         self.assertIn("Download Current ROM...", PREVIEW)
         self.assertIn("Apply Update...", PREVIEW)
+        self.assertIn("Choose ROM Handling...", PREVIEW)
         self.assertIn("The ROM is prepared before anything is applied to Collection", PREVIEW)
         self.assertIn("Your Collection ID and personal Collection data are preserved", PREVIEW)
         self.assertNotIn("apply_collection_change_plan", PREVIEW)
@@ -28,6 +29,8 @@ class CurrentSubmissionRefreshUiContractTests(unittest.TestCase):
         self.assertIn("finalize_current_submission_refresh_plan", PAGE)
         self.assertIn("acquire_current_submission_rom", PAGE)
         self.assertIn("apply_finalized_current_submission_refresh", PAGE)
+        self.assertIn("build_current_rom_disposition_review", PAGE)
+        self.assertIn("finalize_current_rom_disposition", PAGE)
         self.assertIn("same-ID current SMWC refresh", PAGE)
 
 

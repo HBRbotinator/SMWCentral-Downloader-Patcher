@@ -35,6 +35,7 @@ from save_sync import SAVE_EXTENSIONS
 COLLECTION_ROM_ORGANIZATION_JOURNAL_FILENAME = ".collection-rom-organization.journal.json"
 COLLECTION_ROM_ORGANIZATION_TEMP_MARKER = ".collection-rom-organization."
 COLLECTION_ROM_ORGANIZATION_JOURNAL_SCHEMA = 1
+_COLLECTION_CURRENT_ROM_REPLACE_JOURNAL_FILENAME = ".collection-current-rom-replace.journal.json"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _APPLY_LOCK = threading.RLock()
 
@@ -1091,8 +1092,12 @@ def apply_collection_rom_organization_execution_plan(
     output_root = _canonical(plan.output_dir)
     organization_journal = root / COLLECTION_ROM_ORGANIZATION_JOURNAL_FILENAME
     collection_journal = root / COLLECTION_APPLY_JOURNAL_FILENAME
-
+    current_rom_journal = root / _COLLECTION_CURRENT_ROM_REPLACE_JOURNAL_FILENAME
     with _APPLY_LOCK:
+        if current_rom_journal.exists():
+            raise CollectionRomOrganizationRecoveryError(
+                "A current-ROM replacement transaction journal already exists. Recover it before organizing ROMs."
+            )
         if organization_journal.exists():
             raise CollectionRomOrganizationRecoveryError(
                 "An interrupted ROM organization journal already exists. Recover it before Apply."

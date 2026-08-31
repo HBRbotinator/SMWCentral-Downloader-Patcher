@@ -6,7 +6,10 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from collection_ingestion_plan_preview import CollectionIngestionPlanPreviewModel
-from collection_update_current_refresh import FinalizedCurrentSubmissionRefreshPlan
+from collection_update_current_refresh import (
+    CurrentRomDisposition,
+    FinalizedCurrentSubmissionRefreshPlan,
+)
 from collection_update_current_refresh_acquisition import (
     finalized_current_refresh_has_acquired_rom,
     finalized_current_refresh_rom_checked,
@@ -68,19 +71,21 @@ class CollectionCurrentRefreshProgressDialog:
 class CollectionCurrentRefreshPreviewDialog:
     """User-facing same-ID update preview with optional ROM download."""
 
-    def __init__(self, parent, finalized, *, on_acquire=None, on_apply=None, on_close=None):
+    def __init__(self, parent, finalized, *, on_acquire=None, on_review_rom=None, on_apply=None, on_close=None):
         if not isinstance(finalized, FinalizedCurrentSubmissionRefreshPlan):
             raise TypeError("finalized must be FinalizedCurrentSubmissionRefreshPlan")
         self.parent = parent
         self.finalized = finalized
         self.model = CollectionIngestionPlanPreviewModel(finalized.plan)
         self.on_acquire = on_acquire
+        self.on_review_rom = on_review_rom
         self.on_apply = on_apply
         self.on_close = on_close
         self.win = None
         self.tree = None
         self.details = None
         self.acquire_button = None
+        self.review_rom_button = None
         self.apply_button = None
         self.close_button = None
         self._closed = False
@@ -131,11 +136,21 @@ class CollectionCurrentRefreshPreviewDialog:
         choice = ttk.LabelFrame(root, text="Choose what to update", padding=10)
         choice.pack(fill="x", pady=(0, 10))
 
-        if acquired:
+        if acquired and self.finalized.rom_disposition is None:
             choice_text = (
                 "The current ROM has been downloaded and patched successfully. "
-                "Applying the update will refresh the SMWC information and add the downloaded ROM "
-                "alongside the ROMs already in Collection; the downloaded ROM will be selected as primary."
+                "Before applying, choose whether to replace the current primary ROM at its existing "
+                "filename/path or keep both ROMs. Keep Both also requires an explicit primary choice."
+            )
+        elif acquired and self.finalized.rom_disposition is CurrentRomDisposition.REPLACE_CURRENT:
+            choice_text = (
+                "ROM choice reviewed: Replace current ROM. Applying the update will preserve the current "
+                "primary filename/path while replacing its bytes with the downloaded reviewed ROM."
+            )
+        elif acquired and self.finalized.rom_disposition is CurrentRomDisposition.KEEP_BOTH:
+            choice_text = (
+                "ROM choice reviewed: Keep both. Applying the update retains existing ROMs and the "
+                "downloaded ROM; the explicitly reviewed primary choice will be used."
             )
         elif checked and self.finalized.rom_matches_existing:
             choice_text = (
@@ -173,9 +188,21 @@ class CollectionCurrentRefreshPreviewDialog:
         if checked or acquired or not available or self.on_acquire is None:
             self.acquire_button.configure(state="disabled")
 
+        self.review_rom_button = ttk.Button(
+            actions,
+            text=("Change ROM Choice..." if self.finalized.rom_disposition is not None else "Choose ROM Handling..."),
+            command=self._request_rom_review,
+        )
+        self.review_rom_button.pack(side="left", padx=(8, 0))
+        if not acquired or self.finalized.rom_matches_existing or self.on_review_rom is None:
+            self.review_rom_button.configure(state="disabled")
+
         self.apply_button = ttk.Button(actions, text="Apply Update...", command=self._request_apply)
         self.apply_button.pack(side="right")
-        if self.on_apply is None:
+        if (
+            self.on_apply is None
+            or (acquired and not self.finalized.rom_matches_existing and self.finalized.rom_disposition is None)
+        ):
             self.apply_button.configure(state="disabled")
 
         ttk.Label(
@@ -303,17 +330,27 @@ class CollectionCurrentRefreshPreviewDialog:
             self.set_busy(False)
         return accepted
 
+    def _request_rom_review(self):
+        if self._busy or self.on_review_rom is None:
+            return False
+        return self.on_review_rom()
+
     def _request_apply(self):
         if self._busy or self.on_apply is None:
             return False
 
         source = self.finalized.source_entry
         acquired = finalized_current_refresh_has_acquired_rom(self.finalized)
-        if acquired:
+        if acquired and self.finalized.rom_disposition is CurrentRomDisposition.REPLACE_CURRENT:
             action_text = (
-                "The refreshed SMWC information and the downloaded ROM will be added to this "
-                "Collection entry. The downloaded ROM will be selected as primary, while existing "
-                "ROM entries remain available."
+                "The refreshed SMWC information will be applied and the downloaded reviewed ROM will "
+                "replace the current primary ROM at the same filename/path. The replacement is "
+                "transactional and existing non-primary ROM variants remain available."
+            )
+        elif acquired and self.finalized.rom_disposition is CurrentRomDisposition.KEEP_BOTH:
+            action_text = (
+                "The refreshed SMWC information and downloaded reviewed ROM will be kept alongside "
+                "the existing ROMs. Your explicitly reviewed primary ROM choice will be applied."
             )
         else:
             action_text = (
@@ -353,9 +390,25 @@ class CollectionCurrentRefreshPreviewDialog:
             self.close_button.configure(state=state)
 
         if self.apply_button:
-            self.apply_button.configure(
-                state=state if self.on_apply is not None else "disabled"
+            unresolved_rom_choice = (
+                finalized_current_refresh_has_acquired_rom(self.finalized)
+                and not self.finalized.rom_matches_existing
+                and self.finalized.rom_disposition is None
             )
+            self.apply_button.configure(
+                state=(state if self.on_apply is not None and not unresolved_rom_choice else "disabled")
+            )
+
+        if self.review_rom_button:
+            if (
+                self._busy
+                or not finalized_current_refresh_has_acquired_rom(self.finalized)
+                or self.finalized.rom_matches_existing
+                or self.on_review_rom is None
+            ):
+                self.review_rom_button.configure(state="disabled")
+            else:
+                self.review_rom_button.configure(state="normal")
 
         if self.acquire_button:
             acquired = finalized_current_refresh_has_acquired_rom(self.finalized)

@@ -8,6 +8,7 @@ identity or dependent references.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Sequence
 
@@ -38,6 +39,66 @@ class CollectionCurrentRefreshStaleStateError(CollectionCurrentRefreshError):
     """Raised when reviewed Collection/dependent state changes during hydration."""
 
 
+class CurrentRomDisposition(str, Enum):
+    """Explicit user-reviewed handling of a distinct downloaded current ROM."""
+
+    KEEP_BOTH = "keep_both"
+    REPLACE_CURRENT = "replace_current"
+
+
+@dataclass(frozen=True)
+class CurrentRomReplacementPrecondition:
+    """Exact old/new bytes frozen for explicit same-path current-ROM replacement."""
+
+    source_path: str
+    source_sha256: str
+    source_size_bytes: int
+    source_mtime_ns: int
+    target_path: str
+    target_sha256: str
+    target_size_bytes: int
+    target_mtime_ns: int
+
+    def __post_init__(self) -> None:
+        for label, value in (("source", self.source_path), ("target", self.target_path)):
+            if not isinstance(value, str) or not value:
+                raise CollectionCurrentRefreshError(f"Current-ROM replacement {label} path is required.")
+        for label, value in (("source", self.source_sha256), ("target", self.target_sha256)):
+            if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+                raise CollectionCurrentRefreshError(f"Current-ROM replacement {label} SHA-256 is invalid.")
+        for label, value in (
+            ("source size", self.source_size_bytes),
+            ("target size", self.target_size_bytes),
+            ("source mtime", self.source_mtime_ns),
+            ("target mtime", self.target_mtime_ns),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise CollectionCurrentRefreshError(f"Current-ROM replacement {label} is invalid.")
+
+
+@dataclass(frozen=True)
+class CurrentRomPrimaryPrecondition:
+    """Exact reviewed bytes for the ROM explicitly selected as primary in Keep Both."""
+
+    path: str
+    sha256: str
+    size_bytes: int
+    mtime_ns: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.path, str) or not self.path:
+            raise CollectionCurrentRefreshError("Reviewed primary ROM path is required.")
+        if (
+            not isinstance(self.sha256, str)
+            or len(self.sha256) != 64
+            or any(c not in "0123456789abcdef" for c in self.sha256)
+        ):
+            raise CollectionCurrentRefreshError("Reviewed primary ROM SHA-256 is invalid.")
+        for label, value in (("size", self.size_bytes), ("mtime", self.mtime_ns)):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise CollectionCurrentRefreshError(f"Reviewed primary ROM {label} is invalid.")
+
+
 @dataclass(frozen=True)
 class FinalizedCurrentSubmissionRefreshPlan:
     """Immutable metadata-refresh plan for one existing numeric Collection identity."""
@@ -51,6 +112,11 @@ class FinalizedCurrentSubmissionRefreshPlan:
     download_url: str
     rom_acquisition_checked: bool = False
     rom_matches_existing: bool = False
+    acquired_default_primary_path: str = ""
+    rom_disposition: CurrentRomDisposition | None = None
+    reviewed_primary_path: str = ""
+    reviewed_primary_precondition: CurrentRomPrimaryPrecondition | None = None
+    rom_replacement: CurrentRomReplacementPrecondition | None = None
 
 
 def finalize_current_submission_refresh_plan(
@@ -244,6 +310,9 @@ def _safe_int(value):
 __all__ = [
     "CollectionCurrentRefreshError",
     "CollectionCurrentRefreshStaleStateError",
+    "CurrentRomDisposition",
+    "CurrentRomPrimaryPrecondition",
+    "CurrentRomReplacementPrecondition",
     "FinalizedCurrentSubmissionRefreshPlan",
     "finalize_current_submission_refresh_plan",
 ]

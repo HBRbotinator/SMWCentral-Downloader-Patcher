@@ -6,9 +6,13 @@ import unittest
 import zipfile
 
 from collection_identity_hints import CollectionIdentityHintsStore
-from collection_update_current_refresh import finalize_current_submission_refresh_plan
+from collection_update_current_refresh import CurrentRomDisposition, finalize_current_submission_refresh_plan
 from collection_update_current_refresh_acquisition import acquire_current_submission_rom
 from collection_update_current_refresh_apply import apply_finalized_current_submission_refresh
+from collection_update_current_rom_disposition import (
+    build_current_rom_disposition_review,
+    finalize_current_rom_disposition,
+)
 from collection_plan_apply import CollectionPlanStaleStateError
 from collection_update_current_refresh_acquisition import (
     CollectionCurrentRefreshAcquisitionStaleStateError,
@@ -128,8 +132,17 @@ class CurrentSubmissionRefreshAcquisitionTests(unittest.TestCase):
         self.assertTrue(result.primary_path.endswith("Quickie World (2).sfc"))
         self.assertTrue(Path(result.primary_path).is_file())
 
-        apply_finalized_current_submission_refresh(
+        review = build_current_rom_disposition_review(
             self.processed, result.finalized, manager=self.manager,
+            identity_hints=self.hints, participants=(),
+        )
+        reviewed = finalize_current_rom_disposition(
+            self.processed, result.finalized, review, CurrentRomDisposition.KEEP_BOTH,
+            primary_path=result.primary_path, manager=self.manager,
+            identity_hints=self.hints, participants=(),
+        )
+        apply_finalized_current_submission_refresh(
+            self.processed, reviewed, manager=self.manager,
             identity_hints=self.hints, participants=(),
         )
         self.assertEqual([SOURCE_ID], list(self.manager.data))
@@ -170,10 +183,19 @@ class CurrentSubmissionRefreshAcquisitionTests(unittest.TestCase):
             participants=(), request_get=self._request_get,
             extract_patches=self._extract, patch_apply=patch_apply,
         )
+        review = build_current_rom_disposition_review(
+            self.processed, result.finalized, manager=self.manager,
+            identity_hints=self.hints, participants=(),
+        )
+        reviewed = finalize_current_rom_disposition(
+            self.processed, result.finalized, review, CurrentRomDisposition.KEEP_BOTH,
+            primary_path=result.primary_path, manager=self.manager,
+            identity_hints=self.hints, participants=(),
+        )
         Path(result.primary_path).write_bytes(b"tampered-rom")
         with self.assertRaises(CollectionPlanStaleStateError):
             apply_finalized_current_submission_refresh(
-                self.processed, result.finalized, manager=self.manager,
+                self.processed, reviewed, manager=self.manager,
                 identity_hints=self.hints, participants=(),
             )
 

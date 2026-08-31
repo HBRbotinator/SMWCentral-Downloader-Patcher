@@ -38,6 +38,7 @@ COLLECTION_APPLY_TEMP_MARKER = ".collection-plan-apply."
 COLLECTION_APPLY_JOURNAL_FILENAME = ".collection-plan-apply.journal.json"
 COLLECTION_APPLY_JOURNAL_SCHEMA = 1
 _COLLECTION_ROM_ORGANIZATION_JOURNAL_FILENAME = ".collection-rom-organization.journal.json"
+_COLLECTION_CURRENT_ROM_REPLACE_JOURNAL_FILENAME = ".collection-current-rom-replace.journal.json"
 _APPLY_LOCK = threading.RLock()
 
 
@@ -213,6 +214,12 @@ def apply_collection_change_plan(
     with _APPLY_LOCK:
         journal_path = root / COLLECTION_APPLY_JOURNAL_FILENAME
         organization_journal = root / _COLLECTION_ROM_ORGANIZATION_JOURNAL_FILENAME
+        current_rom_journal = root / _COLLECTION_CURRENT_ROM_REPLACE_JOURNAL_FILENAME
+        if current_rom_journal.exists():
+            raise CollectionPlanRecoveryError(
+                "A current-ROM replacement transaction journal already exists. Recover it "
+                "before applying Collection metadata changes."
+            )
         if organization_journal.exists():
             raise CollectionPlanRecoveryError(
                 "A ROM organization transaction journal already exists. Recover it "

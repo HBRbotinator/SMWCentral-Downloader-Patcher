@@ -154,7 +154,7 @@ class CollectionRomOrganizationStartupRecoveryTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(CollectionStartupRecoveryError, "Both"):
+        with self.assertRaisesRegex(CollectionStartupRecoveryError, "Multiple Collection transaction journals"):
             inspect_collection_startup_recovery(self.processed)
 
 

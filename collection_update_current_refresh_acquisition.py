@@ -132,6 +132,7 @@ def acquire_current_submission_rom(
         ),
         rom_acquisition_checked=True,
         rom_matches_existing=False,
+        acquired_default_primary_path=acquired.primary_path,
     )
     _log(
         log,

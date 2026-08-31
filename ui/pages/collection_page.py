@@ -242,6 +242,8 @@ class CollectionPage:
         # Same-SMWC-ID refresh/re-download stays separate from replacement semantics.
         self.collection_current_refresh_preview_dialog = None
         self.collection_current_refresh_progress_dialog = None
+        self.collection_current_rom_disposition_dialog = None
+        self._last_collection_current_rom_disposition_review = None
         self._collection_current_refresh_queue = queue.Queue()
         self._collection_current_refresh_poll_id = None
         self._last_collection_current_refresh_plan = None
@@ -421,6 +423,9 @@ class CollectionPage:
         if self.collection_current_refresh_progress_dialog is not None:
             self.collection_current_refresh_progress_dialog.close()
             self.collection_current_refresh_progress_dialog = None
+        if self.collection_current_rom_disposition_dialog is not None:
+            self.collection_current_rom_disposition_dialog.close()
+            self.collection_current_rom_disposition_dialog = None
         if self._collection_current_refresh_poll_id is not None and self.frame:
             try:
                 self.frame.after_cancel(self._collection_current_refresh_poll_id)
@@ -2678,18 +2683,10 @@ class CollectionPage:
                 )
             else:
                 self._log(
-                    f"✅ Current SMWC ROM acquired for immutable refresh preview: {result.primary_path}",
+                    f"✅ Current SMWC ROM downloaded for disposition review: {result.primary_path}",
                     "Information",
                 )
-                messagebox.showinfo(
-                    "Current ROM Acquired",
-                    (
-                        f"Created {len(result.created_paths)} non-overwriting patched ROM file(s).\n\n"
-                        f"New primary after Apply:\n{result.primary_path}\n\n"
-                        "Existing ROM assets remain retained. Collection is still unchanged until Apply."
-                    ),
-                    parent=self.frame.winfo_toplevel(),
-                )
+                self._collection_current_refresh_rom_disposition_requested()
             return
         if status == "acquire_error":
             self._collection_update_rom_acquisition_busy = False
@@ -2733,6 +2730,7 @@ class CollectionPage:
             self.frame.winfo_toplevel(),
             finalized,
             on_acquire=self._collection_current_refresh_acquire_requested,
+            on_review_rom=self._collection_current_refresh_rom_disposition_requested,
             on_apply=self._collection_current_refresh_apply_requested,
             on_close=self._collection_current_refresh_preview_closed,
         )
@@ -2818,6 +2816,74 @@ class CollectionPage:
         ).start()
         self._poll_collection_current_refresh()
         return True
+
+    def _collection_current_refresh_rom_disposition_requested(self):
+        finalized = self._last_collection_current_refresh_plan
+        if finalized is None or self._collection_update_apply_busy or self._collection_update_rom_acquisition_busy:
+            return False
+        if self.collection_current_rom_disposition_dialog is not None:
+            if self.collection_current_rom_disposition_dialog.is_open:
+                self.collection_current_rom_disposition_dialog.win.lift()
+                return True
+            self.collection_current_rom_disposition_dialog = None
+        try:
+            from collection_update_current_rom_disposition import build_current_rom_disposition_review
+            review = build_current_rom_disposition_review(
+                str(self.data_manager.json_path),
+                finalized,
+                manager=self.data_manager,
+            )
+        except Exception as error:
+            self._log(f"❌ Current-ROM disposition review failed: {error}", "Error")
+            messagebox.showerror(
+                "Choose ROM Handling",
+                f"Could not prepare the current-ROM choice:\n\n{error}",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+        from ui.collection_update_current_rom_disposition_dialog import CollectionCurrentRomDispositionDialog
+        self._last_collection_current_rom_disposition_review = review
+        self.collection_current_rom_disposition_dialog = CollectionCurrentRomDispositionDialog(
+            self.frame.winfo_toplevel(),
+            review,
+            on_save=self._collection_current_refresh_rom_disposition_saved,
+            on_close=self._collection_current_refresh_rom_disposition_closed,
+        )
+        self.collection_current_rom_disposition_dialog.show()
+        return True
+
+    def _collection_current_refresh_rom_disposition_saved(self, disposition, primary_path):
+        finalized = self._last_collection_current_refresh_plan
+        review = self._last_collection_current_rom_disposition_review
+        if finalized is None or review is None:
+            return False
+        try:
+            from collection_update_current_rom_disposition import finalize_current_rom_disposition
+            reviewed = finalize_current_rom_disposition(
+                str(self.data_manager.json_path),
+                finalized,
+                review,
+                disposition,
+                primary_path=primary_path,
+                manager=self.data_manager,
+            )
+        except Exception as error:
+            self._log(f"❌ Current-ROM disposition could not be frozen: {error}", "Error")
+            messagebox.showerror(
+                "ROM Choice Changed",
+                f"Could not save the reviewed ROM choice:\n\n{error}",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return False
+        self._last_collection_current_refresh_plan = reviewed
+        self._last_collection_current_rom_disposition_review = None
+        self._close_collection_current_refresh_preview()
+        self._show_collection_current_refresh_preview(reviewed)
+        return True
+
+    def _collection_current_refresh_rom_disposition_closed(self):
+        self.collection_current_rom_disposition_dialog = None
+        self._last_collection_current_rom_disposition_review = None
 
     def _collection_current_refresh_apply_requested(self):
         if (
@@ -2917,8 +2983,8 @@ class CollectionPage:
                 f"SMWC {source_key} was refreshed without changing Collection identity.\n\n"
                 f"Files written transactionally: {len(result.written_files)}\n"
                 f"Identity migrations: {result.identity_migration_count}\n\n"
-                "Existing ROM assets were retained. If a newly acquired ROM was in the plan, "
-                "it is now primary; Apply itself performed no network or patching work."
+                "The reviewed ROM handling choice was applied without changing Collection identity. "
+                "Apply itself performed no network or patching work."
                 f"{cleanup_note}"
             ),
             parent=self.frame.winfo_toplevel(),
@@ -3014,6 +3080,7 @@ class CollectionPage:
         self._last_collection_update_merge_decision = None
         self._last_collection_update_plan = None
         self._last_collection_current_refresh_plan = None
+        self._last_collection_current_rom_disposition_review = None
 
     def _collection_update_state_is_saved(self):
         parent = self.frame.winfo_toplevel()

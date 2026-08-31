@@ -16,6 +16,10 @@ from collection_reconciliation import IdentityMigrationKind
 from collection_ingestion import IngestionSource
 from collection_update_plan import FinalizedCollectionUpdatePlan
 from hack_data_manager import HackDataManager
+from collection_update_current_rom_replace_apply import (
+    COLLECTION_CURRENT_ROM_REPLACE_JOURNAL_FILENAME,
+    recover_interrupted_current_rom_replacement,
+)
 
 
 class CollectionUpdateApplyError(RuntimeError):
@@ -105,14 +109,26 @@ def collection_update_apply_recovery_pending(processed_json_path: str | Path) ->
     """Return whether a coordinated Collection transaction journal needs attention."""
 
     processed = Path(processed_json_path).expanduser().resolve()
-    return (processed.parent / COLLECTION_APPLY_JOURNAL_FILENAME).exists()
+    return (
+        (processed.parent / COLLECTION_APPLY_JOURNAL_FILENAME).exists()
+        or (processed.parent / COLLECTION_CURRENT_ROM_REPLACE_JOURNAL_FILENAME).exists()
+    )
 
 
 def recover_collection_update_apply(processed_json_path: str | Path) -> bool:
     """Recover/clean an abandoned coordinated Apply after caller confirmation."""
 
     processed = Path(processed_json_path).expanduser().resolve()
-    return recover_interrupted_collection_apply(processed.parent)
+    root = processed.parent
+    normal = (root / COLLECTION_APPLY_JOURNAL_FILENAME).exists()
+    current_rom = (root / COLLECTION_CURRENT_ROM_REPLACE_JOURNAL_FILENAME).exists()
+    if normal and current_rom:
+        raise CollectionUpdateApplyError(
+            "Both Collection Apply and current-ROM replacement journals exist; recovery order is ambiguous."
+        )
+    if current_rom:
+        return recover_interrupted_current_rom_replacement(root)
+    return recover_interrupted_collection_apply(root)
 
 
 __all__ = [

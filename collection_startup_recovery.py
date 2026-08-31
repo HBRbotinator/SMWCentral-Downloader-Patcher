@@ -16,6 +16,11 @@ from collection_plan_apply import (
     inspect_interrupted_collection_apply,
     recover_interrupted_collection_apply,
 )
+from collection_update_current_rom_replace_apply import (
+    CollectionCurrentRomReplaceRecoveryInfo,
+    inspect_interrupted_current_rom_replacement,
+    recover_interrupted_current_rom_replacement,
+)
 from collection_rom_organization_apply import (
     CollectionRomOrganizationRecoveryError,
     CollectionRomOrganizationRecoveryInfo,
@@ -28,7 +33,11 @@ class CollectionStartupRecoveryError(CollectionPlanRecoveryError):
     """Raised when startup cannot establish a safe Collection transaction state."""
 
 
-RecoveryInfo = CollectionApplyRecoveryInfo | CollectionRomOrganizationRecoveryInfo
+RecoveryInfo = (
+    CollectionApplyRecoveryInfo
+    | CollectionRomOrganizationRecoveryInfo
+    | CollectionCurrentRomReplaceRecoveryInfo
+)
 
 
 def _pending_recovery(
@@ -37,17 +46,23 @@ def _pending_recovery(
     processed = Path(processed_json_path).expanduser().resolve()
     collection_info = inspect_interrupted_collection_apply(processed.parent)
     organization_info = inspect_interrupted_collection_rom_organization(processed.parent)
-    if collection_info is not None and organization_info is not None:
-        raise CollectionStartupRecoveryError(
-            "Both a Collection metadata Apply journal and a ROM organization journal exist. "
-            "Startup cannot choose a recovery order safely. Back up the data directory and "
-            "resolve the transaction state before opening Collection-dependent features."
+    current_rom_info = inspect_interrupted_current_rom_replacement(processed.parent)
+    pending = tuple(
+        (kind, info)
+        for kind, info in (
+            ("collection", collection_info),
+            ("organization", organization_info),
+            ("current_rom", current_rom_info),
         )
-    if collection_info is not None:
-        return "collection", collection_info
-    if organization_info is not None:
-        return "organization", organization_info
-    return None
+        if info is not None
+    )
+    if len(pending) > 1:
+        raise CollectionStartupRecoveryError(
+            "Multiple Collection transaction journals exist. Startup cannot choose a recovery "
+            "order safely. Back up the data directory and resolve the transaction state before "
+            "opening Collection-dependent features."
+        )
+    return pending[0] if pending else None
 
 
 def inspect_collection_startup_recovery(
@@ -82,8 +97,10 @@ def ensure_collection_startup_recovery(
 
     if kind == "collection":
         recovered = recover_interrupted_collection_apply(processed.parent)
-    else:
+    elif kind == "organization":
         recovered = recover_interrupted_collection_rom_organization(processed.parent)
+    else:
+        recovered = recover_interrupted_current_rom_replacement(processed.parent)
     if not recovered:
         raise CollectionStartupRecoveryError(
             "Collection transaction journal disappeared before recovery completed."
