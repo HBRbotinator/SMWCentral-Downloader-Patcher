@@ -87,6 +87,8 @@ class CollectionIngestionReviewDialog:
         self._local_type_var = None
         self._local_difficulty_var = None
         self._local_exits_var = None
+        self._local_metadata_frame = None
+        self._rom_detail_label = None
         self._first_clear_var = None
         self._first_clear_values = {}
         self._remember_vars = []
@@ -389,6 +391,51 @@ class CollectionIngestionReviewDialog:
         parent.bind("<Configure>", resize, add="+")
         return label
 
+    def _render_review_context(self, group, context):
+        lines = []
+        lines.extend(f"Review: {issue.reason}" for issue in group.issues)
+        lines.extend(f"Evidence: {reason}" for reason in context.candidate_reasons)
+        if not lines:
+            return
+
+        frame = ttk.LabelFrame(self.details, text="Review context", padding=6)
+        frame.pack(fill="x", pady=(0, 8))
+        holder = ttk.Frame(frame)
+        holder.pack(fill="x")
+        text = tk.Text(
+            holder,
+            height=min(4, max(2, len(lines))),
+            wrap="word",
+            takefocus=False,
+            relief="flat",
+            borderwidth=0,
+        )
+        scroll = ttk.Scrollbar(holder, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+        holder.columnconfigure(0, weight=1)
+        text.insert("1.0", "\n".join(lines))
+        text.configure(state="disabled")
+
+    def _action_changed(self, *_args):
+        self._update_conditional_sections()
+
+    def _update_conditional_sections(self):
+        frame = self._local_metadata_frame
+        if frame is None or self._action_var is None:
+            return
+        show_local = self._action_var.get() == ReviewAction.IMPORT_LOCAL.value
+        if show_local:
+            if not frame.winfo_manager():
+                frame.pack(fill="x", pady=(0, 8))
+        elif frame.winfo_manager():
+            frame.pack_forget()
+
+    def _show_rom_detail(self, path):
+        if self._rom_detail_label is not None:
+            self._rom_detail_label.configure(text=f"ROM path: {path}")
+
     def _render_group(self, group_id):
         self._current_group_id = group_id
         self.search_var = None
@@ -408,6 +455,8 @@ class CollectionIngestionReviewDialog:
         self._local_type_var = None
         self._local_difficulty_var = None
         self._local_exits_var = None
+        self._local_metadata_frame = None
+        self._rom_detail_label = None
         self._first_clear_var = None
         self._first_clear_values = {}
         self._remember_vars = []
@@ -429,35 +478,21 @@ class CollectionIngestionReviewDialog:
             foreground="gray",
         ).pack(anchor="w", pady=(2, 8))
 
-        if group.issues:
-            issue_box = ttk.LabelFrame(self.details, text="Review status", padding=8)
-            issue_box.pack(fill="x", pady=(0, 8))
-            for issue in group.issues:
-                self._wrapped_label(issue_box, f"• {issue.reason}").pack(anchor="w", fill="x")
-
-        if context.candidate_reasons:
-            evidence = ttk.LabelFrame(self.details, text="Matching evidence", padding=8)
-            evidence.pack(fill="x", pady=(0, 8))
-            for reason in context.candidate_reasons:
-                self._wrapped_label(evidence, reason).pack(anchor="w", fill="x", pady=1)
+        self._render_review_context(group, context)
 
         self._action_var = tk.StringVar(value=self._default_action(group, previous))
         self._render_identity(group, context, previous)
-        self._render_local_metadata(group, context, previous)
         self._render_roms(group, previous)
+        self._render_local_metadata(group, context, previous)
         self._render_user_conflicts(group, previous)
         self._render_first_clear(group, previous)
         self._render_remember_aliases(context, previous)
+        self._action_var.trace_add("write", self._action_changed)
+        self._update_conditional_sections()
 
         actions = self.detail_actions
         if actions is not None:
-            if previous is not None:
-                ttk.Button(actions, text="Reset", command=self._reset_current).pack(side="left")
-            ttk.Label(
-                actions,
-                text="Save this item, then continue reviewing. Nothing is applied yet.",
-                foreground="gray",
-            ).pack(side="left", padx=(8, 0))
+            ttk.Button(actions, text="Reset", command=self._reset_current).pack(side="left")
             ttk.Button(
                 actions,
                 text="Save & Next",
@@ -532,7 +567,7 @@ class CollectionIngestionReviewDialog:
             columns = ("title", "id", "difficulty", "type", "exits", "score")
             holder = ttk.Frame(frame)
             holder.pack(fill="x")
-            self.suggestion_tree = ttk.Treeview(holder, columns=columns, show="headings", height=6, selectmode="browse")
+            self.suggestion_tree = ttk.Treeview(holder, columns=columns, show="headings", height=4, selectmode="browse")
             specs = {
                 "title": ("Hack", 210),
                 "id": ("SMWC ID", 75),
@@ -577,7 +612,7 @@ class CollectionIngestionReviewDialog:
                 local_holder,
                 columns=local_columns,
                 show="headings",
-                height=min(3, len(context.local_suggestions)),
+                height=min(2, max(1, len(context.local_suggestions))),
                 selectmode="browse",
             )
             local_specs = {
@@ -591,12 +626,19 @@ class CollectionIngestionReviewDialog:
             for column, (label, width) in local_specs.items():
                 self.local_tree.heading(column, text=label)
                 self.local_tree.column(column, width=width, minwidth=40, anchor="w")
-            local_scroll = ttk.Scrollbar(
+            local_vscroll = ttk.Scrollbar(
+                local_holder, orient="vertical", command=self.local_tree.yview
+            )
+            local_hscroll = ttk.Scrollbar(
                 local_holder, orient="horizontal", command=self.local_tree.xview
             )
-            self.local_tree.configure(xscrollcommand=local_scroll.set)
+            self.local_tree.configure(
+                yscrollcommand=local_vscroll.set,
+                xscrollcommand=local_hscroll.set,
+            )
             self.local_tree.grid(row=0, column=0, sticky="ew")
-            local_scroll.grid(row=1, column=0, sticky="ew")
+            local_vscroll.grid(row=0, column=1, sticky="ns")
+            local_hscroll.grid(row=1, column=0, sticky="ew")
             local_holder.columnconfigure(0, weight=1)
             self._populate_local_suggestions(context.local_suggestions)
             self.local_tree.bind("<<TreeviewSelect>>", self._local_suggestion_selected)
@@ -690,10 +732,13 @@ class CollectionIngestionReviewDialog:
         )
         exits = previous_metadata.exits if previous_metadata else 0
 
+        slot = ttk.Frame(self.details)
+        slot.pack(fill="x")
         frame = ttk.LabelFrame(
-            self.details, text="New local/manual record details", padding=8
+            slot, text="New local/manual record details", padding=8
         )
         frame.pack(fill="x", pady=(0, 8))
+        self._local_metadata_frame = frame
         ttk.Label(
             frame,
             text=(
@@ -888,7 +933,7 @@ class CollectionIngestionReviewDialog:
     def _render_roms(self, group, previous):
         if not group.rom_files:
             return
-        frame = ttk.LabelFrame(self.details, text="ROM files", padding=8)
+        frame = ttk.LabelFrame(self.details, text="ROM variants", padding=8)
         frame.pack(fill="x", pady=(0, 8))
         if len(group.rom_hashes) > 1:
             ttk.Label(
@@ -913,9 +958,29 @@ class CollectionIngestionReviewDialog:
             default_primary = group.rom_files[0].path
         self._rom_primary_var = tk.StringVar(value=default_primary)
 
+        holder = ttk.Frame(frame)
+        holder.pack(fill="x")
+        list_height = 30 * min(4, max(1, len(group.rom_files)))
+        rom_canvas = tk.Canvas(holder, height=list_height, highlightthickness=0)
+        rom_scroll = ttk.Scrollbar(holder, orient="vertical", command=rom_canvas.yview)
+        rows = ttk.Frame(rom_canvas)
+        row_window = rom_canvas.create_window((0, 0), window=rows, anchor="nw")
+        rom_canvas.configure(yscrollcommand=rom_scroll.set)
+        rom_canvas.grid(row=0, column=0, sticky="ew")
+        rom_scroll.grid(row=0, column=1, sticky="ns")
+        holder.columnconfigure(0, weight=1)
+        rows.bind(
+            "<Configure>",
+            lambda _event: rom_canvas.configure(scrollregion=rom_canvas.bbox("all")),
+        )
+        rom_canvas.bind(
+            "<Configure>",
+            lambda event: rom_canvas.itemconfigure(row_window, width=event.width),
+        )
+
         for rom in group.rom_files:
-            row = ttk.Frame(frame)
-            row.pack(fill="x", pady=2)
+            row = ttk.Frame(rows)
+            row.pack(fill="x", pady=1)
             if previous_selection:
                 if rom.path in previous_ignored:
                     initial = "Ignore"
@@ -928,24 +993,42 @@ class CollectionIngestionReviewDialog:
             var = tk.StringVar(value=initial)
             self._rom_action_vars[rom.path] = var
             self._rom_initial[rom.path] = initial
-            ttk.Combobox(
+            action = ttk.Combobox(
                 row,
                 textvariable=var,
                 values=("Keep", "Ignore", "Leave out"),
                 state="readonly",
                 width=10,
-            ).pack(side="left")
+            )
+            action.pack(side="left")
+            action.bind(
+                "<<ComboboxSelected>>",
+                lambda _event, path=rom.path: self._show_rom_detail(path),
+            )
             ttk.Radiobutton(
                 row,
                 text="Primary",
                 variable=self._rom_primary_var,
                 value=rom.path,
+                command=lambda path=rom.path: self._show_rom_detail(path),
             ).pack(side="left", padx=(6, 8))
-            ttk.Label(
+            label = ttk.Label(
                 row,
                 text=f"{os.path.basename(rom.path)}  •  {rom.sha256[:12]}…",
-            ).pack(side="left", fill="x", expand=True)
-            self._wrapped_label(frame, rom.path, foreground="gray").pack(anchor="w", fill="x", padx=(24, 0))
+            )
+            label.pack(side="left", fill="x", expand=True)
+            label.bind(
+                "<Button-1>",
+                lambda _event, path=rom.path: self._show_rom_detail(path),
+            )
+
+        self._rom_detail_label = self._wrapped_label(
+            frame,
+            "",
+            foreground="gray",
+        )
+        self._rom_detail_label.pack(anchor="w", fill="x", pady=(4, 0))
+        self._show_rom_detail(default_primary or group.rom_files[0].path)
 
     def _render_user_conflicts(self, group, previous):
         conflicts = {}

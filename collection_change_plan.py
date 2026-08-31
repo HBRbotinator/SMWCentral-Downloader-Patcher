@@ -62,13 +62,16 @@ class StorePrecondition:
 
 @dataclass(frozen=True)
 class RecordIntent:
-    """One resolved Collection target and whether it is created or updated."""
+    """One resolved Collection target and its frozen display metadata."""
 
     target_key: str
     kind: RecordIntentKind
+    display_title: str = ""
 
     def __post_init__(self) -> None:
         validate_collection_key(self.target_key)
+        if not isinstance(self.display_title, str):
+            raise PlanFinalizationError("Record intent display title must be text.")
 
 
 @dataclass(frozen=True)
@@ -775,6 +778,7 @@ def _record_intent(
     target_key: str,
     existing_keys: frozenset[str],
     migration: IdentityMigrationOperation | None,
+    display_title: str = "",
 ) -> RecordIntent:
     if target_key in existing_keys or (
         migration is not None and migration.merge_existing_target
@@ -782,7 +786,11 @@ def _record_intent(
         kind = RecordIntentKind.UPDATE
     else:
         kind = RecordIntentKind.CREATE
-    return RecordIntent(target_key=target_key, kind=kind)
+    return RecordIntent(
+        target_key=target_key,
+        kind=kind,
+        display_title=str(display_title or "").strip(),
+    )
 
 
 def _dedupe_equal_by_key(items, key, label: str):
@@ -959,11 +967,13 @@ def finalize_collection_change_plan(
     local_identity_allocations: Mapping[str, str] | None = None,
     converged_rom_decisions: Mapping[str, ConvergedRomDecision] | None = None,
     preconditions: Sequence[StorePrecondition] = (),
+    target_display_titles: Mapping[str, str] | None = None,
 ) -> CollectionChangePlan:
     """Finalize reviewed evidence without rerunning matching or making hidden choices."""
 
     decisions = dict(decisions or {})
     allocations = dict(local_identity_allocations or {})
+    display_titles = dict(target_display_titles or {})
     ordered_groups = tuple(sorted(groups, key=lambda item: item.group_id))
     group_ids = {group.group_id for group in ordered_groups}
     if len(group_ids) != len(ordered_groups):
@@ -1061,7 +1071,14 @@ def finalize_collection_change_plan(
             reference_migrations.append(reference_migration)
 
         target_exists = target_key in existing_keys
-        record_intents.append(_record_intent(target_key, existing_keys, migration))
+        record_intents.append(
+            _record_intent(
+                target_key,
+                existing_keys,
+                migration,
+                display_titles.get(target_key, ""),
+            )
+        )
 
         catalogue = _catalogue_operation(group, target_key)
         if catalogue is not None:

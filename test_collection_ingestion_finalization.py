@@ -87,12 +87,17 @@ class _Fixture:
     def close(self):
         self.temporary.cleanup()
 
-    def session(self, group: ReconciliationGroup) -> CollectionIngestionSession:
+    def session(
+        self,
+        group: ReconciliationGroup,
+        *,
+        catalogue_entries=(),
+    ) -> CollectionIngestionSession:
         return CollectionIngestionSession(
             catalogue_fetched_at=1.0,
             catalogue_source="test",
             catalogue_stale=False,
-            catalogue_entries=(),
+            catalogue_entries=tuple(catalogue_entries),
             existing_collection_keys=tuple(sorted(self.manager.data)),
             preconditions=collect_store_preconditions(
                 self.manager,
@@ -103,6 +108,11 @@ class _Fixture:
             groups=(group,),
             review_entries=(),
             suppressed_roms=(),
+            existing_collection_titles=tuple(
+                (str(key), str(value.get("title") or ""))
+                for key, value in sorted(self.manager.data.items())
+                if isinstance(value, dict) and value.get("title")
+            ),
         )
 
 
@@ -233,6 +243,7 @@ class CollectionIngestionFinalizationTest(unittest.TestCase):
 
         provider.get_hack.assert_not_called()
         self.assertEqual("41022", plan.updates[0].target_key)
+        self.assertEqual("Super Dram World 3", plan.updates[0].display_title)
 
 
     def test_new_target_convergence_uses_explicit_combined_rom_decision(self):

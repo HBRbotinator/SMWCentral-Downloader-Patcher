@@ -228,6 +228,7 @@ class CollectionIngestionProgressDialog:
         if self.win:
             return self.win
         self.win = tk.Toplevel(self.parent)
+        self.win.withdraw()
         self.win.title("Preparing Collection Import")
         self.win.resizable(False, False)
         self.win.transient(self.parent)
@@ -251,8 +252,19 @@ class CollectionIngestionProgressDialog:
         progress = ttk.Progressbar(body, mode="indeterminate", length=430)
         progress.pack(fill="x")
         progress.start(12)
-        center_window_on_parent(self.win, self.parent)
+
+        self.win.update_idletasks()
+        center_window_on_parent(self.win, self.parent, lift=False)
+        self.win.deiconify()
+        self.win.after_idle(self._center_after_map)
         return self.win
+
+    def _center_after_map(self):
+        try:
+            if self.win and self.win.winfo_exists():
+                center_window_on_parent(self.win, self.parent)
+        except tk.TclError:
+            pass
 
     def close(self):
         try:

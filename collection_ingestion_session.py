@@ -131,6 +131,7 @@ class CollectionIngestionSession:
     review_entries: tuple[CandidateReviewEntry, ...]
     suppressed_roms: tuple[SuppressedRom, ...]
     local_collection_entries: tuple[LocalCollectionEntry, ...] = ()
+    existing_collection_titles: tuple[tuple[str, str], ...] = ()
 
     @property
     def blocking_groups(self) -> tuple[ReconciliationGroup, ...]:
@@ -265,6 +266,11 @@ def build_collection_ingestion_session(
         review_entries=tuple(sorted(reviews, key=lambda item: item.candidate_id)),
         suppressed_roms=tuple(sorted(suppressed, key=lambda item: (item.path.casefold(), item.sha256))),
         local_collection_entries=snapshot_local_collection_entries(state.records),
+        existing_collection_titles=tuple(
+            (key, str(state.records[key].get("title") or "").strip())
+            for key in sorted(state.records, key=_collection_key_sort)
+            if str(state.records[key].get("title") or "").strip()
+        ),
     )
 
 
@@ -389,7 +395,49 @@ def finalize_ingestion_session_plan(
         local_identity_allocations=allocations,
         converged_rom_decisions=converged_rom_decisions,
         preconditions=session.preconditions,
+        target_display_titles=_target_display_titles(
+            session,
+            decisions,
+            allocations,
+            details,
+        ),
     )
+
+
+def _target_display_titles(
+    session: CollectionIngestionSession,
+    decisions: Mapping[str, ReviewDecision],
+    allocations: Mapping[str, str],
+    details: Mapping[int, KaizOffHackMetadata],
+) -> dict[str, str]:
+    """Freeze preview-only target titles without consulting mutable live state."""
+
+    result = {
+        target_key: title.strip()
+        for target_key, title in session.existing_collection_titles
+        if title.strip()
+    }
+    result.update(
+        {
+            str(entry.smwc_submission_id): entry.title.strip()
+            for entry in session.catalogue_entries
+            if entry.title.strip()
+        }
+    )
+    result.update(
+        {entry.target_key: entry.title.strip() for entry in session.local_collection_entries}
+    )
+    result.update(
+        {str(identifier): metadata.title.strip() for identifier, metadata in details.items()}
+    )
+    for group_id, target_key in allocations.items():
+        decision = decisions.get(group_id)
+        if decision is None or decision.local_metadata is None:
+            continue
+        title = decision.local_metadata.title.strip()
+        if title:
+            result[target_key] = title
+    return result
 
 
 def _capture_existing_state(

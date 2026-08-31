@@ -11,8 +11,12 @@ def center_window_on_parent(win, parent, *, lift=True) -> None:
         return
     try:
         win.update_idletasks()
-        width = max(1, int(win.winfo_width()))
-        height = max(1, int(win.winfo_height()))
+        current_width = int(win.winfo_width())
+        current_height = int(win.winfo_height())
+        requested_width = int(win.winfo_reqwidth())
+        requested_height = int(win.winfo_reqheight())
+        width = max(1, current_width if current_width > 1 else requested_width)
+        height = max(1, current_height if current_height > 1 else requested_height)
         parent_x = int(parent.winfo_rootx())
         parent_y = int(parent.winfo_rooty())
         parent_w = max(1, int(parent.winfo_width()))

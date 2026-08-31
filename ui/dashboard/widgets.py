@@ -19,7 +19,7 @@ class DashboardMetrics:
         self.analytics_data = analytics_data
         self.dashboard_ref = dashboard_ref  # Reference to main dashboard for refresh/filter
         self.filter_buttons = {}  # Track filter buttons for highlighting
-        self.current_filter = "last_week"  # Track current filter
+        self.current_filter = "all_time"  # Track current filter
         
     def create_filter_section(self):
         """Create time period filter controls"""

@@ -89,9 +89,34 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
 
     def test_review_actions_stay_outside_scrollable_detail_canvas(self):
         self.assertIn("self.detail_actions = ttk.Frame(right", self.source)
+        self.assertIn('text="Reset"', self.source)
         self.assertIn('text="Save & Next"', self.source)
         self.assertIn('text="Save"', self.source)
         self.assertIn("_save_current(advance=True)", self.source)
+        self.assertNotIn(
+            "Save this item, then continue reviewing. Nothing is applied yet.",
+            self.source,
+        )
+
+    def test_decision_sections_are_compact_and_bounded(self):
+        required = (
+            'text="Review context"',
+            "height=min(4, max(2, len(lines)))",
+            'height=4, selectmode="browse"',
+            "height=min(2, max(1, len(context.local_suggestions)))",
+            'orient="vertical", command=self.local_tree.yview',
+            "list_height = 30 * min(4, max(1, len(group.rom_files)))",
+            'text="ROM variants"',
+            'text=f"ROM path: {path}"',
+            "frame.pack_forget()",
+        )
+        for value in required:
+            with self.subTest(value=value):
+                self.assertIn(value, self.source)
+        self.assertLess(
+            self.source.index("self._render_roms(group, previous)"),
+            self.source.index("self._render_local_metadata(group, context, previous)"),
+        )
 
     def test_suggestion_table_supports_horizontal_scrolling(self):
         self.assertIn('orient="horizontal"', self.source)

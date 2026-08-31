@@ -340,10 +340,13 @@ class CollectionIngestionPlanPreviewModel:
     @staticmethod
     def _target_titles(plan: CollectionChangePlan) -> dict[str, str]:
         result = {
-            item.target_key: item.metadata.title
-            for item in plan.catalogue_updates
-            if item.metadata.title
+            item.target_key: item.display_title
+            for item in plan.record_intents
+            if item.display_title
         }
+        for item in plan.catalogue_updates:
+            if item.metadata.title:
+                result.setdefault(item.target_key, item.metadata.title)
         for item in plan.local_record_seeds:
             if item.title:
                 result.setdefault(item.target_key, item.title)

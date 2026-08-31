@@ -192,6 +192,35 @@ class CollectionIngestionPlanPreviewModelTest(unittest.TestCase):
         self.assertIn("candidate:skip", joined)
         self.assertIn("candidate:ignore", joined)
 
+
+    def test_existing_update_uses_frozen_record_intent_display_title(self):
+        plan = CollectionChangePlan(
+            preconditions=(),
+            record_intents=(
+                RecordIntent(
+                    "17289",
+                    RecordIntentKind.UPDATE,
+                    display_title="Grand Poo World",
+                ),
+            ),
+            catalogue_updates=(),
+            local_record_seeds=(),
+            rom_updates=(),
+            user_history_updates=(),
+            user_state_updates=(),
+            identity_migrations=(),
+            reference_migrations=(),
+            ignored_roms=(),
+            remembered_associations=(),
+            skipped_candidate_ids=(),
+            ignored_candidate_ids=(),
+        )
+
+        rows = CollectionIngestionPlanPreviewModel(plan).rows()
+
+        collection_row = next(row for row in rows if row.category == "Collection")
+        self.assertEqual("17289 — Grand Poo World", collection_row.target)
+
     def test_model_rejects_non_plan_input(self):
         with self.assertRaises(TypeError):
             CollectionIngestionPlanPreviewModel(object())
