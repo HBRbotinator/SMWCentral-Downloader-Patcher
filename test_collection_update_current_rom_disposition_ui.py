@@ -17,10 +17,10 @@ ORGANIZE_APPLY = (ROOT / "collection_rom_organization_apply.py").read_text(encod
 
 class CurrentRomDispositionUiContractTests(unittest.TestCase):
     def test_downloaded_rom_cannot_apply_before_explicit_handling_choice(self):
-        self.assertIn('"Choose ROM Handling..."', PREVIEW)
-        self.assertIn("finalized.rom_disposition is None", PREVIEW)
-        self.assertIn("Replace current ROM", PREVIEW)
-        self.assertIn("Keep both", PREVIEW)
+        self.assertIn('"Choose What Happens to the ROM..."', PREVIEW)
+        self.assertIn("rom_disposition is None", PREVIEW)
+        self.assertIn("replace your current primary ROM", PREVIEW)
+        self.assertIn("keep both", PREVIEW)
         self.assertIn("unresolved_rom_choice", PREVIEW)
 
     def test_keep_both_primary_is_required_and_downloaded_is_only_a_ui_default(self):
@@ -30,6 +30,12 @@ class CurrentRomDispositionUiContractTests(unittest.TestCase):
         self.assertIn("not a version-ordering inference", DISPOSITION_UI)
         self.assertNotIn("higher ID", DISPOSITION_UI)
         self.assertNotIn("newer version", DISPOSITION_UI)
+
+    def test_rom_disposition_copy_explains_separate_storage_locations(self):
+        self.assertIn("keep its existing filename and location", DISPOSITION_UI)
+        self.assertIn("Default ROM Output Folder", DISPOSITION_UI)
+        self.assertIn("Existing Collection ROMs can be stored elsewhere", DISPOSITION_UI)
+        self.assertIn("Which ROM should open by default", DISPOSITION_UI)
 
     def test_page_routes_rom_choice_through_read_only_review_then_finalization(self):
         self.assertIn("build_current_rom_disposition_review", PAGE)

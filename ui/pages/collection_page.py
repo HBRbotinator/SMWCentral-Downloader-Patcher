@@ -2598,8 +2598,8 @@ class CollectionPage:
             parent,
             title="Refresh Current SMWC Submission",
             message=(
-                f"Loading current KaizOFF detail for SMWC {source_key} and freezing a same-ID "
-                "metadata refresh plan. Collection identity and ROM files are unchanged."
+                f"Checking the latest SMWC information for SMWC {source_key} and preparing your update. "
+                "Nothing in Collection is changed during this step."
             ),
         )
         self.collection_current_refresh_progress_dialog.show()
@@ -2656,8 +2656,8 @@ class CollectionPage:
             self._last_collection_current_refresh_plan = None
             self._log(f"❌ Current SMWC refresh planning failed: {payload}", "Error")
             messagebox.showerror(
-                "Current SMWC Refresh",
-                f"Could not build the same-ID refresh plan:\n\n{payload}\n\nNothing was applied.",
+                "Could Not Prepare Update",
+                f"The update could not be prepared:\n\n{payload}\n\nNothing was changed.",
                 parent=self.frame.winfo_toplevel(),
             )
             return
@@ -2673,11 +2673,10 @@ class CollectionPage:
                     "Information",
                 )
                 messagebox.showinfo(
-                    "Current ROM Already Matches",
+                    "You Already Have This ROM",
                     (
-                        "The current SMWC download patched to bytes already represented by a verified "
-                        "ROM asset in Collection. The temporary duplicate was removed.\n\n"
-                        "You may still Apply Current Refresh to update the frozen catalogue metadata."
+                        "The downloaded ROM matches ROM bytes already recorded in Collection, so no "
+                        "duplicate file was kept.\n\nYou can still apply the SMWC information update."
                     ),
                     parent=self.frame.winfo_toplevel(),
                 )
@@ -2754,18 +2753,27 @@ class CollectionPage:
 
         config = ConfigManager()
         base_rom_path = str(config.get("base_rom_path", "") or "")
-        output_dir = str(config.get("output_dir", "") or "")
         if not base_rom_path or not os.path.isfile(base_rom_path):
             messagebox.showerror(
-                "Acquire Current ROM",
-                "Configure a valid clean base ROM in Settings before acquiring the current ROM.",
+                "Clean Base ROM Required",
+                "Choose a valid clean base ROM in Settings before downloading and patching this ROM.",
                 parent=self.frame.winfo_toplevel(),
             )
             return False
-        if not output_dir or not os.path.isdir(output_dir):
+
+        from collection_update_current_output import (
+            CollectionCurrentOutputError,
+            ensure_default_rom_output_directory,
+        )
+
+        try:
+            output_dir = str(
+                ensure_default_rom_output_directory(config.get("output_dir", ""))
+            )
+        except CollectionCurrentOutputError as error:
             messagebox.showerror(
-                "Acquire Current ROM",
-                "Configure a valid ROM output directory in Settings before acquiring the current ROM.",
+                "Default ROM Output Folder Required",
+                str(error),
                 parent=self.frame.winfo_toplevel(),
             )
             return False
@@ -2782,8 +2790,9 @@ class CollectionPage:
             parent,
             title="Acquire Current SMWC ROM",
             message=(
-                "Downloading the current reviewed SMWC archive, patching against the configured "
-                "clean base ROM, hashing the result, and publishing without overwriting existing files."
+                "Downloading the ROM offered for this SMWC entry and patching it against your clean "
+                "base ROM. The new file is prepared in your Default ROM Output Folder; existing "
+                "Collection ROMs may live elsewhere and are not moved."
             ),
         )
         self.collection_current_refresh_progress_dialog.show()
@@ -2836,8 +2845,8 @@ class CollectionPage:
         except Exception as error:
             self._log(f"❌ Current-ROM disposition review failed: {error}", "Error")
             messagebox.showerror(
-                "Choose ROM Handling",
-                f"Could not prepare the current-ROM choice:\n\n{error}",
+                "Could Not Prepare ROM Choice",
+                f"The downloaded ROM choice could not be prepared:\n\n{error}",
                 parent=self.frame.winfo_toplevel(),
             )
             return False
@@ -2907,8 +2916,8 @@ class CollectionPage:
             parent,
             title="Apply Current SMWC Refresh",
             message=(
-                "Applying the frozen same-ID catalogue/ROM plan transactionally. No provider, "
-                "download, matching, or patching work occurs during Apply."
+                "Applying the update you reviewed. No additional download or patching happens during "
+                "this step."
             ),
         )
         self.collection_current_refresh_progress_dialog.show()
@@ -2965,6 +2974,9 @@ class CollectionPage:
     def _collection_current_refresh_apply_succeeded(self, result, cleanup_error=None):
         finalized = self._last_collection_current_refresh_plan
         source_key = finalized.source_collection_key if finalized is not None else "current"
+        source_title = (
+            finalized.source_entry.title if finalized is not None else f"SMWC {source_key}"
+        )
         self._close_collection_current_refresh_progress()
         self._collection_update_apply_busy = False
         self._reload_collection_ingestion_live_state()
@@ -2978,13 +2990,11 @@ class CollectionPage:
             )
         self._log(f"✅ Current SMWC {source_key} refresh applied transactionally", "Information")
         messagebox.showinfo(
-            "Current SMWC Refresh Applied",
+            "Update Complete",
             (
-                f"SMWC {source_key} was refreshed without changing Collection identity.\n\n"
-                f"Files written transactionally: {len(result.written_files)}\n"
-                f"Identity migrations: {result.identity_migration_count}\n\n"
-                "The reviewed ROM handling choice was applied without changing Collection identity. "
-                "Apply itself performed no network or patching work."
+                f"{source_title} was updated successfully.\n\n"
+                "Your Collection entry kept the same SMWC ID and your personal Collection data was preserved. "
+                "Any ROM choice you reviewed was applied as requested."
                 f"{cleanup_note}"
             ),
             parent=self.frame.winfo_toplevel(),
@@ -2997,8 +3007,8 @@ class CollectionPage:
         self._close_collection_current_refresh_preview()
         self._last_collection_current_refresh_plan = None
         messagebox.showerror(
-            "Current SMWC Refresh Changed",
-            f"{error}\n\nNothing from the stale same-ID refresh plan was applied. Restart the update check.",
+            "Update Needs to Be Checked Again",
+            f"{error}\n\nNothing was changed. Start the update again so the latest Collection state can be checked.",
             parent=self.frame.winfo_toplevel(),
         )
 
@@ -3012,10 +3022,10 @@ class CollectionPage:
             self.collection_current_refresh_preview_dialog.set_busy(False)
         self._log(f"❌ Current SMWC refresh Apply failed: {error}", "Error")
         messagebox.showerror(
-            "Current SMWC Refresh Failed",
+            "Update Failed",
             (
-                f"The transactional same-ID refresh could not be committed.\n\n{error}\n\n"
-                "No reviewed refresh change was committed. You may retry after correcting the problem."
+                f"The update could not be applied.\n\n{error}\n\n"
+                "No reviewed update was committed. You can retry after correcting the problem."
             ),
             parent=self.frame.winfo_toplevel(),
         )

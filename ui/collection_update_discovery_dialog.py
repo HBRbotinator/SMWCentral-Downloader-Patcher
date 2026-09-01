@@ -1,4 +1,4 @@
-"""Read-only Tk UI for explicit Collection update/replacement discovery."""
+"""Read-only Tk UI for checking one Collection entry against the SMWC catalogue."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -7,15 +7,14 @@ from tkinter import messagebox, ttk
 
 from collection_update_discovery import (
     CollectionUpdateDiscovery,
-    CollectionUpdateSelection,
-    RelatedSubmissionCandidate,
     search_collection_update_catalogue,
     select_possible_collection_replacement,
 )
+from ui.window_positioning import center_window_on_parent
 
 
 class CollectionUpdateDiscoveryProgressDialog:
-    """Modal busy window while a current KaizOFF Index snapshot is loaded."""
+    """Modal busy window while the current SMWC catalogue snapshot is loaded."""
 
     def __init__(self, parent):
         self.parent = parent
@@ -25,23 +24,22 @@ class CollectionUpdateDiscoveryProgressDialog:
         if self.win:
             return self.win
         self.win = tk.Toplevel(self.parent)
-        self.win.title("Finding Possible SMWC Update")
+        self.win.title("Checking SMWC Entry")
         self.win.resizable(False, False)
         self.win.transient(self.parent)
         self.win.protocol("WM_DELETE_WINDOW", lambda: None)
-
         body = ttk.Frame(self.win, padding=18)
         body.pack(fill="both", expand=True)
         ttk.Label(
             body,
-            text="Checking the KaizOFF catalogue...",
+            text="Checking this Collection entry...",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w")
         ttk.Label(
             body,
             text=(
-                "Loading a current lightweight Index and ranking possible related "
-                "SMWC submissions. No Collection, ROM, save, or Planner data is changed."
+                "Checking the SMWC catalogue for this entry and looking for possibly related "
+                "submissions. Nothing in your Collection is changed."
             ),
             wraplength=460,
         ).pack(anchor="w", pady=(5, 10))
@@ -52,7 +50,7 @@ class CollectionUpdateDiscoveryProgressDialog:
             self.win.grab_set()
         except tk.TclError:
             pass
-        self._center()
+        center_window_on_parent(self.win, self.parent)
         return self.win
 
     def close(self):
@@ -67,26 +65,19 @@ class CollectionUpdateDiscoveryProgressDialog:
             pass
         self.win = None
 
-    def _center(self):
-        try:
-            self.win.update_idletasks()
-            x = self.parent.winfo_rootx() + max(
-                0,
-                (self.parent.winfo_width() - self.win.winfo_width()) // 2,
-            )
-            y = self.parent.winfo_rooty() + max(
-                0,
-                (self.parent.winfo_height() - self.win.winfo_height()) // 2,
-            )
-            self.win.geometry(f"+{x}+{y}")
-        except (tk.TclError, AttributeError):
-            pass
-
 
 class CollectionUpdateDiscoveryDialog:
-    """Browse one frozen Index and explicitly choose a possible replacement target."""
+    """Keep the same-ID update path prominent and replacements clearly secondary."""
 
-    def __init__(self, parent, discovery, *, on_select=None, on_refresh_current=None, on_close=None):
+    def __init__(
+        self,
+        parent,
+        discovery,
+        *,
+        on_select=None,
+        on_refresh_current=None,
+        on_close=None,
+    ):
         if not isinstance(discovery, CollectionUpdateDiscovery):
             raise TypeError("discovery must be CollectionUpdateDiscovery")
         self.parent = parent
@@ -116,75 +107,85 @@ class CollectionUpdateDiscoveryDialog:
 
         source = self.discovery.source_entry
         self.win = tk.Toplevel(self.parent)
-        self.win.title("Find Possible SMWC Update / Replacement")
-        self.win.geometry("1180x720")
-        self.win.minsize(900, 560)
+        self.win.title(f"Update {source.title}")
+        self.win.geometry("1180x760")
+        self.win.minsize(900, 600)
         self.win.transient(self.parent)
         self.win.protocol("WM_DELETE_WINDOW", self.close)
 
         root = ttk.Frame(self.win, padding=14)
         root.pack(fill="both", expand=True)
+
         ttk.Label(
             root,
-            text="Find Possible SMWC Update / Replacement",
+            text=f"Update {source.title}",
             font=("Segoe UI", 15, "bold"),
         ).pack(anchor="w")
         ttk.Label(
             root,
             text=(
-                f"Current Collection entry: {source.title} (SMWC {source.smwc_submission_id}). "
-                "SMWC submission IDs are not permanent logical-version identities, and the "
-                "application cannot prove that another submission is newer."
+                f"SMWC {source.smwc_submission_id}. Choose the normal update action below when "
+                "you want to refresh this same Collection entry."
             ),
             wraplength=1100,
-        ).pack(anchor="w", pady=(4, 3))
-        ttk.Label(
-            root,
-            text=(
-                "Suggestions below are only possibly related catalogue rows. Search the frozen "
-                "Index yourself and confirm a relationship only when you recognize it externally."
-            ),
-            foreground="#C47F00",
-            wraplength=1100,
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(anchor="w", pady=(4, 10))
 
-        freshness = _freshness_text(self.discovery)
-        self.status_label = ttk.Label(root, text=freshness)
-        self.status_label.pack(anchor="w", pady=(0, 8))
-
-        current_frame = ttk.LabelFrame(root, text="Current SMWC submission", padding=8)
-        current_frame.pack(fill="x", pady=(0, 10))
+        current_frame = ttk.LabelFrame(root, text="Update this Collection entry", padding=12)
+        current_frame.pack(fill="x", pady=(0, 12))
+        current_text = ttk.Frame(current_frame)
+        current_text.pack(side="left", fill="both", expand=True)
         ttk.Label(
-            current_frame,
+            current_text,
+            text=f"{source.title}  ·  SMWC {source.smwc_submission_id}",
+            font=("Segoe UI", 10, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            current_text,
             text=(
-                f"SMWC {source.smwc_submission_id} — {source.title}. Refresh this exact active "
-                "submission when you want current metadata or the current downloadable ROM without "
-                "changing Collection identity."
+                "Refresh its SMWC information and optionally download the ROM currently offered "
+                "for this same SMWC entry. Your Collection identity does not change."
             ),
-            wraplength=870,
-        ).pack(side="left", fill="x", expand=True)
+            wraplength=790,
+        ).pack(anchor="w", pady=(3, 0))
         current_button = ttk.Button(
             current_frame,
-            text="Refresh / Re-download Current...",
+            text="Update This Entry...",
             command=self._refresh_current,
+            width=24,
         )
-        current_button.pack(side="right", padx=(10, 0))
+        current_button.pack(side="right", padx=(18, 0), pady=2)
         if self.on_refresh_current is None:
             current_button.configure(state="disabled")
 
-        search = ttk.Frame(root)
+        related = ttk.LabelFrame(root, text="Other SMWC submissions", padding=10)
+        related.pack(fill="both", expand=True)
+        ttk.Label(
+            related,
+            text=(
+                "These are separate submissions that may be related. "
+                "the application cannot prove that another submission is newer. "
+                "Only continue when you recognize the relationship."
+            ),
+            foreground="#C47F00",
+            wraplength=1080,
+        ).pack(anchor="w", pady=(0, 5))
+
+        self.status_label = ttk.Label(related, text=_freshness_text(self.discovery), foreground="gray")
+        self.status_label.pack(anchor="w", pady=(0, 8))
+
+        search = ttk.Frame(related)
         search.pack(fill="x", pady=(0, 8))
-        ttk.Label(search, text="Search frozen KaizOFF Index:").pack(side="left")
-        self.search_var = tk.StringVar(value="")
+        ttk.Label(search, text="Search other submissions:").pack(side="left")
+        self.search_var = tk.StringVar(value=source.title)
         entry = ttk.Entry(search, textvariable=self.search_var)
         entry.pack(side="left", fill="x", expand=True, padx=(8, 6))
         entry.bind("<Return>", self._search)
         ttk.Button(search, text="Search", command=self._search).pack(side="left")
-        ttk.Button(search, text="Suggestions", command=self._show_suggestions).pack(
+        ttk.Button(search, text="Suggested", command=self._show_suggestions).pack(
             side="left", padx=(6, 0)
         )
 
-        table_frame = ttk.Frame(root)
+        table_frame = ttk.Frame(related)
         table_frame.pack(fill="both", expand=True)
         columns = ("id", "title", "difficulty", "type", "exits", "collection")
         self.tree = ttk.Treeview(
@@ -222,9 +223,9 @@ class CollectionUpdateDiscoveryDialog:
         table_frame.columnconfigure(0, weight=1)
         self.tree.bind("<<TreeviewSelect>>", self._selection_changed)
 
-        details_frame = ttk.LabelFrame(root, text="Why this row is shown", padding=8)
+        details_frame = ttk.LabelFrame(related, text="Why this submission is shown", padding=8)
         details_frame.pack(fill="x", pady=(8, 0))
-        self.details = tk.Text(details_frame, height=5, wrap="word")
+        self.details = tk.Text(details_frame, height=4, wrap="word")
         self.details.pack(fill="x")
         self.details.configure(state="disabled")
 
@@ -233,13 +234,13 @@ class CollectionUpdateDiscoveryDialog:
         ttk.Label(
             footer,
             text=(
-                "This step is read-only. Choosing a possible replacement does not download a ROM, "
-                "change Collection identity, or modify dependent references."
+                "Possible replacements are review-only here. Nothing is downloaded or changed "
+                "until you continue through the later reviewed update flow."
             ),
             foreground="gray",
             wraplength=760,
         ).pack(side="left", anchor="w")
-        ttk.Button(footer, text="Keep Separate / Close", command=self.close).pack(side="right")
+        ttk.Button(footer, text="Close", command=self.close).pack(side="right")
         ttk.Button(
             footer,
             text="Use as Possible Replacement...",
@@ -251,7 +252,7 @@ class CollectionUpdateDiscoveryDialog:
             self.win.grab_set()
         except tk.TclError:
             pass
-        self._center()
+        center_window_on_parent(self.win, self.parent)
         return self.win
 
     def lift(self):
@@ -282,7 +283,7 @@ class CollectionUpdateDiscoveryDialog:
             self.on_close()
 
     def _show_suggestions(self):
-        self.search_var.set("")
+        self.search_var.set(self.discovery.source_entry.title)
         self._populate(tuple(item.entry for item in self.discovery.suggestions))
         self.status_label.configure(
             text=(
@@ -296,10 +297,7 @@ class CollectionUpdateDiscoveryDialog:
         results = search_collection_update_catalogue(self.discovery, query)
         self._populate(results)
         self.status_label.configure(
-            text=(
-                _freshness_text(self.discovery)
-                + f" · {len(results)} result(s) for {query!r}"
-            )
+            text=_freshness_text(self.discovery) + f" · {len(results)} result(s)"
         )
 
     def _populate(self, entries):
@@ -349,13 +347,13 @@ class CollectionUpdateDiscoveryDialog:
                 lines.extend(f"Caution: {item}" for item in suggestion.cautions)
             else:
                 lines.append(
-                    "This row came from your manual frozen-Index search; no update relationship is inferred."
+                    "This submission came from your manual catalogue search; no update relationship is inferred."
                 )
             if entry.smwc_submission_id in self.discovery.existing_numeric_collection_ids:
                 lines.append(
-                    "Target already exists in Collection; a later confirmed replacement would need explicit merge reconciliation."
+                    "This SMWC ID is already in Collection; continuing would require an explicit merge review."
                 )
-            lines.append("No catalogue result shown here is proof of version lineage or recency.")
+            lines.append("This list is not proof of version order or recency.")
         self.details.configure(state="normal")
         self.details.delete("1.0", "end")
         self.details.insert("1.0", "\n".join(lines))
@@ -366,14 +364,12 @@ class CollectionUpdateDiscoveryDialog:
             return False
         source = self.discovery.source_entry
         confirmed = messagebox.askyesno(
-            "Refresh Current SMWC Submission",
+            "Update This Collection Entry",
             (
-                f"Refresh the current data for SMWC {source.smwc_submission_id} — "
-                f"{source.title}?\n\n"
-                "This is not a replacement and does not infer any version lineage. The next "
-                "step freezes current KaizOFF metadata for this same submission ID. You can then "
-                "optionally re-download/patch its current ROM before Apply.\n\n"
-                "Nothing is changed at this step."
+                f"Update {source.title} (SMWC {source.smwc_submission_id})?\n\n"
+                "Next you can update the SMWC information only, or also download the ROM currently "
+                "offered for this same SMWC entry. This is not a replacement with another submission.\n\n"
+                "Nothing changes until you review and apply the update."
             ),
             parent=self.win,
         )
@@ -397,23 +393,22 @@ class CollectionUpdateDiscoveryDialog:
             entry = self._displayed_entries[int(selected[0])]
         except (IndexError, TypeError, ValueError):
             return
-
         merge_note = ""
         if entry.smwc_submission_id in self.discovery.existing_numeric_collection_ids:
             merge_note = (
                 "\n\nThat SMWC ID already exists in your Collection. A later replacement flow "
-                "would have to reconcile/merge the two records explicitly."
+                "will reconcile the two records explicitly."
             )
         confirmed = messagebox.askyesno(
             "Confirm Possible Relationship",
             (
-                f"Treat SMWC {entry.smwc_submission_id} — {entry.title} as a possible "
-                f"replacement/update candidate for SMWC {self.discovery.source_collection_key} — "
+                f"Treat SMWC {entry.smwc_submission_id} — {entry.title} as a possible related "
+                f"submission for SMWC {self.discovery.source_collection_key} — "
                 f"{self.discovery.source_entry.title}?\n\n"
-                "The application cannot prove that this submission is newer. You are only "
-                "confirming that you recognize a relationship worth continuing with."
+                "The application cannot prove that this submission is newer. You are only confirming "
+                "that you recognize a relationship worth reviewing."
                 f"{merge_note}\n\n"
-                "Nothing is downloaded or changed in Collection at this step."
+                "Nothing is downloaded or changed at this step."
             ),
             icon="warning",
             parent=self.win,
@@ -429,23 +424,6 @@ class CollectionUpdateDiscoveryDialog:
             accepted = self.on_select(selection) is not False
         if accepted:
             self.close()
-
-    def _center(self):
-        try:
-            self.win.update_idletasks()
-            width = self.win.winfo_width()
-            height = self.win.winfo_height()
-            x = self.parent.winfo_rootx() + max(
-                0,
-                (self.parent.winfo_width() - width) // 2,
-            )
-            y = self.parent.winfo_rooty() + max(
-                0,
-                (self.parent.winfo_height() - height) // 2,
-            )
-            self.win.geometry(f"+{x}+{y}")
-        except (tk.TclError, AttributeError):
-            pass
 
 
 def _suggestion_for(discovery, submission_id):
@@ -466,8 +444,8 @@ def _freshness_text(discovery):
         )
     except (OSError, OverflowError, TypeError, ValueError):
         timestamp = "unknown time"
-    stale = " · STALE fallback" if discovery.catalogue_stale else ""
-    return f"KaizOFF Index: {discovery.catalogue_source} · fetched {timestamp}{stale}"
+    stale = " · cached fallback" if discovery.catalogue_stale else ""
+    return f"SMWC catalogue checked {timestamp}{stale}"
 
 
 __all__ = [

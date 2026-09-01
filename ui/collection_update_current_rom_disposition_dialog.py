@@ -1,4 +1,4 @@
-"""Explicit review UI for handling a newly downloaded same-ID current ROM."""
+"""Explicit review UI for handling a newly downloaded same-ID ROM."""
 from __future__ import annotations
 
 import tkinter as tk
@@ -39,64 +39,90 @@ class CollectionCurrentRomDispositionDialog:
             self.win.lift()
             self.win.focus_force()
             return self.win
+
         self.win = tk.Toplevel(self.parent)
-        self.win.title("Choose How to Handle the Downloaded ROM")
-        self.win.geometry("820x610")
+        self.win.title("Choose What Happens to the Downloaded ROM")
+        self.win.geometry("840x620")
         self.win.minsize(700, 500)
         self.win.transient(self.parent)
         self.win.protocol("WM_DELETE_WINDOW", self.close)
 
-        root = ttk.Frame(self.win, padding=14)
+        root = ttk.Frame(self.win, padding=16)
         root.pack(fill="both", expand=True)
         ttk.Label(
             root,
-            text="Choose how to handle the downloaded ROM",
+            text="What should happen to the downloaded ROM?",
             font=("Segoe UI", 14, "bold"),
         ).pack(anchor="w")
         ttk.Label(
             root,
             text=(
-                "This is an explicit storage/primary-ROM choice only. The application does not infer "
-                "which ROM is newer from SMWC IDs, filenames, or hashes."
+                "The downloaded ROM is different from the ROMs already recorded for this Collection "
+                "entry. Choose how you want to store it."
             ),
-            wraplength=760,
+            wraplength=780,
         ).pack(anchor="w", pady=(4, 10))
 
-        options = ttk.LabelFrame(root, text="ROM handling", padding=10)
+        options = ttk.LabelFrame(root, text="ROM files", padding=12)
         options.pack(fill="x")
         self.disposition_var = tk.StringVar(value="")
+
         replace = ttk.Radiobutton(
             options,
-            text="Replace current ROM — keep the existing primary filename/path",
+            text="Replace my current ROM — keep its existing filename and location",
             variable=self.disposition_var,
             value=CurrentRomDisposition.REPLACE_CURRENT.value,
             command=self._choice_changed,
         )
         replace.pack(anchor="w")
+        ttk.Label(
+            options,
+            text=(
+                "The reviewed current primary ROM is replaced transactionally. Other recorded ROM "
+                "variants remain untouched."
+            ),
+            foreground="gray",
+            wraplength=750,
+        ).pack(anchor="w", padx=(22, 0), pady=(2, 4))
         if not self.review.can_replace_current:
             replace.configure(state="disabled")
             ttk.Label(
                 options,
                 text="Replace is unavailable because there is no verified current primary ROM to replace.",
                 foreground="gray",
+                wraplength=750,
             ).pack(anchor="w", padx=(22, 0), pady=(0, 6))
+
         ttk.Radiobutton(
             options,
-            text="Keep both — retain existing ROMs and add the downloaded ROM",
+            text="Keep both ROMs — leave my existing ROMs where they are and keep the downloaded copy",
             variable=self.disposition_var,
             value=CurrentRomDisposition.KEEP_BOTH.value,
             command=self._choice_changed,
         ).pack(anchor="w", pady=(6, 0))
+        ttk.Label(
+            options,
+            text=(
+                "The downloaded copy stays where the app created it in your Default ROM Output Folder. "
+                "Existing Collection ROMs can be stored elsewhere and are not moved."
+            ),
+            foreground="gray",
+            wraplength=750,
+        ).pack(anchor="w", padx=(22, 0), pady=(2, 0))
 
-        self.primary_frame = ttk.LabelFrame(root, text="Primary ROM when keeping both", padding=8)
+        self.primary_frame = ttk.LabelFrame(
+            root,
+            text="Which ROM should open by default when keeping both?",
+            padding=8,
+        )
         self.primary_frame.pack(fill="both", expand=True, pady=(10, 0))
         ttk.Label(
             self.primary_frame,
             text=(
                 "Keep Both requires a primary choice. The downloaded ROM is preselected as a convenience "
-                "because you initiated this update; that is not a version-ordering inference."
+                "because you chose to update this entry; this is not a version-ordering inference."
             ),
-            wraplength=740,
+            wraplength=760,
         ).pack(anchor="w", pady=(0, 6))
         self.primary_var = tk.StringVar(value=self.review.downloaded_default_primary_path)
 
@@ -123,22 +149,21 @@ class CollectionCurrentRomDispositionDialog:
                 label += "  [" + ", ".join(flags) + "]"
             row = ttk.Frame(rows)
             row.pack(fill="x", pady=2)
-            radio = ttk.Radiobutton(
+            ttk.Radiobutton(
                 row,
                 text=label,
                 variable=self.primary_var,
                 value=choice.path,
                 command=self._choice_changed,
-            )
-            radio.pack(anchor="w")
-            ttk.Label(row, text=choice.path, foreground="gray", wraplength=690).pack(
+            ).pack(anchor="w")
+            ttk.Label(row, text=choice.path, foreground="gray", wraplength=710).pack(
                 anchor="w", padx=(24, 0)
             )
 
         footer = ttk.Frame(root)
         footer.pack(fill="x", pady=(12, 0))
         ttk.Button(footer, text="Cancel", command=self.close).pack(side="right")
-        self.save_button = ttk.Button(footer, text="Save ROM Choice", command=self._save)
+        self.save_button = ttk.Button(footer, text="Continue", command=self._save)
         self.save_button.pack(side="right", padx=(0, 8))
         self._choice_changed()
         center_window_on_parent(self.win, self.parent)
@@ -166,21 +191,23 @@ class CollectionCurrentRomDispositionDialog:
             disposition = CurrentRomDisposition(raw)
         except ValueError:
             messagebox.showerror(
-                "Choose ROM Handling",
-                "Choose Replace current ROM or Keep both before saving.",
+                "Choose What Happens to the ROM",
+                "Choose Replace my current ROM or Keep both ROMs before continuing.",
                 parent=self.win,
             )
             return False
+
         primary = ""
         if disposition is CurrentRomDisposition.KEEP_BOTH:
             primary = self.primary_var.get() if self.primary_var else ""
             if not primary:
                 messagebox.showerror(
                     "Choose Primary ROM",
-                    "Keep Both requires a primary ROM choice.",
+                    "Choose which ROM should open by default when keeping both.",
                     parent=self.win,
                 )
                 return False
+
         accepted = self.on_save(disposition, primary)
         if accepted is False:
             return False

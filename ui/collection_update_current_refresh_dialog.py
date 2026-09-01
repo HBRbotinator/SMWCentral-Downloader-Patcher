@@ -1,11 +1,10 @@
-"""Tk preview/progress UI for updating the current SMWC Collection entry."""
+"""Guided Tk UI for updating the current SMWC Collection entry."""
 from __future__ import annotations
 
 from datetime import datetime
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from collection_ingestion_plan_preview import CollectionIngestionPlanPreviewModel
 from collection_update_current_refresh import (
     CurrentRomDisposition,
     FinalizedCurrentSubmissionRefreshPlan,
@@ -19,15 +18,15 @@ from ui.window_positioning import center_window_on_parent
 
 def _friendly_progress_title(title):
     aliases = {
-        "Refresh Current SMWC Submission": "Update Current Entry",
-        "Acquire Current SMWC ROM": "Download Current ROM",
-        "Apply Current SMWC Refresh": "Apply Update",
+        "Refresh Current SMWC Submission": "Preparing Update",
+        "Acquire Current SMWC ROM": "Downloading ROM",
+        "Apply Current SMWC Refresh": "Applying Update",
     }
     return aliases.get(str(title or ""), str(title or "Updating Collection Entry"))
 
 
 class CollectionCurrentRefreshProgressDialog:
-    def __init__(self, parent, *, title="Update Current Entry", message="Working..."):
+    def __init__(self, parent, *, title="Preparing Update", message="Working..."):
         self.parent = parent
         self.title = _friendly_progress_title(title)
         self.message = message
@@ -69,22 +68,29 @@ class CollectionCurrentRefreshProgressDialog:
 
 
 class CollectionCurrentRefreshPreviewDialog:
-    """User-facing same-ID update preview with optional ROM download."""
+    """User-facing guided same-ID update flow."""
 
-    def __init__(self, parent, finalized, *, on_acquire=None, on_review_rom=None, on_apply=None, on_close=None):
+    def __init__(
+        self,
+        parent,
+        finalized,
+        *,
+        on_acquire=None,
+        on_review_rom=None,
+        on_apply=None,
+        on_close=None,
+    ):
         if not isinstance(finalized, FinalizedCurrentSubmissionRefreshPlan):
             raise TypeError("finalized must be FinalizedCurrentSubmissionRefreshPlan")
         self.parent = parent
         self.finalized = finalized
-        self.model = CollectionIngestionPlanPreviewModel(finalized.plan)
         self.on_acquire = on_acquire
         self.on_review_rom = on_review_rom
         self.on_apply = on_apply
         self.on_close = on_close
         self.win = None
-        self.tree = None
-        self.details = None
-        self.acquire_button = None
+        self.update_choice_var = None
+        self.continue_button = None
         self.review_rom_button = None
         self.apply_button = None
         self.close_button = None
@@ -104,14 +110,22 @@ class CollectionCurrentRefreshPreviewDialog:
             return self.win
 
         source = self.finalized.source_entry
+        acquired = finalized_current_refresh_has_acquired_rom(self.finalized)
+        checked = finalized_current_refresh_rom_checked(self.finalized)
+        unresolved_rom_choice = (
+            acquired
+            and not self.finalized.rom_matches_existing
+            and self.finalized.rom_disposition is None
+        )
+
         self.win = tk.Toplevel(self.parent)
         self.win.title(f"Update {source.title}")
-        self.win.geometry("1060x680")
-        self.win.minsize(840, 540)
+        self.win.geometry("820x560")
+        self.win.minsize(700, 480)
         self.win.transient(self.parent)
         self.win.protocol("WM_DELETE_WINDOW", self.close)
 
-        root = ttk.Frame(self.win, padding=14)
+        root = ttk.Frame(self.win, padding=16)
         root.pack(fill="both", expand=True)
 
         ttk.Label(
@@ -119,207 +133,174 @@ class CollectionCurrentRefreshPreviewDialog:
             text=f"Update {source.title}",
             font=("Segoe UI", 15, "bold"),
         ).pack(anchor="w")
-
         ttk.Label(
             root,
             text=(
-                f"SMWC {source.smwc_submission_id} — {source.title}. "
-                "This updates the existing Collection entry for this same SMWC ID. "
-                "It does not replace the entry with another submission."
+                f"SMWC {source.smwc_submission_id}. This updates the existing Collection entry for "
+                "this same SMWC ID; it does not replace it with another submission."
             ),
-            wraplength=960,
-        ).pack(anchor="w", pady=(4, 8))
+            wraplength=760,
+        ).pack(anchor="w", pady=(4, 10))
 
-        acquired = finalized_current_refresh_has_acquired_rom(self.finalized)
-        checked = finalized_current_refresh_rom_checked(self.finalized)
-
-        choice = ttk.LabelFrame(root, text="Choose what to update", padding=10)
-        choice.pack(fill="x", pady=(0, 10))
-
-        if acquired and self.finalized.rom_disposition is None:
-            choice_text = (
-                "The current ROM has been downloaded and patched successfully. "
-                "Before applying, choose whether to replace the current primary ROM at its existing "
-                "filename/path or keep both ROMs. Keep Both also requires an explicit primary choice."
-            )
-        elif acquired and self.finalized.rom_disposition is CurrentRomDisposition.REPLACE_CURRENT:
-            choice_text = (
-                "ROM choice reviewed: Replace current ROM. Applying the update will preserve the current "
-                "primary filename/path while replacing its bytes with the downloaded reviewed ROM."
-            )
-        elif acquired and self.finalized.rom_disposition is CurrentRomDisposition.KEEP_BOTH:
-            choice_text = (
-                "ROM choice reviewed: Keep both. Applying the update retains existing ROMs and the "
-                "downloaded ROM; the explicitly reviewed primary choice will be used."
-            )
-        elif checked and self.finalized.rom_matches_existing:
-            choice_text = (
-                "The current SMWC download matches verified ROM bytes already in Collection, "
-                "so no duplicate ROM was kept. You can apply the refreshed SMWC information."
-            )
-        elif self.finalized.download_url:
-            choice_text = (
-                "You can apply the refreshed SMWC information only, or download and patch the current ROM "
-                "before applying. Downloading prepares the ROM first; it does not change Collection by itself."
-            )
+        if not checked and not acquired:
+            self._build_initial_choice(root)
+        elif unresolved_rom_choice:
+            self._build_rom_choice_required(root)
         else:
-            choice_text = (
-                "The refreshed SMWC information is ready to apply. "
-                "No current ROM download is available for this entry."
-            )
-
-        ttk.Label(choice, text=choice_text, wraplength=920).pack(anchor="w", fill="x")
-
-        actions = ttk.Frame(choice)
-        actions.pack(fill="x", pady=(10, 0))
-
-        available = bool(self.finalized.download_url)
-        acquire_text = (
-            "ROM Downloaded"
-            if acquired
-            else (
-                "ROM Already Matches"
-                if checked and self.finalized.rom_matches_existing
-                else ("Download Current ROM..." if available else "ROM Download Unavailable")
-            )
-        )
-        self.acquire_button = ttk.Button(actions, text=acquire_text, command=self._request_acquire)
-        self.acquire_button.pack(side="left")
-        if checked or acquired or not available or self.on_acquire is None:
-            self.acquire_button.configure(state="disabled")
-
-        self.review_rom_button = ttk.Button(
-            actions,
-            text=("Change ROM Choice..." if self.finalized.rom_disposition is not None else "Choose ROM Handling..."),
-            command=self._request_rom_review,
-        )
-        self.review_rom_button.pack(side="left", padx=(8, 0))
-        if not acquired or self.finalized.rom_matches_existing or self.on_review_rom is None:
-            self.review_rom_button.configure(state="disabled")
-
-        self.apply_button = ttk.Button(actions, text="Apply Update...", command=self._request_apply)
-        self.apply_button.pack(side="right")
-        if (
-            self.on_apply is None
-            or (acquired and not self.finalized.rom_matches_existing and self.finalized.rom_disposition is None)
-        ):
-            self.apply_button.configure(state="disabled")
+            self._build_ready_summary(root)
 
         ttk.Label(
             root,
             text=_provider_freshness(self.finalized),
             foreground="gray",
-        ).pack(anchor="w", pady=(0, 8))
-
-        plan_frame = ttk.LabelFrame(root, text="Prepared changes", padding=8)
-        plan_frame.pack(fill="both", expand=True)
-
-        frame = ttk.Frame(plan_frame)
-        frame.pack(fill="both", expand=True)
-        columns = ("category", "target", "change", "details")
-        self.tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
-        widths = {"category": 110, "target": 210, "change": 230, "details": 430}
-        headings = {
-            "category": "Area",
-            "target": "Collection entry",
-            "change": "Change",
-            "details": "Details",
-        }
-        for column in columns:
-            self.tree.heading(column, text=headings[column])
-            self.tree.column(column, width=widths[column], minwidth=80, anchor="w")
-
-        vbar = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
-        hbar = ttk.Scrollbar(frame, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vbar.set, xscrollcommand=hbar.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        vbar.grid(row=0, column=1, sticky="ns")
-        hbar.grid(row=1, column=0, sticky="ew")
-        frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
-        self.tree.bind("<<TreeviewSelect>>", self._selection_changed)
-
-        detail_frame = ttk.LabelFrame(root, text="Selected change", padding=8)
-        detail_frame.pack(fill="x", pady=(10, 0))
-        self.details = tk.Text(detail_frame, height=4, wrap="word")
-        self.details.pack(fill="x")
-        self.details.configure(state="disabled")
+        ).pack(anchor="w", pady=(10, 0))
 
         footer = ttk.Frame(root)
-        footer.pack(fill="x", pady=(10, 0))
+        footer.pack(side="bottom", fill="x", pady=(14, 0))
         ttk.Label(
             footer,
             text=(
-                "Nothing changes until you apply the prepared update. "
-                "Your Collection ID and personal Collection data are preserved."
+                "Nothing changes in Collection until you apply the update. Your Collection ID, "
+                "completion, notes, ratings and other personal Collection data are preserved."
             ),
             foreground="gray",
-            wraplength=760,
+            wraplength=600,
         ).pack(side="left", anchor="w")
-
-        self.close_button = ttk.Button(footer, text="Close", command=self.close)
+        self.close_button = ttk.Button(footer, text="Cancel", command=self.close)
         self.close_button.pack(side="right")
 
-        self._populate()
         center_window_on_parent(self.win, self.parent)
         return self.win
 
-    def _populate(self):
-        rows = self.model.rows()
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        for index, row in enumerate(rows):
-            self.tree.insert(
-                "",
-                "end",
-                iid=str(index),
-                values=(row.category, row.target, row.change, row.details),
+    def _build_initial_choice(self, root):
+        available = bool(self.finalized.download_url)
+        choice = ttk.LabelFrame(root, text="What would you like to update?", padding=12)
+        choice.pack(fill="x")
+
+        self.update_choice_var = tk.StringVar(value="metadata")
+        ttk.Radiobutton(
+            choice,
+            text="Update SMWC information only",
+            variable=self.update_choice_var,
+            value="metadata",
+        ).pack(anchor="w")
+
+        rom_option = ttk.Radiobutton(
+            choice,
+            text="Update SMWC information and download the ROM offered for this SMWC entry",
+            variable=self.update_choice_var,
+            value="metadata_rom",
+        )
+        rom_option.pack(anchor="w", pady=(8, 0))
+        if not available or self.on_acquire is None:
+            rom_option.configure(state="disabled")
+            ttk.Label(
+                choice,
+                text="A downloadable ROM is not available for this SMWC entry.",
+                foreground="gray",
+            ).pack(anchor="w", padx=(22, 0), pady=(2, 0))
+        else:
+            ttk.Label(
+                choice,
+                text=(
+                    "The new ROM is prepared in your Default ROM Output Folder. Existing Collection "
+                    "ROMs can live elsewhere and are not moved just because that folder is different."
+                ),
+                foreground="gray",
+                wraplength=720,
+            ).pack(anchor="w", padx=(22, 0), pady=(2, 0))
+
+        actions = ttk.Frame(choice)
+        actions.pack(fill="x", pady=(14, 0))
+        self.continue_button = ttk.Button(
+            actions,
+            text="Continue",
+            command=self._continue_initial_choice,
+        )
+        self.continue_button.pack(side="right")
+        if self.on_apply is None:
+            self.continue_button.configure(state="disabled")
+
+    def _build_rom_choice_required(self, root):
+        frame = ttk.LabelFrame(root, text="Downloaded ROM", padding=12)
+        frame.pack(fill="x")
+        ttk.Label(
+            frame,
+            text=(
+                "The downloaded ROM is different from the ROMs already recorded for this Collection "
+                "entry. Choose whether to replace your current primary ROM or keep both before applying."
+            ),
+            wraplength=720,
+        ).pack(anchor="w")
+        if self.finalized.acquired_default_primary_path:
+            ttk.Label(
+                frame,
+                text=f"Downloaded file: {self.finalized.acquired_default_primary_path}",
+                foreground="gray",
+                wraplength=720,
+            ).pack(anchor="w", pady=(6, 0))
+        self.review_rom_button = ttk.Button(
+            frame,
+            text="Choose What Happens to the ROM...",
+            command=self._request_rom_review,
+        )
+        self.review_rom_button.pack(anchor="e", pady=(12, 0))
+        if self.on_review_rom is None:
+            self.review_rom_button.configure(state="disabled")
+
+    def _build_ready_summary(self, root):
+        frame = ttk.LabelFrame(root, text="Ready to apply", padding=12)
+        frame.pack(fill="both", expand=True)
+
+        lines = ["✓ Update the SMWC information for this Collection entry"]
+        acquired = finalized_current_refresh_has_acquired_rom(self.finalized)
+        checked = finalized_current_refresh_rom_checked(self.finalized)
+
+        if checked and self.finalized.rom_matches_existing:
+            lines.append("✓ Download checked: you already have the same ROM bytes, so no duplicate was kept")
+        elif acquired and self.finalized.rom_disposition is CurrentRomDisposition.REPLACE_CURRENT:
+            replacement = self.finalized.rom_replacement
+            if replacement is not None:
+                lines.append("✓ Replace your current primary ROM while keeping its existing filename and location")
+                lines.append(f"  {replacement.target_path}")
+            else:
+                lines.append("✓ Replace your current primary ROM at its existing filename and location")
+        elif acquired and self.finalized.rom_disposition is CurrentRomDisposition.KEEP_BOTH:
+            lines.append("✓ Keep the existing ROMs and the downloaded ROM")
+            if self.finalized.reviewed_primary_path:
+                lines.append(f"✓ Use this ROM as primary: {self.finalized.reviewed_primary_path}")
+
+        ttk.Label(
+            frame,
+            text="\n".join(lines),
+            wraplength=720,
+            justify="left",
+        ).pack(anchor="w", fill="x")
+
+        if acquired and not self.finalized.rom_matches_existing and self.on_review_rom is not None:
+            self.review_rom_button = ttk.Button(
+                frame,
+                text="Change ROM Choice...",
+                command=self._request_rom_review,
             )
-        if rows:
-            self.tree.selection_set("0")
-            self.tree.focus("0")
-            self._render_detail(0)
+            self.review_rom_button.pack(anchor="w", pady=(12, 0))
 
-    def _selection_changed(self, _event=None):
-        selected = self.tree.selection()
-        if not selected:
-            self._render_detail(None)
-            return
-        try:
-            self._render_detail(int(selected[0]))
-        except (TypeError, ValueError):
-            self._render_detail(None)
+        self.apply_button = ttk.Button(frame, text="Apply Update", command=self._request_apply)
+        self.apply_button.pack(anchor="e", pady=(14, 0))
+        if self.on_apply is None:
+            self.apply_button.configure(state="disabled")
 
-    def _render_detail(self, index):
-        text = ""
-        rows = self.model.rows()
-        if index is not None and 0 <= index < len(rows):
-            row = rows[index]
-            text = f"{row.category} · {row.target}\n{row.change}\n{row.details}"
-        self.details.configure(state="normal")
-        self.details.delete("1.0", "end")
-        self.details.insert("1.0", text)
-        self.details.configure(state="disabled")
+    def _continue_initial_choice(self):
+        if self._busy:
+            return False
+        choice = self.update_choice_var.get() if self.update_choice_var else "metadata"
+        if choice == "metadata_rom":
+            return self._request_acquire()
+        return self._request_apply()
 
     def _request_acquire(self):
         if self._busy or self.on_acquire is None:
             return False
-        source = self.finalized.source_entry
-        confirmed = messagebox.askyesno(
-            "Download Current ROM",
-            (
-                f"Download and patch the current ROM for {source.title} "
-                f"(SMWC {self.finalized.source_collection_key})?\n\n"
-                "The ROM is prepared before anything is applied to Collection. "
-                "If the downloaded bytes already match a verified ROM you already have, "
-                "the duplicate copy is discarded.\n\n"
-                "After the download completes, review the prepared update before applying it."
-            ),
-            parent=self.win,
-        )
-        if not confirmed:
-            return False
-
         self.set_busy(True)
         try:
             accepted = self.on_acquire()
@@ -343,28 +324,28 @@ class CollectionCurrentRefreshPreviewDialog:
         acquired = finalized_current_refresh_has_acquired_rom(self.finalized)
         if acquired and self.finalized.rom_disposition is CurrentRomDisposition.REPLACE_CURRENT:
             action_text = (
-                "The refreshed SMWC information will be applied and the downloaded reviewed ROM will "
-                "replace the current primary ROM at the same filename/path. The replacement is "
-                "transactional and existing non-primary ROM variants remain available."
+                "The SMWC information will be updated and the reviewed downloaded ROM will replace "
+                "your current primary ROM at the same filename and location."
             )
         elif acquired and self.finalized.rom_disposition is CurrentRomDisposition.KEEP_BOTH:
             action_text = (
-                "The refreshed SMWC information and downloaded reviewed ROM will be kept alongside "
-                "the existing ROMs. Your explicitly reviewed primary ROM choice will be applied."
+                "The SMWC information will be updated, both ROMs will be kept, and your reviewed "
+                "primary ROM choice will be used."
+            )
+        elif finalized_current_refresh_rom_checked(self.finalized) and self.finalized.rom_matches_existing:
+            action_text = (
+                "The SMWC information will be updated. The downloaded check matched ROM bytes you "
+                "already have, so no ROM file will be added or replaced."
             )
         else:
-            action_text = (
-                "The refreshed SMWC information will be applied to this Collection entry. "
-                "No ROM will be downloaded or changed by this action."
-            )
+            action_text = "The SMWC information will be updated. No ROM file will be downloaded or changed."
 
         confirmed = messagebox.askyesno(
             "Apply Update",
             (
-                f"Apply the prepared update for {source.title} "
-                f"(SMWC {self.finalized.source_collection_key})?\n\n"
+                f"Update {source.title} (SMWC {self.finalized.source_collection_key})?\n\n"
                 f"{action_text}\n\n"
-                "The Collection ID stays the same and personal Collection data is preserved."
+                "Your Collection ID and personal Collection data are preserved."
             ),
             icon="warning",
             parent=self.win,
@@ -388,7 +369,8 @@ class CollectionCurrentRefreshPreviewDialog:
 
         if self.close_button:
             self.close_button.configure(state=state)
-
+        if self.continue_button:
+            self.continue_button.configure(state=state if self.on_apply is not None else "disabled")
         if self.apply_button:
             unresolved_rom_choice = (
                 finalized_current_refresh_has_acquired_rom(self.finalized)
@@ -398,31 +380,11 @@ class CollectionCurrentRefreshPreviewDialog:
             self.apply_button.configure(
                 state=(state if self.on_apply is not None and not unresolved_rom_choice else "disabled")
             )
-
         if self.review_rom_button:
-            if (
-                self._busy
-                or not finalized_current_refresh_has_acquired_rom(self.finalized)
-                or self.finalized.rom_matches_existing
-                or self.on_review_rom is None
-            ):
+            if self._busy or self.on_review_rom is None:
                 self.review_rom_button.configure(state="disabled")
             else:
                 self.review_rom_button.configure(state="normal")
-
-        if self.acquire_button:
-            acquired = finalized_current_refresh_has_acquired_rom(self.finalized)
-            checked = finalized_current_refresh_rom_checked(self.finalized)
-            if (
-                self._busy
-                or checked
-                or acquired
-                or not self.finalized.download_url
-                or self.on_acquire is None
-            ):
-                self.acquire_button.configure(state="disabled")
-            else:
-                self.acquire_button.configure(state="normal")
 
     def lift(self):
         if self.is_open:
@@ -432,8 +394,7 @@ class CollectionCurrentRefreshPreviewDialog:
 
     def close(self):
         # Programmatic close must always be able to retire the old preview after an
-        # async Download/Apply finishes.  The previous `_busy` guard left that
-        # preview alive while the caller opened its refreshed replacement.
+        # asynchronous Download/Apply finishes. Do not block this on `_busy`.
         if self._closed:
             return
 
@@ -455,8 +416,8 @@ def _provider_freshness(finalized):
         )
     except (OSError, OverflowError, TypeError, ValueError):
         timestamp = "unknown time"
-    stale = " · stale cached fallback" if finalized.detail_stale else ""
-    return f"SMWC information via KaizOFF: {finalized.detail_source} · {timestamp}{stale}"
+    stale = " · cached fallback" if finalized.detail_stale else ""
+    return f"SMWC information checked {timestamp}{stale}"
 
 
 __all__ = [
