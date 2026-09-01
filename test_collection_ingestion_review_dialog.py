@@ -80,7 +80,7 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
 
     def test_catalogue_search_is_session_local_not_network_or_provider_access(self):
         self.assertIn("self.model.search_catalogue", self.source)
-        self.assertIn("frozen KaizOFF Index", self.source)
+        self.assertIn("catalogue snapshot only", self.source)
         forbidden = (
             "KaizOffCatalogueProvider",
             "requests.",
@@ -108,8 +108,7 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
         for value in forbidden:
             with self.subTest(value=value):
                 self.assertNotIn(value, self.source)
-        self.assertIn("Nothing is ", self.source)
-        self.assertIn("written from this dialog.", self.source)
+        self.assertIn("Nothing changes until you apply the final preview.", self.source)
 
     def test_completion_callback_receives_only_detached_review_decisions(self):
         complete = next(
@@ -134,8 +133,8 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
 
     def test_decision_sections_remain_compact_and_bounded(self):
         required = (
-            'text="Review context"',
-            "height=min(4, max(2, len(lines)))",
+            'text="Why this needs review"',
+            "height=min(2, max(1, len(lines)))",
             'height=4, selectmode="browse"',
             "height=min(2, max(1, len(context.local_suggestions)))",
             'orient="vertical", command=self.local_tree.yview',
@@ -148,9 +147,46 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIn(value, self.source)
         self.assertLess(
-            self.source.index("self._render_roms(group, previous)"),
-            self.source.index("self._render_local_metadata(group, context, previous)"),
+            self.source.index("self._render_local_metadata("),
+            self.source.index("self._render_roms(group, previous, parent=self._decision_right)"),
         )
+
+    def test_decisions_use_responsive_identity_and_rom_columns(self):
+        required = (
+            "self._decision_left = ttk.Frame(self._decision_area)",
+            "self._decision_right = ttk.Frame(self._decision_area)",
+            'mode = "wide" if width >= 900 else "stacked"',
+            'left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))',
+            'right.grid(row=0, column=1, sticky="nsew")',
+            'right.grid(row=1, column=0, sticky="nsew")',
+            "area.columnconfigure(0, weight=3)",
+            "area.columnconfigure(1, weight=2)",
+        )
+        for value in required:
+            with self.subTest(value=value):
+                self.assertIn(value, self.source)
+
+    def test_local_metadata_is_prioritized_before_rom_choices(self):
+        render = next(
+            node
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_render_group"
+        )
+        text = ast.get_source_segment(self.source, render)
+        self.assertLess(
+            text.index("self._render_local_metadata("),
+            text.index("self._render_roms("),
+        )
+        self.assertIn("parent=self._decision_right", text)
+        self.assertIn("appears immediately", text)
+
+    def test_review_copy_uses_user_facing_catalogue_language(self):
+        self.assertIn('text="Search catalogue"', self.source)
+        self.assertIn('text="Use selected SMWC match"', self.source)
+        self.assertIn("Catalogue snapshot: ready", self.source)
+        self.assertNotIn("Search KaizOFF", self.source)
+        self.assertNotIn("frozen KaizOFF Index", self.source)
+        self.assertNotIn("Select a KaizOFF result first", self.source)
 
     def test_full_width_tables_allocate_more_room_for_titles(self):
         self.assertIn('"title": ("Hack", 360)', self.source)

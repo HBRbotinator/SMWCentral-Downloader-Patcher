@@ -91,6 +91,10 @@ class CollectionIngestionReviewDialog:
         self._local_difficulty_var = None
         self._local_exits_var = None
         self._local_metadata_frame = None
+        self._decision_area = None
+        self._decision_left = None
+        self._decision_right = None
+        self._decision_layout_mode = None
         self._rom_detail_label = None
         self._first_clear_var = None
         self._first_clear_values = {}
@@ -132,9 +136,9 @@ class CollectionIngestionReviewDialog:
         ttk.Label(
             heading,
             text=(
-                "Matches are based on the frozen KaizOFF catalogue snapshot for this "
-                "session. Resolve highlighted items before continuing. Nothing is "
-                "written from this dialog."
+                "Catalogue matches are frozen for this review so results do not "
+                "change while you decide. Resolve highlighted items before continuing. "
+                "Nothing changes until you apply the final preview."
             ),
             wraplength=1050,
         ).pack(anchor="w", pady=(3, 0))
@@ -339,10 +343,12 @@ class CollectionIngestionReviewDialog:
         if summary.suppressed_roms:
             summary_text += f"  •  {summary.suppressed_roms} ROMs suppressed"
         self.summary_label.configure(text=summary_text)
-        stale = " • cached/stale" if self.model.session.catalogue_stale else ""
-        self.catalogue_label.configure(
-            text=f"KaizOFF Index: {self.model.session.catalogue_source}{stale}"
+        catalogue_status = (
+            "Catalogue snapshot: cached copy (may be out of date)"
+            if self.model.session.catalogue_stale
+            else "Catalogue snapshot: ready"
         )
+        self.catalogue_label.configure(text=catalogue_status)
         self.done_button.configure(
             state=(
                 "disabled"
@@ -536,13 +542,13 @@ class CollectionIngestionReviewDialog:
         if not lines:
             return
 
-        frame = ttk.LabelFrame(self.details, text="Review context", padding=6)
+        frame = ttk.LabelFrame(self.details, text="Why this needs review", padding=6)
         frame.pack(fill="x", pady=(0, 8))
         holder = ttk.Frame(frame)
         holder.pack(fill="x")
         text = tk.Text(
             holder,
-            height=min(4, max(2, len(lines))),
+            height=min(2, max(1, len(lines))),
             wrap="word",
             takefocus=False,
             relief="flat",
@@ -603,6 +609,10 @@ class CollectionIngestionReviewDialog:
         self._local_difficulty_var = None
         self._local_exits_var = None
         self._local_metadata_frame = None
+        self._decision_area = None
+        self._decision_left = None
+        self._decision_right = None
+        self._decision_layout_mode = None
         self._rom_detail_label = None
         self._first_clear_var = None
         self._first_clear_values = {}
@@ -628,9 +638,19 @@ class CollectionIngestionReviewDialog:
         self._render_review_context(group, context)
 
         self._action_var = tk.StringVar(value=self._default_action(group, previous))
-        self._render_identity(group, context, previous)
-        self._render_roms(group, previous)
-        self._render_local_metadata(group, context, previous)
+        self._decision_area = ttk.Frame(self.details)
+        self._decision_area.pack(fill="x", pady=(0, 8))
+        self._decision_left = ttk.Frame(self._decision_area)
+        self._decision_right = ttk.Frame(self._decision_area)
+        self._render_identity(group, context, previous, parent=self._decision_left)
+        # Local/manual metadata is intentionally rendered before ROM choices so it
+        # appears immediately when that identity action is selected.
+        self._render_local_metadata(
+            group, context, previous, parent=self._decision_right
+        )
+        self._render_roms(group, previous, parent=self._decision_right)
+        self._decision_area.bind("<Configure>", self._layout_decision_columns)
+        self._layout_decision_columns()
         self._render_user_conflicts(group, previous)
         self._render_first_clear(group, previous)
         self._render_remember_aliases(context, previous)
@@ -653,6 +673,35 @@ class CollectionIngestionReviewDialog:
             ).pack(side="right", padx=(0, 8))
             self._apply_submitting_state()
 
+    def _layout_decision_columns(self, _event=None):
+        """Use two decision columns when there is enough width, otherwise stack."""
+
+        area = self._decision_area
+        left = self._decision_left
+        right = self._decision_right
+        if area is None or left is None or right is None:
+            return
+        try:
+            width = max(1, int(area.winfo_width()))
+        except (tk.TclError, TypeError, ValueError):
+            width = 1
+        mode = "wide" if width >= 900 else "stacked"
+        if mode == self._decision_layout_mode:
+            return
+        self._decision_layout_mode = mode
+        left.grid_forget()
+        right.grid_forget()
+        if mode == "wide":
+            left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+            right.grid(row=0, column=1, sticky="nsew")
+            area.columnconfigure(0, weight=3)
+            area.columnconfigure(1, weight=2)
+        else:
+            left.grid(row=0, column=0, sticky="nsew")
+            right.grid(row=1, column=0, sticky="nsew")
+            area.columnconfigure(0, weight=1)
+            area.columnconfigure(1, weight=0)
+
     def _default_action(self, group, previous):
         if previous is not None:
             return previous.action.value
@@ -663,8 +712,9 @@ class CollectionIngestionReviewDialog:
             return ""
         return ReviewAction.ACCEPT.value
 
-    def _render_identity(self, group, context, previous):
-        frame = ttk.LabelFrame(self.details, text="Identity", padding=8)
+    def _render_identity(self, group, context, previous, *, parent=None):
+        parent = parent or self.details
+        frame = ttk.LabelFrame(parent, text="Identity", padding=8)
         frame.pack(fill="x", pady=(0, 8))
         states = set(group.review_states)
 
@@ -707,8 +757,8 @@ class CollectionIngestionReviewDialog:
             entry = ttk.Entry(search, textvariable=self.search_var)
             entry.pack(side="left", fill="x", expand=True)
             entry.bind("<Return>", lambda _event: self._search_catalogue())
-            ttk.Button(search, text="Search KaizOFF", command=self._search_catalogue).pack(side="left", padx=(6, 0))
-            self.search_status = ttk.Label(frame, text="Searches this review's frozen Index only.", foreground="gray")
+            ttk.Button(search, text="Search catalogue", command=self._search_catalogue).pack(side="left", padx=(6, 0))
+            self.search_status = ttk.Label(frame, text="Searches this review's catalogue snapshot only.", foreground="gray")
             self.search_status.pack(anchor="w", pady=(0, 4))
 
             columns = ("title", "id", "difficulty", "type", "exits", "score")
@@ -794,7 +844,7 @@ class CollectionIngestionReviewDialog:
         if needs_identity:
             ttk.Radiobutton(
                 frame,
-                text="Use selected KaizOFF match",
+                text="Use selected SMWC match",
                 variable=self._action_var,
                 value=ReviewAction.USE_TARGET.value,
             ).pack(anchor="w", pady=(6, 0))
@@ -834,7 +884,7 @@ class CollectionIngestionReviewDialog:
             if self.suggestion_tree is not None:
                 ttk.Radiobutton(
                     frame,
-                    text="Use selected KaizOFF match instead",
+                    text="Use selected SMWC match instead",
                     variable=self._action_var,
                     value=ReviewAction.USE_TARGET.value,
                 ).pack(anchor="w")
@@ -852,7 +902,7 @@ class CollectionIngestionReviewDialog:
                     value=ReviewAction.IGNORE.value,
                 ).pack(anchor="w")
 
-    def _render_local_metadata(self, group, context, previous):
+    def _render_local_metadata(self, group, context, previous, *, parent=None):
         states = set(group.review_states)
         if not states.intersection(_IDENTITY_REVIEW_STATES):
             return
@@ -879,7 +929,8 @@ class CollectionIngestionReviewDialog:
         )
         exits = previous_metadata.exits if previous_metadata else 0
 
-        slot = ttk.Frame(self.details)
+        parent = parent or self.details
+        slot = ttk.Frame(parent)
         slot.pack(fill="x")
         frame = ttk.LabelFrame(
             slot, text="New local/manual record details", padding=8
@@ -1069,7 +1120,7 @@ class CollectionIngestionReviewDialog:
             return
         self._populate_suggestions(results)
         if results:
-            self.search_status.configure(text=f"Found {len(results)} result(s) in the frozen KaizOFF Index.")
+            self.search_status.configure(text=f"Found {len(results)} result(s) in this review's catalogue snapshot.")
             first = self.suggestion_tree.get_children()[0]
             self.suggestion_tree.selection_set(first)
             self.suggestion_tree.see(first)
@@ -1077,10 +1128,11 @@ class CollectionIngestionReviewDialog:
         else:
             self.search_status.configure(text="No results found. Try another search term or import locally.")
 
-    def _render_roms(self, group, previous):
+    def _render_roms(self, group, previous, *, parent=None):
         if not group.rom_files:
             return
-        frame = ttk.LabelFrame(self.details, text="ROM variants", padding=8)
+        parent = parent or self.details
+        frame = ttk.LabelFrame(parent, text="ROM variants", padding=8)
         frame.pack(fill="x", pady=(0, 8))
         if len(group.rom_hashes) > 1:
             ttk.Label(
@@ -1340,7 +1392,7 @@ class CollectionIngestionReviewDialog:
         if action is ReviewAction.USE_TARGET:
             target = self._selected_target()
             if not target:
-                raise CollectionIngestionReviewError("Select a KaizOFF result first.")
+                raise CollectionIngestionReviewError("Select an SMWC catalogue result first.")
         elif action is ReviewAction.ATTACH_LOCAL:
             target = self._selected_local_target()
             if not target:

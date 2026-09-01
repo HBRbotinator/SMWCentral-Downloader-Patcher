@@ -3416,7 +3416,7 @@ class CollectionPage:
 
         self._collection_ingestion_busy = True
         parent = self.frame.winfo_toplevel()
-        from ui.collection_ingestion_plan_preview_dialog import (
+        from ui.collection_ingestion_finalization_progress_dialog import (
             CollectionIngestionFinalizationProgressDialog,
         )
 
