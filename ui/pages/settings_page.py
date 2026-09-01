@@ -490,6 +490,9 @@ class SettingsPage:
         )
         self.save_sync_dirs_listbox.pack(side="left", fill="both", expand=True)
         save_dirs_scrollbar.pack(side="right", fill="y")
+        self.save_sync_dirs_listbox.bind(
+            "<<ListboxSelect>>", self._on_save_sync_folder_selected
+        )
 
         save_dirs_buttons = ttk.Frame(save_dirs_frame)
         save_dirs_buttons.pack(side="left", padx=(10, 0), anchor="n")
@@ -506,7 +509,29 @@ class SettingsPage:
             text="Remove Selected",
             command=self._remove_save_dir,
             style="Custom.TButton",
-        ).pack(fill="x")
+        ).pack(fill="x", pady=(0, 8))
+
+        self.save_sync_recursive_var = tk.BooleanVar(value=False)
+        self.save_sync_recursive_checkbox = ttk.Checkbutton(
+            save_dirs_buttons,
+            text="Include subfolders",
+            variable=self.save_sync_recursive_var,
+            style="Custom.TCheckbutton",
+            command=self._toggle_save_sync_recursive,
+            state="disabled",
+        )
+        self.save_sync_recursive_checkbox.pack(fill="x")
+
+        ttk.Label(
+            save_sync_frame,
+            text=(
+                "Recursion is configured per folder. Existing folders remain top-level only "
+                "until Include subfolders is enabled for that folder."
+            ),
+            style="Custom.TLabel",
+            foreground="gray",
+            wraplength=760,
+        ).pack(anchor="w", pady=(0, 8))
 
         # Mark-all toggle
         self.save_sync_mark_all_var = tk.BooleanVar()
@@ -1448,19 +1473,86 @@ class SettingsPage:
     # ------------------------------------------------------------------ #
 
     def _save_sync_directories_from_widget(self):
-        """Return the currently displayed save source folders."""
+        """Return the configured source paths behind the annotated list."""
 
-        return [
-            self.save_sync_dirs_listbox.get(index)
-            for index in range(self.save_sync_dirs_listbox.size())
-        ]
+        return list(getattr(self, "_save_sync_directory_paths", []))
 
-    def _populate_save_sync_directories(self, directories):
-        """Replace the save source list while preserving configured order."""
+    def _selected_save_sync_directory(self):
+        selected = self.save_sync_dirs_listbox.curselection()
+        paths = self._save_sync_directories_from_widget()
+        if len(selected) != 1 or selected[0] >= len(paths):
+            return ""
+        return paths[selected[0]]
 
+    def _populate_save_sync_directories(self, directories, select_index=None):
+        """Replace the source list and show which folders include subfolders."""
+
+        import save_sync_sources
+
+        self._save_sync_directory_paths = list(directories)
+        recursive_ids = {
+            os.path.normcase(os.path.realpath(directory))
+            for directory in save_sync_sources.get_recursive_save_directories(
+                self.setup_section.config, directories
+            )
+        }
         self.save_sync_dirs_listbox.delete(0, tk.END)
-        for directory in directories:
-            self.save_sync_dirs_listbox.insert(tk.END, directory)
+        for directory in self._save_sync_directory_paths:
+            marker = (
+                "[Subfolders] "
+                if os.path.normcase(os.path.realpath(directory)) in recursive_ids
+                else ""
+            )
+            self.save_sync_dirs_listbox.insert(tk.END, marker + directory)
+        if (
+            select_index is not None
+            and 0 <= select_index < len(self._save_sync_directory_paths)
+        ):
+            self.save_sync_dirs_listbox.selection_set(select_index)
+            self.save_sync_dirs_listbox.activate(select_index)
+        self._on_save_sync_folder_selected()
+
+    def _on_save_sync_folder_selected(self, _event=None):
+        """Reflect the selected folder's recursive-scan setting."""
+
+        import save_sync_sources
+
+        directory = self._selected_save_sync_directory()
+        if not directory:
+            self.save_sync_recursive_var.set(False)
+            self.save_sync_recursive_checkbox.config(state="disabled")
+            return
+        self.save_sync_recursive_var.set(
+            save_sync_sources.is_save_directory_recursive(
+                self.setup_section.config, directory
+            )
+        )
+        self.save_sync_recursive_checkbox.config(state="normal")
+
+    def _toggle_save_sync_recursive(self):
+        """Enable or disable recursive discovery for the selected source only."""
+
+        try:
+            import save_sync_sources
+
+            selected = self.save_sync_dirs_listbox.curselection()
+            directory = self._selected_save_sync_directory()
+            if not directory or len(selected) != 1:
+                return
+            save_sync_sources.set_save_directory_recursive(
+                self.setup_section.config,
+                directory,
+                self.save_sync_recursive_var.get(),
+            )
+            self._populate_save_sync_directories(
+                self._save_sync_directories_from_widget(),
+                select_index=selected[0],
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "Save Data Sync",
+                f"Failed to update folder scan options: {e}",
+            )
 
     def _load_save_sync_settings(self):
         """Load save-sync settings from config into the widgets."""
@@ -1546,10 +1638,8 @@ class SettingsPage:
             from platform_utils import pick_directory
 
             directories = self._save_sync_directories_from_widget()
-            selected_indices = self.save_sync_dirs_listbox.curselection()
-            if selected_indices:
-                current = self.save_sync_dirs_listbox.get(selected_indices[0])
-            else:
+            current = self._selected_save_sync_directory()
+            if not current:
                 current = directories[0] if directories else ""
 
             selected = pick_directory(
@@ -1584,11 +1674,17 @@ class SettingsPage:
 
         try:
             import save_sync
+            import save_sync_sources
 
-            directory = self.save_sync_dirs_listbox.get(selected_indices[0])
+            directory = self._selected_save_sync_directory()
+            if not directory:
+                return
             save_sync.remove_save_directory(
                 self.setup_section.config,
                 directory,
+            )
+            save_sync_sources.remove_source_state(
+                self.setup_section.config, directory
             )
             self._populate_save_sync_directories(
                 save_sync.get_save_directories(self.setup_section.config)
@@ -1779,7 +1875,25 @@ class SettingsPage:
                         save_sync.ASSOCIATION_CONFIG_KEY,
                         associations,
                     )
-                candidates = save_sync.scan_save_directories(
+
+                import save_sync_sources
+
+                path_associations, path_removed = (
+                    save_sync_sources.prune_path_associations(
+                        self.setup_section.config.get(
+                            save_sync_sources.PATH_ASSOCIATIONS_CONFIG_KEY, {}
+                        ),
+                        existing_ids,
+                    )
+                )
+                if path_removed:
+                    self.setup_section.config.set(
+                        save_sync_sources.PATH_ASSOCIATIONS_CONFIG_KEY,
+                        path_associations,
+                    )
+
+                candidates = save_sync_sources.scan_save_directories(
+                    self.setup_section.config,
                     available,
                     hacks,
                     mark_all=mark_all,

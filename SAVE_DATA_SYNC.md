@@ -9,9 +9,13 @@ until the user presses **Apply Selected**.
 Configure one or more emulator or console save folders in Settings.
 
 - Supported extensions are `.srm` and `.sav`, case-insensitively.
-- Each configured folder is scanned non-recursively.
+- Each configured folder scans only its top level by default. Select a folder
+  in Settings and enable **Include subfolders** to make that source recursive.
+  The option is per folder and is off by default for existing and newly added
+  sources.
 - Repeated folder entries and repeated paths to the same physical file are
-  deduplicated.
+  deduplicated. If configured roots overlap, the most-specific configured source
+  owns the discovered file for review/association purposes.
 - When several saves match the same collection entry, the strongest candidate
   wins: higher detected progress first, then newer modification time.
 - Removing a configured source removes only the setting. It never deletes the
@@ -149,19 +153,28 @@ Opening or confirming the search result does not write collection data.
 SMWCentral-backed imports use the canonical SMWCentral ID so later downloads
 merge with the same collection entry.
 
-## Saved filename associations
+## Saved associations
 
-An explicit manual selection can be remembered as:
+For ordinary top-level save folders, an explicit manual selection keeps the
+established portable filename association:
 
 ```text
 normalized save filename -> canonical collection ID
 ```
 
-Only the normalized filename stem and collection ID are stored. Absolute paths,
-parent directories, and save contents are not part of the association.
+When a recursive source discovers a save in a subfolder, the remembered match is
+scoped to **source + relative path** instead. This allows, for example,
+`Profile A/QW2.srm` and `Profile B/QW2.srm` to be reviewed and remembered as
+different Collection entries without one filename alias overwriting the other.
+The scoped config key uses a one-way token for the configured source plus the
+relative save path rather than embedding the absolute source path in the key.
 
-A later scan displays the match as **Saved** and diagnostic source
-`saved_alias`.
+Legacy filename-only aliases remain supported. During recursive scans they are
+used only when that normalized filename is unique among the discovered saves; an
+ambiguous duplicate basename is left for review instead of guessing.
+
+A later scan displays either kind of remembered match as **Saved** and diagnostic
+source `saved_alias`.
 
 **Forget Saved Match** removes only the association. It does not delete:
 
@@ -278,7 +291,8 @@ its remembered association is reported as `saved_alias`.
   every hack.
 - Unknown expanded/custom layouts remain uncertain until a structural profile
   proves their meaning.
-- Folder discovery is non-recursive.
+- Recursive folder discovery is opt-in per configured source and is off by
+  default.
 - Automatic scans are interval-based polling, not filesystem watchers.
 - Save Data Sync does not derive reliable play time from SNES battery saves.
 

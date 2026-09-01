@@ -16,7 +16,7 @@ class SaveDataSyncDocumentationTest(unittest.TestCase):
         required = (
             "## Save analysis and confidence",
             "## Manual SMWCentral search",
-            "## Saved filename associations",
+            "## Saved associations",
             "## Local save-backed entries",
             "## Startup and periodic review scans",
             "## Apply Selected safety boundary",

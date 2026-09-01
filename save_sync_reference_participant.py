@@ -10,9 +10,9 @@ from collection_change_plan import ReferenceMigrationOperation
 from collection_plan_apply import PreparedFileWrite, PreparedReferenceMutation
 from collection_reconciliation import validate_collection_key
 
-
 SAVE_SYNC_REFERENCE_STORE_NAME = "save_sync_config"
 SAVE_SYNC_ASSOCIATION_CONFIG_KEY = "save_sync_associations"
+SAVE_SYNC_PATH_ASSOCIATION_CONFIG_KEY = "save_sync_path_associations"
 DEFAULT_CONFIG_FILENAME = "config.json"
 
 
@@ -21,10 +21,9 @@ class SaveSyncReferenceError(RuntimeError):
 
 
 class SaveSyncAssociationReferenceParticipant:
-    """Repoint Save Data Sync's config-held filename associations transactionally."""
+    """Repoint Save Data Sync's config-held save associations transactionally."""
 
     store_name = SAVE_SYNC_REFERENCE_STORE_NAME
-
     def __init__(self, config_path: str | Path):
         self.path = Path(config_path)
 
@@ -37,7 +36,6 @@ class SaveSyncAssociationReferenceParticipant:
 
     def revision_token(self) -> str:
         """Hash the exact config bytes so unrelated settings cannot be overwritten."""
-
         return _file_revision_token(self.path)
 
     def prepare_reference_migrations(
@@ -49,30 +47,37 @@ class SaveSyncAssociationReferenceParticipant:
         expected = self.revision_token()
         document = _load_config_document(self.path)
         associations = _load_associations(document)
+        path_associations = _load_associations(
+            document, SAVE_SYNC_PATH_ASSOCIATION_CONFIG_KEY
+        )
         migration_map = _validated_migration_map(migrations)
-
         migrated = {
             key: migration_map.get(target, target)
             for key, target in associations.items()
         }
-        changed = migrated != associations
+        migrated_paths = {
+            key: migration_map.get(target, target)
+            for key, target in path_associations.items()
+        }
+        changed = migrated != associations or migrated_paths != path_associations
         writes = ()
         if changed:
             updated = dict(document)
-            updated[SAVE_SYNC_ASSOCIATION_CONFIG_KEY] = migrated
+            if migrated != associations:
+                updated[SAVE_SYNC_ASSOCIATION_CONFIG_KEY] = migrated
+            if migrated_paths != path_associations:
+                updated[SAVE_SYNC_PATH_ASSOCIATION_CONFIG_KEY] = migrated_paths
             writes = (
                 PreparedFileWrite(
                     path=self.path,
                     content_bytes=_serialize_config(updated),
                 ),
             )
-
         return PreparedReferenceMutation(
             store_name=self.store_name,
             expected_revision_token=expected,
             writes=writes,
         )
-
 
 def _validated_migration_map(
     migrations: Sequence[ReferenceMigrationOperation],
@@ -95,7 +100,6 @@ def _validated_migration_map(
         )
     return result
 
-
 def _load_config_document(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -112,16 +116,17 @@ def _load_config_document(path: Path) -> dict[str, Any]:
         raise SaveSyncReferenceError("Application config must be a JSON object.")
     return raw
 
-
-def _load_associations(document: Mapping[str, Any]) -> dict[str, str]:
-    raw = document.get(SAVE_SYNC_ASSOCIATION_CONFIG_KEY, {})
+def _load_associations(
+    document: Mapping[str, Any],
+    config_key: str = SAVE_SYNC_ASSOCIATION_CONFIG_KEY,
+) -> dict[str, str]:
+    raw = document.get(config_key, {})
     if raw is None:
         return {}
     if not isinstance(raw, dict):
         raise SaveSyncReferenceError(
-            f"{SAVE_SYNC_ASSOCIATION_CONFIG_KEY} must be a JSON object."
+            f"{config_key} must be a JSON object."
         )
-
     result = {}
     for key, value in raw.items():
         if not isinstance(key, str) or not isinstance(value, str):
@@ -141,7 +146,6 @@ def _load_associations(document: Mapping[str, Any]) -> dict[str, str]:
         result[clean_key] = clean_value
     return result
 
-
 def _serialize_config(document: Mapping[str, Any]) -> bytes:
     try:
         text = json.dumps(
@@ -154,7 +158,6 @@ def _serialize_config(document: Mapping[str, Any]) -> bytes:
         raise SaveSyncReferenceError(f"Application config is not JSON-safe: {error}") from error
     return text.encode("utf-8")
 
-
 def _file_revision_token(path: Path) -> str:
     if not path.exists():
         return "missing"
@@ -163,7 +166,6 @@ def _file_revision_token(path: Path) -> str:
     except OSError as error:
         raise SaveSyncReferenceError(f"Cannot read Save Sync config revision: {error}") from error
     return "sha256:" + hashlib.sha256(content).hexdigest()
-
 
 def _reject_duplicate_object_keys(pairs):
     result = {}
@@ -177,10 +179,10 @@ def _reject_duplicate_object_keys(pairs):
 def _reject_nonfinite(value: str):
     raise SaveSyncReferenceError(f"Non-finite config JSON number is not allowed: {value}")
 
-
 __all__ = [
     "DEFAULT_CONFIG_FILENAME",
     "SAVE_SYNC_ASSOCIATION_CONFIG_KEY",
+    "SAVE_SYNC_PATH_ASSOCIATION_CONFIG_KEY",
     "SAVE_SYNC_REFERENCE_STORE_NAME",
     "SaveSyncAssociationReferenceParticipant",
     "SaveSyncReferenceError",

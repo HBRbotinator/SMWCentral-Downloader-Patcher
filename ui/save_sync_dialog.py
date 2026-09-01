@@ -22,6 +22,7 @@ from tkinter import ttk, filedialog, messagebox
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import save_sync
+import save_sync_sources
 from local_collection_metadata import (
     LOCAL_DIFFICULTY_CHOICES,
     LOCAL_HACK_TYPE_CHOICES,
@@ -1120,13 +1121,13 @@ class SaveSyncDialog:
             "Remove Local Entry",
             f"Remove '{entry.get('title', candidate.title)}' from the "
             "collection?\n\nThe save file will not be deleted. Any saved "
-            "filename associations to this local entry will also be removed.",
+            "save-file associations to this local entry will also be removed.",
             parent=self.win,
         ):
             return
 
-        removed, association_count = save_sync.remove_local_entry(
-            self.data_manager, self.config_manager, candidate.hack_id
+        removed, _legacy_count = save_sync.remove_local_entry(
+            self.data_manager, None, candidate.hack_id
         )
         if not removed:
             messagebox.showerror(
@@ -1135,6 +1136,9 @@ class SaveSyncDialog:
                 parent=self.win,
             )
             return
+        association_count = save_sync_sources.remove_associations_for_hack(
+            self.config_manager, candidate.hack_id
+        )
         if self.on_applied:
             self.on_applied()
         self.win.destroy()
@@ -1163,8 +1167,8 @@ class SaveSyncDialog:
         ):
             return
 
-        if save_sync.forget_save_association(
-            self.config_manager, candidate.save_name
+        if save_sync_sources.forget_candidate_association(
+            self.config_manager, candidate
         ):
             if self.logger:
                 self.logger.log(
@@ -1704,8 +1708,8 @@ class SaveSyncDialog:
                 target_id = str(cand.resolved_hack_id or "")
                 if target_id not in self.data_manager.data:
                     continue
-                if save_sync.remember_save_association(
-                    self.config_manager, cand.save_name, target_id
+                if save_sync_sources.remember_candidate_association(
+                    self.config_manager, cand, target_id
                 ):
                     remembered += 1
         except Exception as exc:  # pragma: no cover - defensive

@@ -1217,9 +1217,9 @@ class SaveAssociationTest(unittest.TestCase):
             "config_manager=self.setup_section.config", settings_source
         )
         self.assertIn("manual=True", dialog_source)
-        self.assertIn("save_sync.remember_save_association", dialog_source)
+        self.assertIn("save_sync_sources.remember_candidate_association", dialog_source)
         self.assertIn('text="Forget Saved Match"', dialog_source)
-        self.assertIn("save_sync.forget_save_association", dialog_source)
+        self.assertIn("save_sync_sources.forget_candidate_association", dialog_source)
         self.assertIn(
             "and c.status == save_sync.STATUS_COMPLETED", dialog_source
         )
@@ -1342,7 +1342,7 @@ class SaveSourceDirectoryTest(unittest.TestCase):
         self.assertIn('"save_sync_dirs": []', config_source)
         self.assertIn('text="Add Folder..."', settings_source)
         self.assertIn('text="Remove Selected"', settings_source)
-        self.assertIn("save_sync.scan_save_directories(", settings_source)
+        self.assertIn("save_sync_sources.scan_save_directories(", settings_source)
         self.assertIn("Unavailable Save Folders", settings_source)
 
 class StartupSaveScanTest(unittest.TestCase):
