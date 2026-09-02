@@ -33,6 +33,7 @@ class CurrentSubmissionRefreshUiContractTests(unittest.TestCase):
             PREVIEW,
         )
         self.assertIn("Default ROM Output Folder", PREVIEW)
+        self.assertIn("Alongside my current primary ROM", PREVIEW)
         self.assertIn("Choose What Happens to the ROM...", PREVIEW)
         self.assertIn("Apply Update", PREVIEW)
         self.assertIn("Your Collection ID", PREVIEW)
@@ -42,13 +43,25 @@ class CurrentSubmissionRefreshUiContractTests(unittest.TestCase):
         self.assertNotIn("SMWC information via KaizOFF", PREVIEW)
         self.assertNotIn("apply_collection_change_plan", PREVIEW)
 
-    def test_collection_page_treats_output_as_default_new_rom_destination(self):
+    def test_collection_page_supports_default_or_current_rom_download_location(self):
         method = _method_source(PAGE, "_collection_current_refresh_acquire_requested")
-        self.assertIn("ensure_default_rom_output_directory", method)
+        self.assertIn("resolve_current_rom_download_directory", method)
         self.assertIn('config.get("output_dir", "")', method)
+        self.assertIn("current_record", method)
+        self.assertIn("destination", method)
+        self.assertIn("ROM_DOWNLOAD_DESTINATION_ALONGSIDE_PRIMARY", method)
         self.assertNotIn("os.path.isdir(output_dir)", method)
         self.assertIn("Default ROM Output Folder", method)
-        self.assertIn("Collection ROMs may live elsewhere", method)
+        self.assertIn("alongside your current primary ROM", method)
+
+
+    def test_update_preview_uses_pre_map_and_post_map_centering(self):
+        preview_class = PREVIEW[PREVIEW.index("class CollectionCurrentRefreshPreviewDialog"):]
+        show = _method_source(preview_class, "show")
+        self.assertIn("self.win.withdraw()", show)
+        self.assertIn("center_window_on_parent(self.win, self.parent)", show)
+        self.assertIn("self.win.deiconify()", show)
+        self.assertIn("self.win.after_idle", show)
 
     def test_collection_page_keeps_same_id_review_apply_boundaries(self):
         self.assertIn("on_refresh_current=self._collection_update_current_refresh_requested", PAGE)

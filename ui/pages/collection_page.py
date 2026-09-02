@@ -2698,8 +2698,8 @@ class CollectionPage:
                 self._close_collection_current_refresh_preview()
                 self._last_collection_current_refresh_plan = None
                 messagebox.showerror(
-                    "Current ROM Acquisition Changed",
-                    f"{payload}\n\nNo Collection refresh was applied. Restart the update check.",
+                    "ROM Download Needs to Be Restarted",
+                    f"{payload}\n\nNothing was applied. Restart the update check and try again.",
                     parent=self.frame.winfo_toplevel(),
                 )
                 return
@@ -2710,19 +2710,26 @@ class CollectionPage:
                 self.collection_current_refresh_preview_dialog.set_busy(False)
             self._log(f"❌ Current-ROM acquisition failed: {payload}", "Error")
             messagebox.showerror(
-                "Current ROM Acquisition Failed",
+                "ROM Download Failed",
                 (
-                    f"Could not acquire the current SMWC ROM:\n\n{payload}\n\n"
-                    "Collection state was not changed and existing ROM files were not overwritten."
+                    f"The ROM could not be downloaded and prepared:\n\n{payload}\n\n"
+                    "Collection was not changed and existing ROM files were not overwritten."
                 ),
                 parent=self.frame.winfo_toplevel(),
             )
             return
 
     def _show_collection_current_refresh_preview(self, finalized):
+        from collection_update_current_output import current_primary_rom_directory
         from ui.collection_update_current_refresh_dialog import (
             CollectionCurrentRefreshPreviewDialog,
         )
+
+        config = ConfigManager()
+        current_record = self.data_manager.data.get(
+            str(finalized.source_collection_key), {}
+        )
+        alongside_directory = current_primary_rom_directory(current_record)
 
         self._last_collection_current_refresh_plan = finalized
         self.collection_current_refresh_preview_dialog = CollectionCurrentRefreshPreviewDialog(
@@ -2732,13 +2739,17 @@ class CollectionPage:
             on_review_rom=self._collection_current_refresh_rom_disposition_requested,
             on_apply=self._collection_current_refresh_apply_requested,
             on_close=self._collection_current_refresh_preview_closed,
+            default_rom_output_directory=str(config.get("output_dir", "") or "").strip(),
+            alongside_rom_directory=(
+                str(alongside_directory) if alongside_directory is not None else ""
+            ),
         )
         self.collection_current_refresh_preview_dialog.show()
 
     def _collection_current_refresh_preview_closed(self):
         self.collection_current_refresh_preview_dialog = None
 
-    def _collection_current_refresh_acquire_requested(self):
+    def _collection_current_refresh_acquire_requested(self, destination="default_output"):
         if (
             self._collection_update_plan_busy
             or self._collection_update_apply_busy
@@ -2763,20 +2774,32 @@ class CollectionPage:
 
         from collection_update_current_output import (
             CollectionCurrentOutputError,
-            ensure_default_rom_output_directory,
+            ROM_DOWNLOAD_DESTINATION_ALONGSIDE_PRIMARY,
+            resolve_current_rom_download_directory,
         )
 
+        current_record = self.data_manager.data.get(
+            str(finalized.source_collection_key), {}
+        )
         try:
             output_dir = str(
-                ensure_default_rom_output_directory(config.get("output_dir", ""))
+                resolve_current_rom_download_directory(
+                    config.get("output_dir", ""),
+                    current_record,
+                    destination,
+                )
             )
         except CollectionCurrentOutputError as error:
             messagebox.showerror(
-                "Default ROM Output Folder Required",
+                "ROM Download Location Required",
                 str(error),
                 parent=self.frame.winfo_toplevel(),
             )
             return False
+
+        alongside_current = (
+            destination == ROM_DOWNLOAD_DESTINATION_ALONGSIDE_PRIMARY
+        )
 
         from ui.collection_update_current_refresh_dialog import (
             CollectionCurrentRefreshProgressDialog,
@@ -2791,8 +2814,13 @@ class CollectionPage:
             title="Acquire Current SMWC ROM",
             message=(
                 "Downloading the ROM offered for this SMWC entry and patching it against your clean "
-                "base ROM. The new file is prepared in your Default ROM Output Folder; existing "
-                "Collection ROMs may live elsewhere and are not moved."
+                "base ROM. The new file will be saved "
+                + (
+                    "alongside your current primary ROM."
+                    if alongside_current
+                    else "in your Default ROM Output Folder."
+                )
+                + " Existing Collection ROMs are not moved."
             ),
         )
         self.collection_current_refresh_progress_dialog.show()

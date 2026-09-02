@@ -41,6 +41,7 @@ class CollectionCurrentRomDispositionDialog:
             return self.win
 
         self.win = tk.Toplevel(self.parent)
+        self.win.withdraw()
         self.win.title("Choose What Happens to the Downloaded ROM")
         self.win.geometry("840x620")
         self.win.minsize(700, 500)
@@ -103,8 +104,8 @@ class CollectionCurrentRomDispositionDialog:
         ttk.Label(
             options,
             text=(
-                "The downloaded copy stays where the app created it in your Default ROM Output Folder. "
-                "Existing Collection ROMs can be stored elsewhere and are not moved."
+                "The downloaded copy stays in the download location you selected before patching. "
+                "Existing Collection ROMs are not moved or reorganized."
             ),
             foreground="gray",
             wraplength=750,
@@ -167,6 +168,9 @@ class CollectionCurrentRomDispositionDialog:
         self.save_button.pack(side="right", padx=(0, 8))
         self._choice_changed()
         center_window_on_parent(self.win, self.parent)
+        self.win.deiconify()
+        self.win.lift()
+        self.win.after_idle(lambda: center_window_on_parent(self.win, self.parent))
         return self.win
 
     def _choice_changed(self):

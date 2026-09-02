@@ -19,6 +19,7 @@ class CurrentRefreshUiContractTests(unittest.TestCase):
         self.assertIn('"Choose What Happens to the ROM..."', self.source)
         self.assertIn('text="Apply Update"', self.source)
         self.assertIn("Default ROM Output Folder", self.source)
+        self.assertIn("Alongside my current primary ROM", self.source)
         self.assertNotIn('"Download Current ROM..."', self.source)
         self.assertNotIn('"Choose ROM Handling..."', self.source)
         self.assertNotIn("Prepared changes", self.source)
@@ -57,11 +58,21 @@ class CurrentRefreshUiContractTests(unittest.TestCase):
             self.source,
         )
 
-    def test_download_choice_is_one_guided_continue_step(self):
+    def test_download_choice_is_one_guided_continue_step_with_explicit_destination(self):
         continue_method = self._method_source("_continue_initial_choice")
+        acquire_method = self._method_source("_request_acquire")
         self.assertIn('choice == "metadata_rom"', continue_method)
         self.assertIn("self._request_acquire()", continue_method)
         self.assertIn("self._request_apply()", continue_method)
+        self.assertIn("download_destination_var", acquire_method)
+        self.assertIn("self.on_acquire(destination)", acquire_method)
+
+    def test_preview_centers_before_and_after_mapping(self):
+        show_method = self._method_source("show")
+        self.assertIn("self.win.withdraw()", show_method)
+        self.assertIn("center_window_on_parent(self.win, self.parent)", show_method)
+        self.assertIn("self.win.deiconify()", show_method)
+        self.assertIn("self.win.after_idle", show_method)
 
     def _method_source(self, name):
         preview = next(

@@ -13,6 +13,10 @@ from collection_update_current_refresh_acquisition import (
     finalized_current_refresh_has_acquired_rom,
     finalized_current_refresh_rom_checked,
 )
+from collection_update_current_output import (
+    ROM_DOWNLOAD_DESTINATION_ALONGSIDE_PRIMARY,
+    ROM_DOWNLOAD_DESTINATION_DEFAULT,
+)
 from ui.window_positioning import center_window_on_parent
 
 
@@ -79,6 +83,8 @@ class CollectionCurrentRefreshPreviewDialog:
         on_review_rom=None,
         on_apply=None,
         on_close=None,
+        default_rom_output_directory="",
+        alongside_rom_directory="",
     ):
         if not isinstance(finalized, FinalizedCurrentSubmissionRefreshPlan):
             raise TypeError("finalized must be FinalizedCurrentSubmissionRefreshPlan")
@@ -88,8 +94,11 @@ class CollectionCurrentRefreshPreviewDialog:
         self.on_review_rom = on_review_rom
         self.on_apply = on_apply
         self.on_close = on_close
+        self.default_rom_output_directory = str(default_rom_output_directory or "").strip()
+        self.alongside_rom_directory = str(alongside_rom_directory or "").strip()
         self.win = None
         self.update_choice_var = None
+        self.download_destination_var = None
         self.continue_button = None
         self.review_rom_button = None
         self.apply_button = None
@@ -119,6 +128,7 @@ class CollectionCurrentRefreshPreviewDialog:
         )
 
         self.win = tk.Toplevel(self.parent)
+        self.win.withdraw()
         self.win.title(f"Update {source.title}")
         self.win.geometry("820x560")
         self.win.minsize(700, 480)
@@ -170,6 +180,9 @@ class CollectionCurrentRefreshPreviewDialog:
         self.close_button.pack(side="right")
 
         center_window_on_parent(self.win, self.parent)
+        self.win.deiconify()
+        self.win.lift()
+        self.win.after_idle(lambda: center_window_on_parent(self.win, self.parent))
         return self.win
 
     def _build_initial_choice(self, root):
@@ -192,23 +205,93 @@ class CollectionCurrentRefreshPreviewDialog:
             value="metadata_rom",
         )
         rom_option.pack(anchor="w", pady=(8, 0))
-        if not available or self.on_acquire is None:
+
+        destination_available = bool(
+            self.default_rom_output_directory or self.alongside_rom_directory
+        )
+        if not available or self.on_acquire is None or not destination_available:
             rom_option.configure(state="disabled")
+            explanation = (
+                "A downloadable ROM is not available for this SMWC entry."
+                if not available
+                else (
+                    "No usable ROM download location is available. Configure a Default ROM Output "
+                    "Folder in Settings, or repair the current primary ROM path."
+                )
+            )
             ttk.Label(
                 choice,
-                text="A downloadable ROM is not available for this SMWC entry.",
-                foreground="gray",
-            ).pack(anchor="w", padx=(22, 0), pady=(2, 0))
-        else:
-            ttk.Label(
-                choice,
-                text=(
-                    "The new ROM is prepared in your Default ROM Output Folder. Existing Collection "
-                    "ROMs can live elsewhere and are not moved just because that folder is different."
-                ),
+                text=explanation,
                 foreground="gray",
                 wraplength=720,
             ).pack(anchor="w", padx=(22, 0), pady=(2, 0))
+        else:
+            destination = ttk.Frame(choice)
+            destination.pack(fill="x", padx=(22, 0), pady=(6, 0))
+            ttk.Label(destination, text="Save the downloaded ROM to:").pack(anchor="w")
+
+            default_available = bool(self.default_rom_output_directory)
+            initial_destination = (
+                ROM_DOWNLOAD_DESTINATION_DEFAULT
+                if default_available
+                else ROM_DOWNLOAD_DESTINATION_ALONGSIDE_PRIMARY
+            )
+            self.download_destination_var = tk.StringVar(value=initial_destination)
+
+            default_option = ttk.Radiobutton(
+                destination,
+                text="Default ROM Output Folder",
+                variable=self.download_destination_var,
+                value=ROM_DOWNLOAD_DESTINATION_DEFAULT,
+            )
+            default_option.pack(anchor="w", pady=(3, 0))
+            if default_available:
+                ttk.Label(
+                    destination,
+                    text=self.default_rom_output_directory,
+                    foreground="gray",
+                    wraplength=680,
+                ).pack(anchor="w", padx=(22, 0))
+            else:
+                default_option.configure(state="disabled")
+                ttk.Label(
+                    destination,
+                    text="No Default ROM Output Folder is currently configured.",
+                    foreground="gray",
+                ).pack(anchor="w", padx=(22, 0))
+
+            alongside_option = ttk.Radiobutton(
+                destination,
+                text="Alongside my current primary ROM",
+                variable=self.download_destination_var,
+                value=ROM_DOWNLOAD_DESTINATION_ALONGSIDE_PRIMARY,
+            )
+            alongside_option.pack(anchor="w", pady=(5, 0))
+            if self.alongside_rom_directory:
+                ttk.Label(
+                    destination,
+                    text=self.alongside_rom_directory,
+                    foreground="gray",
+                    wraplength=680,
+                ).pack(anchor="w", padx=(22, 0))
+            else:
+                alongside_option.configure(state="disabled")
+                ttk.Label(
+                    destination,
+                    text="No usable current primary ROM folder is available for this entry.",
+                    foreground="gray",
+                    wraplength=680,
+                ).pack(anchor="w", padx=(22, 0))
+
+            ttk.Label(
+                destination,
+                text=(
+                    "This only chooses where the newly downloaded file is created. Existing Collection "
+                    "ROMs are not moved or reorganized."
+                ),
+                foreground="gray",
+                wraplength=680,
+            ).pack(anchor="w", pady=(5, 0))
 
         actions = ttk.Frame(choice)
         actions.pack(fill="x", pady=(14, 0))
@@ -301,9 +384,14 @@ class CollectionCurrentRefreshPreviewDialog:
     def _request_acquire(self):
         if self._busy or self.on_acquire is None:
             return False
+        destination = (
+            self.download_destination_var.get()
+            if self.download_destination_var is not None
+            else ROM_DOWNLOAD_DESTINATION_DEFAULT
+        )
         self.set_busy(True)
         try:
-            accepted = self.on_acquire()
+            accepted = self.on_acquire(destination)
         except Exception:
             self.set_busy(False)
             raise

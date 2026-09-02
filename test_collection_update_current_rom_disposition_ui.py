@@ -31,11 +31,16 @@ class CurrentRomDispositionUiContractTests(unittest.TestCase):
         self.assertNotIn("higher ID", DISPOSITION_UI)
         self.assertNotIn("newer version", DISPOSITION_UI)
 
-    def test_rom_disposition_copy_explains_separate_storage_locations(self):
+    def test_rom_disposition_copy_preserves_the_preselected_download_location(self):
         self.assertIn("keep its existing filename and location", DISPOSITION_UI)
-        self.assertIn("Default ROM Output Folder", DISPOSITION_UI)
-        self.assertIn("Existing Collection ROMs can be stored elsewhere", DISPOSITION_UI)
+        self.assertIn("download location you selected before patching", DISPOSITION_UI)
+        self.assertIn("Existing Collection ROMs are not moved or reorganized", DISPOSITION_UI)
         self.assertIn("Which ROM should open by default", DISPOSITION_UI)
+
+    def test_rom_disposition_dialog_uses_pre_map_and_post_map_centering(self):
+        self.assertIn("self.win.withdraw()", DISPOSITION_UI)
+        self.assertIn("self.win.deiconify()", DISPOSITION_UI)
+        self.assertIn("self.win.after_idle", DISPOSITION_UI)
 
     def test_page_routes_rom_choice_through_read_only_review_then_finalization(self):
         self.assertIn("build_current_rom_disposition_review", PAGE)
