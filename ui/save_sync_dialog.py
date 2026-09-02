@@ -441,6 +441,9 @@ class LocalSaveEntryDialog:
         self.mode_var = None
         self.local_tree = None
         self.local_targets = {}
+        self.local_labels = {}
+        self.local_selection_label = None
+        self.continue_button = None
         self.local_matches = save_sync.local_collection_matches(
             self.existing_records,
             save_sync.make_search_query(self.candidate.save_name),
@@ -473,7 +476,17 @@ class LocalSaveEntryDialog:
                 text="Attach this save to the selected existing local entry",
                 variable=self.mode_var,
                 value="attach",
-            ).pack(anchor="w", pady=(0, 4))
+                command=self._local_mode_changed,
+            ).pack(anchor="w", pady=(0, 2))
+            ttk.Label(
+                container,
+                text=(
+                    "Choose the exact local Collection row below. Even a single "
+                    "suggestion is not selected automatically."
+                ),
+                foreground="gray",
+                wraplength=640,
+            ).pack(anchor="w", padx=(22, 0), pady=(0, 4))
             holder = ttk.Frame(container)
             holder.pack(fill="x", pady=(0, 10))
             columns = ("title", "id", "difficulty", "type", "exits", "score")
@@ -497,6 +510,9 @@ class LocalSaveEntryDialog:
                 self.local_tree.column(column, width=width, minwidth=40, anchor="w")
             hscroll = ttk.Scrollbar(holder, orient="horizontal", command=self.local_tree.xview)
             self.local_tree.configure(xscrollcommand=hscroll.set)
+            self.local_tree.tag_configure(
+                "chosen", font=("Segoe UI", 9, "bold")
+            )
             self.local_tree.grid(row=0, column=0, sticky="ew")
             hscroll.grid(row=1, column=0, sticky="ew")
             holder.columnconfigure(0, weight=1)
@@ -516,13 +532,21 @@ class LocalSaveEntryDialog:
                     ),
                 )
                 self.local_targets[iid] = match.target_key
+                self.local_labels[iid] = (match.title, match.target_key)
             self.local_tree.bind("<<TreeviewSelect>>", self._local_selected)
+            self.local_selection_label = ttk.Label(
+                container,
+                text="No existing local entry selected yet.",
+                font=("Segoe UI", 9, "bold"),
+            )
+            self.local_selection_label.pack(anchor="w", pady=(0, 8))
 
         ttk.Radiobutton(
             container,
             text="Create a separate local Collection entry",
             variable=self.mode_var,
             value="create",
+            command=self._local_mode_changed,
         ).pack(anchor="w", pady=(2, 4))
 
         form = ttk.Frame(container)
@@ -578,10 +602,14 @@ class LocalSaveEntryDialog:
 
         buttons = ttk.Frame(container)
         buttons.pack(fill="x", pady=(12, 0))
-        ttk.Button(buttons, text="Continue", command=self._confirm).pack(side="right")
+        self.continue_button = ttk.Button(
+            buttons, text="Continue", command=self._confirm
+        )
+        self.continue_button.pack(side="right")
         ttk.Button(buttons, text="Cancel", command=self.win.destroy).pack(
             side="right", padx=(0, 8)
         )
+        self._local_mode_changed()
 
         self.win.update_idletasks()
         try:
@@ -601,6 +629,54 @@ class LocalSaveEntryDialog:
     def _local_selected(self, _event=None):
         if self.mode_var is not None:
             self.mode_var.set("attach")
+        selected = self.local_tree.selection() if self.local_tree is not None else ()
+        if self.local_tree is not None:
+            for iid in self.local_tree.get_children():
+                self.local_tree.item(
+                    iid, tags=("chosen",) if iid in selected else ()
+                )
+            if len(selected) == 1:
+                self.local_tree.focus(selected[0])
+                self.local_tree.see(selected[0])
+        self._local_mode_changed()
+
+    def _local_mode_changed(self):
+        """Make the explicit existing-local selection state unmistakable."""
+
+        mode = self.mode_var.get().strip() if self.mode_var is not None else ""
+        selected = self.local_tree.selection() if self.local_tree is not None else ()
+        target = self._selected_local_target()
+
+        if self.local_selection_label is not None:
+            if len(selected) == 1 and target:
+                title, collection_id = self.local_labels.get(
+                    selected[0], ("Selected local entry", target)
+                )
+                if mode == "create":
+                    message = (
+                        f"Existing local row selected but not in use: {title}  •  "
+                        f"{collection_id}"
+                    )
+                else:
+                    message = (
+                        f"Selected existing local entry: {title}  •  "
+                        f"{collection_id}"
+                    )
+                self.local_selection_label.configure(text=message)
+            elif mode == "attach":
+                self.local_selection_label.configure(
+                    text="Select a row above before continuing with Attach."
+                )
+            else:
+                self.local_selection_label.configure(
+                    text="No existing local entry selected yet."
+                )
+
+        if self.continue_button is not None:
+            enabled = mode == "create" or (mode == "attach" and bool(target))
+            self.continue_button.configure(
+                state="normal" if enabled else "disabled"
+            )
 
     def _selected_local_target(self):
         if self.local_tree is None:

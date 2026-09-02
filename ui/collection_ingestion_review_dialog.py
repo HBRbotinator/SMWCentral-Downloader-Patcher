@@ -44,6 +44,25 @@ _IDENTITY_REVIEW_STATES = {
 }
 
 
+def _catalogue_author_text(suggestion):
+    """Return frozen catalogue author text when the suggestion exposes it."""
+
+    for source in (suggestion, getattr(suggestion, "entry", None)):
+        if source is None:
+            continue
+        authors = getattr(source, "authors", None)
+        if isinstance(authors, str) and authors.strip():
+            return authors.strip()
+        if authors:
+            values = [str(value).strip() for value in authors if str(value).strip()]
+            if values:
+                return ", ".join(values)
+        author = str(getattr(source, "author", "") or "").strip()
+        if author:
+            return author
+    return "-"
+
+
 class CollectionIngestionReviewDialog:
     """Review all ingestion matches and collect explicit unresolved decisions."""
 
@@ -92,9 +111,10 @@ class CollectionIngestionReviewDialog:
         self._local_exits_var = None
         self._local_metadata_frame = None
         self._decision_area = None
-        self._decision_left = None
-        self._decision_right = None
-        self._decision_layout_mode = None
+        self._support_area = None
+        self._support_left = None
+        self._support_right = None
+        self._support_layout_mode = None
         self._rom_detail_label = None
         self._first_clear_var = None
         self._first_clear_values = {}
@@ -610,9 +630,10 @@ class CollectionIngestionReviewDialog:
         self._local_exits_var = None
         self._local_metadata_frame = None
         self._decision_area = None
-        self._decision_left = None
-        self._decision_right = None
-        self._decision_layout_mode = None
+        self._support_area = None
+        self._support_left = None
+        self._support_right = None
+        self._support_layout_mode = None
         self._rom_detail_label = None
         self._first_clear_var = None
         self._first_clear_values = {}
@@ -640,20 +661,32 @@ class CollectionIngestionReviewDialog:
         self._action_var = tk.StringVar(value=self._default_action(group, previous))
         self._decision_area = ttk.Frame(self.details)
         self._decision_area.pack(fill="x", pady=(0, 8))
-        self._decision_left = ttk.Frame(self._decision_area)
-        self._decision_right = ttk.Frame(self._decision_area)
-        self._render_identity(group, context, previous, parent=self._decision_left)
-        # Local/manual metadata is intentionally rendered before ROM choices so it
-        # appears immediately when that identity action is selected.
+
+        # Identity owns the full review width. The earlier side-by-side identity/ROM
+        # layout made catalogue details unnecessarily cramped on ordinary desktops.
+        self._render_identity(group, context, previous, parent=self._decision_area)
+
+        # Local/manual metadata stays directly below the identity choice so those
+        # user-owned fields remain obvious as soon as local creation is selected.
         self._render_local_metadata(
-            group, context, previous, parent=self._decision_right
+            group, context, previous, parent=self._decision_area
         )
-        self._render_roms(group, previous, parent=self._decision_right)
-        self._decision_area.bind("<Configure>", self._layout_decision_columns)
-        self._layout_decision_columns()
+
+        # Secondary decisions share the lower row instead: ROM handling benefits
+        # from width, while remembered aliases are short and naturally compact.
+        self._support_area = ttk.Frame(self._decision_area)
+        self._support_area.pack(fill="x")
+        self._support_left = ttk.Frame(self._support_area)
+        self._support_right = ttk.Frame(self._support_area)
+        self._render_roms(group, previous, parent=self._support_left)
+        self._render_remember_aliases(
+            context, previous, parent=self._support_right
+        )
+        self._support_area.bind("<Configure>", self._layout_support_sections)
+        self._layout_support_sections()
+
         self._render_user_conflicts(group, previous)
         self._render_first_clear(group, previous)
-        self._render_remember_aliases(context, previous)
         self._action_var.trace_add("write", self._action_changed)
         self._update_conditional_sections()
 
@@ -673,34 +706,49 @@ class CollectionIngestionReviewDialog:
             ).pack(side="right", padx=(0, 8))
             self._apply_submitting_state()
 
-    def _layout_decision_columns(self, _event=None):
-        """Use two decision columns when there is enough width, otherwise stack."""
+    def _layout_support_sections(self, _event=None):
+        """Place ROM variants and remembered aliases side by side when useful."""
 
-        area = self._decision_area
-        left = self._decision_left
-        right = self._decision_right
+        area = self._support_area
+        left = self._support_left
+        right = self._support_right
         if area is None or left is None or right is None:
             return
         try:
             width = max(1, int(area.winfo_width()))
+            left_has_content = bool(left.winfo_children())
+            right_has_content = bool(right.winfo_children())
         except (tk.TclError, TypeError, ValueError):
-            width = 1
-        mode = "wide" if width >= 900 else "stacked"
-        if mode == self._decision_layout_mode:
             return
-        self._decision_layout_mode = mode
+
+        if left_has_content and right_has_content:
+            mode = "wide" if width >= 760 else "stacked"
+        elif left_has_content:
+            mode = "left-only"
+        elif right_has_content:
+            mode = "right-only"
+        else:
+            mode = "empty"
+        if mode == self._support_layout_mode:
+            return
+        self._support_layout_mode = mode
+
         left.grid_forget()
         right.grid_forget()
+        area.columnconfigure(0, weight=1)
+        area.columnconfigure(1, weight=0)
         if mode == "wide":
             left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
             right.grid(row=0, column=1, sticky="nsew")
             area.columnconfigure(0, weight=3)
             area.columnconfigure(1, weight=2)
-        else:
+        elif mode == "stacked":
             left.grid(row=0, column=0, sticky="nsew")
             right.grid(row=1, column=0, sticky="nsew")
-            area.columnconfigure(0, weight=1)
-            area.columnconfigure(1, weight=0)
+        elif mode == "left-only":
+            left.grid(row=0, column=0, sticky="nsew")
+        elif mode == "right-only":
+            right.grid(row=0, column=0, sticky="nsew")
 
     def _default_action(self, group, previous):
         if previous is not None:
@@ -761,17 +809,20 @@ class CollectionIngestionReviewDialog:
             self.search_status = ttk.Label(frame, text="Searches this review's catalogue snapshot only.", foreground="gray")
             self.search_status.pack(anchor="w", pady=(0, 4))
 
-            columns = ("title", "id", "difficulty", "type", "exits", "score")
+            columns = (
+                "title", "id", "author", "difficulty", "type", "exits", "score"
+            )
             holder = ttk.Frame(frame)
             holder.pack(fill="x")
             self.suggestion_tree = ttk.Treeview(holder, columns=columns, show="headings", height=4, selectmode="browse")
             specs = {
-                "title": ("Hack", 360),
-                "id": ("SMWC ID", 85),
-                "difficulty": ("Difficulty", 120),
-                "type": ("Type", 110),
-                "exits": ("Exits", 60),
-                "score": ("Match", 70),
+                "title": ("Hack", 310),
+                "id": ("SMWC ID", 82),
+                "author": ("Author", 190),
+                "difficulty": ("Difficulty", 105),
+                "type": ("Type", 90),
+                "exits": ("Exits", 55),
+                "score": ("Match", 65),
             }
             for column, (label, width) in specs.items():
                 self.suggestion_tree.heading(column, text=label)
@@ -1052,6 +1103,7 @@ class CollectionIngestionReviewDialog:
                 values=(
                     suggestion.title,
                     suggestion.target_key,
+                    _catalogue_author_text(suggestion),
                     suggestion.difficulty or "-",
                     suggestion.hack_type or "-",
                     "-" if suggestion.exits is None else suggestion.exits,
@@ -1098,6 +1150,9 @@ class CollectionIngestionReviewDialog:
             )
             return
         parts = [f"{suggestion.title} [SMWC {suggestion.target_key}]"]
+        author = _catalogue_author_text(suggestion)
+        if author != "-":
+            parts.append(f"by {author}")
         if suggestion.difficulty:
             parts.append(suggestion.difficulty)
         if suggestion.hack_type:
@@ -1309,11 +1364,12 @@ class CollectionIngestionReviewDialog:
                         self._first_clear_var.set(token)
                         break
 
-    def _render_remember_aliases(self, context, previous):
+    def _render_remember_aliases(self, context, previous, *, parent=None):
         self._remember_vars = []
         if not context.rememberable_aliases:
             return
-        frame = ttk.LabelFrame(self.details, text="Remember match", padding=8)
+        parent = parent or self.details
+        frame = ttk.LabelFrame(parent, text="Remember match", padding=8)
         frame.pack(fill="x", pady=(0, 8))
         ttk.Label(
             frame,

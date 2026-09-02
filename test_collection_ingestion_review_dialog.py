@@ -148,23 +148,27 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
                 self.assertIn(value, self.source)
         self.assertLess(
             self.source.index("self._render_local_metadata("),
-            self.source.index("self._render_roms(group, previous, parent=self._decision_right)"),
+            self.source.index("self._render_roms(group, previous, parent=self._support_left)"),
         )
 
-    def test_decisions_use_responsive_identity_and_rom_columns(self):
+    def test_identity_keeps_full_width_and_secondary_sections_share_lower_row(self):
         required = (
-            "self._decision_left = ttk.Frame(self._decision_area)",
-            "self._decision_right = ttk.Frame(self._decision_area)",
-            'mode = "wide" if width >= 900 else "stacked"',
+            "self._render_identity(group, context, previous, parent=self._decision_area)",
+            "self._support_area = ttk.Frame(self._decision_area)",
+            "self._support_left = ttk.Frame(self._support_area)",
+            "self._support_right = ttk.Frame(self._support_area)",
+            "self._render_roms(group, previous, parent=self._support_left)",
+            "context, previous, parent=self._support_right",
+            'mode = "wide" if width >= 760 else "stacked"',
             'left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))',
             'right.grid(row=0, column=1, sticky="nsew")',
-            'right.grid(row=1, column=0, sticky="nsew")',
             "area.columnconfigure(0, weight=3)",
             "area.columnconfigure(1, weight=2)",
         )
         for value in required:
             with self.subTest(value=value):
                 self.assertIn(value, self.source)
+        self.assertNotIn("_layout_decision_columns", self.source)
 
     def test_local_metadata_is_prioritized_before_rom_choices(self):
         render = next(
@@ -177,8 +181,8 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
             text.index("self._render_local_metadata("),
             text.index("self._render_roms("),
         )
-        self.assertIn("parent=self._decision_right", text)
-        self.assertIn("appears immediately", text)
+        self.assertIn("parent=self._decision_area", text)
+        self.assertIn("directly below the identity choice", text)
 
     def test_review_copy_uses_user_facing_catalogue_language(self):
         self.assertIn('text="Search catalogue"', self.source)
@@ -188,8 +192,10 @@ class CollectionIngestionReviewDialogContractTest(unittest.TestCase):
         self.assertNotIn("frozen KaizOFF Index", self.source)
         self.assertNotIn("Select a KaizOFF result first", self.source)
 
-    def test_full_width_tables_allocate_more_room_for_titles(self):
-        self.assertIn('"title": ("Hack", 360)', self.source)
+    def test_full_width_catalogue_table_includes_author_and_detail_fallback(self):
+        self.assertIn('"author": ("Author", 190)', self.source)
+        self.assertIn("_catalogue_author_text(suggestion)", self.source)
+        self.assertIn('parts.append(f"by {author}")', self.source)
         self.assertIn('"title": ("Local hack", 340)', self.source)
         self.assertIn('orient="horizontal"', self.source)
         self.assertIn("xscrollcommand=tree_hscroll.set", self.source)
