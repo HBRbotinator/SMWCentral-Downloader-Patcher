@@ -358,7 +358,7 @@ class RecursiveSaveUiContractTests(unittest.TestCase):
         return Path(relative).read_text(encoding="utf-8")
 
     def test_settings_exposes_per_folder_recursion_and_uses_source_scanner(self):
-        source = self._read("ui/pages/settings_page.py")
+        source = self._read("ui/save_sync_panel.py")
         self.assertIn('text="Include subfolders"', source)
         self.assertIn("set_save_directory_recursive", source)
         self.assertIn("save_sync_sources.scan_save_directories", source)

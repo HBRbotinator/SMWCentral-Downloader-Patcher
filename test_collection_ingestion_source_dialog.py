@@ -24,11 +24,11 @@ class CollectionIngestionSourceDialogContractTest(unittest.TestCase):
         self.assertIn("filedialog.askdirectory", self.dialog_source)
         self.assertIn("filedialog.askopenfilename", self.dialog_source)
         self.assertIn("Start Review", self.dialog_source)
-        self.assertIn("KaizOFF is used automatically", self.dialog_source)
+        self.assertIn("source_kind", self.dialog_source)
 
 
     def test_collection_windows_use_shared_parent_centering(self):
-        self.assertIn("center_window_on_parent(self.win, self.parent)", self.dialog_source)
+        self.assertIn("reveal_window_on_parent(self.win, self.parent)", self.dialog_source)
         self.assertNotIn("max(\n                0,\n                (self.parent.winfo_width()", self.dialog_source)
 
     def test_source_dialog_only_returns_validated_selection(self):

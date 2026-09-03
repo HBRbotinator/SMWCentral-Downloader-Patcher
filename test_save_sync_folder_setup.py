@@ -53,7 +53,7 @@ class SaveFolderSetupTest(unittest.TestCase):
                                _selected_save_sync_directory=lambda: '',
                                _populate_save_sync_directories=Mock())
         errors = Mock()
-        call = function('ui/pages/settings_page.py', '_add_save_dir', {'os': os, 'messagebox': errors})
+        call = function('ui/save_sync_panel.py', '_add_save_dir', {'os': os, 'messagebox': errors})
         with patch.dict(sys.modules, {'ui.save_sync_folder_dialog': dialog_module, 'platform_utils': picker}):
             call(page)
         errors.showerror.assert_not_called()

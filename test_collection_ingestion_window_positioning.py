@@ -133,7 +133,14 @@ class CollectionIngestionWindowPositioningContractTest(unittest.TestCase):
         ):
             with self.subTest(relative=relative):
                 source = (ROOT / relative).read_text(encoding="utf-8")
-                self.assertIn("center_window_on_parent", source)
+                helpers = {
+                    node.func.id for node in ast.walk(ast.parse(source))
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                }
+                self.assertTrue(
+                    {"center_window_on_parent", "reveal_window_on_parent"} & helpers,
+                    f"{relative} must call a shared positioning helper",
+                )
 
 
 if __name__ == "__main__":

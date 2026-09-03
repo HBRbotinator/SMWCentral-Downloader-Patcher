@@ -598,7 +598,19 @@ design.
 <!-- planner-guide:end -->
 
 <!-- save-data-sync-guide:start -->
+## Data Management
+
+Open **Data** to import existing ROMs, import a GiganticBucket JSON export, or
+configure **Save Data Sync**. **Collection → Import...** opens the same page.
+ROM and GiganticBucket imports each have their own setup dialog and use the
+shared review and Apply flow. **Advanced import options → Combine sources...**
+lets you review both sources together when needed.
+
 ## 💾 Save Data Sync
+
+Folder setup, per-folder subfolder choices, startup/periodic checks, **Scan Saves**
+and **Review Auto-Scan...** now live together under **Data → Save Data Sync**.
+Automatic checks continue while another tab is open.
 
 Save Data Sync can review `.srm` and `.sav` battery saves from multiple
 configured folders, inspect checksum-valid SMW slots and conservative fallback

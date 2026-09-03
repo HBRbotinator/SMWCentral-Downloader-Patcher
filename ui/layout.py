@@ -7,6 +7,7 @@ from .version_display import VersionDisplay
 from .pages import (
     CollectionPage,
     DashboardPage,
+    DataPage,
     DownloadPage,
     PlannerPage,
     SettingsPage,
@@ -39,6 +40,7 @@ class MainLayout:
         self.bulk_download_page = None
         self.hack_collection_page = None
         self.planner_page = None
+        self.data_page = None
 
     def create(self):
         """Create the main UI layout"""
@@ -137,9 +139,16 @@ class MainLayout:
         # Register reload callback for metadata migration
         self.settings_page.reload_collection_callback = self.collection_page._refresh_data_and_table
 
-        # Share the collection page's data manager so Save Data Sync writes through
-        # the same in-memory source of truth (avoids dual-manager save conflicts).
-        self.settings_page.data_manager = self.collection_page.data_manager
+        # Data owns import entry points and one persistent Save Sync controller.
+        self.data_page = DataPage(
+            self.content_frame,
+            self.setup_section,
+            self.collection_page,
+            self.logger,
+        )
+        data_frame = self.data_page.create()
+        self.page_manager.add_page("Data", data_frame)
+        self.collection_page.open_data_callback = lambda: self.navigation.show_page("Data")
 
         # Wire up emulator settings callback so setting/changing the emulator path
         # immediately refreshes the play icon column in the collection table.

@@ -6,14 +6,14 @@ until the user presses **Apply Selected**.
 
 ## Supported save sources
 
-Configure one or more emulator or console save folders in Settings.
+Configure one or more emulator or console save folders under **Data → Save Data Sync**.
 
 - Supported extensions are `.srm` and `.sav`, case-insensitively.
 - After **Add Folder...**, a centered prompt asks **Include folders inside this
   folder?** Choose **Only this folder** (the default) or **This folder and all
   folders inside it**, then press **Add Folder**. Cancelling adds nothing.
 - Each configured folder scans only its top level by default. Select a folder
-  in Settings and enable **Include subfolders** to change that source later.
+  in Data and enable **Include subfolders** to change that source later.
   The option is per folder and is off by default for existing and newly added
   sources unless explicitly enabled. Re-adding an existing source selects it
   without changing its scan options.
@@ -228,6 +228,11 @@ Removing a local entry never deletes save or ROM files. These lifecycle actions
 are not available for normal SMWCentral-backed entries.
 
 ## Startup and periodic review scans
+
+Startup and periodic controls live beside the save folders on **Data**. Checks
+continue while any tab is open; visiting Data does not restart them. A running
+scan, pending automatic results, or an open Save Sync review defers the next
+periodic check. Open Data to review prepared automatic results.
 
 Background review is disabled by default.
 

@@ -3147,8 +3147,13 @@ class CollectionPage:
 
 
 
-    def _open_collection_import(self):
-        """Open the real-source import picker without applying any Collection changes."""
+    def _open_collection_import(self, source_kind=None):
+        """Open Data from the toolbar, or reuse the guarded review flow for a source."""
+        if source_kind is None:
+            callback = getattr(self, "open_data_callback", None)
+            if callback is not None:
+                callback()
+            return
         if self._collection_ingestion_busy:
             return
         if (
@@ -3182,6 +3187,7 @@ class CollectionPage:
         self.collection_ingestion_source_dialog = CollectionIngestionSourceDialog(
             parent,
             default_rom_root=default_root,
+            source_kind=source_kind,
             on_start=self._start_collection_ingestion_review,
             on_close=self._collection_ingestion_source_closed,
         )
@@ -3810,12 +3816,10 @@ class CollectionPage:
             if setup_config is not None and hasattr(setup_config, "reload"):
                 setup_config.reload()
 
-            settings_page = getattr(layout, "settings_page", None)
-            if (
-                settings_page is not None
-                and hasattr(settings_page, "_load_save_sync_settings")
-            ):
-                settings_page._load_save_sync_settings()
+            data_page = getattr(layout, "data_page", None)
+            save_sync_panel = getattr(data_page, "save_sync_panel", None)
+            if save_sync_panel is not None:
+                save_sync_panel._load_save_sync_settings()
 
             planner_page = getattr(layout, "planner_page", None)
             if planner_page is not None and hasattr(planner_page, "refresh"):

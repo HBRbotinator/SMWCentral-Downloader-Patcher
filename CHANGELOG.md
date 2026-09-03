@@ -7,6 +7,13 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Data Management workspace
+
+- Add Data navigation with separate ROM and GiganticBucket import setup; keep combined imports under Advanced import options.
+- Move Save Data Sync folder setup, review actions and automatic-check controls from Settings to Data. Preserve configured folders and per-folder subfolder choices.
+- Keep scheduled checks active across tab changes, with one shared Collection manager and no overlapping scan or Save Sync review.
+- Route Collection's Import shortcut to Data and preserve the existing reviewed-plan Apply boundary.
+
 ### Unified local/manual Collection metadata
 
 - Save Data Sync and ROM-folder local/manual creation now expose explicit title, type, difficulty, and exit-count fields instead of silently treating unknown local hacks as Standard / No Difficulty.

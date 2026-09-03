@@ -1206,7 +1206,7 @@ class SaveAssociationTest(unittest.TestCase):
             Path(__file__).parent / "config_manager.py"
         ).read_text(encoding="utf-8")
         settings_source = (
-            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+            Path(__file__).parent / "ui" / "save_sync_panel.py"
         ).read_text(encoding="utf-8")
         dialog_source = (
             Path(__file__).parent / "ui" / "save_sync_dialog.py"
@@ -1337,7 +1337,7 @@ class SaveSourceDirectoryTest(unittest.TestCase):
             encoding="utf-8"
         )
         settings_source = (
-            root / "ui" / "pages" / "settings_page.py"
+            root / "ui" / "save_sync_panel.py"
         ).read_text(encoding="utf-8")
         self.assertIn('"save_sync_dirs": []', config_source)
         self.assertIn('text="Add Folder..."', settings_source)
@@ -1386,7 +1386,7 @@ class StartupSaveScanTest(unittest.TestCase):
         from pathlib import Path
 
         source = (
-            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+            Path(__file__).parent / "ui" / "save_sync_panel.py"
         ).read_text(encoding="utf-8")
         self.assertIn(
             "Check save folders automatically on startup",
@@ -1403,7 +1403,7 @@ class StartupSaveScanTest(unittest.TestCase):
         from pathlib import Path
 
         source = (
-            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+            Path(__file__).parent / "ui" / "save_sync_panel.py"
         ).read_text(encoding="utf-8")
         self.assertIn("lookup_service.resolve_automatic_many(", source)
         self.assertIn("save_sync.attach_resolution(", source)
@@ -1415,7 +1415,7 @@ class StartupSaveScanTest(unittest.TestCase):
         from pathlib import Path
 
         source = (
-            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+            Path(__file__).parent / "ui" / "save_sync_panel.py"
         ).read_text(encoding="utf-8")
         self.assertIn("self._scan_saves(auto=True)", source)
         self.assertIn("interactive=not auto", source)
@@ -1450,7 +1450,7 @@ class PeriodicSaveScanTest(unittest.TestCase):
         from pathlib import Path
 
         source = (
-            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+            Path(__file__).parent / "ui" / "save_sync_panel.py"
         ).read_text(encoding="utf-8")
         self.assertIn(
             "Continue checking while the application is open",
@@ -1467,10 +1467,10 @@ class PeriodicSaveScanTest(unittest.TestCase):
         from pathlib import Path
 
         source = (
-            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+            Path(__file__).parent / "ui" / "save_sync_panel.py"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "not self._auto_scan_running "
+            "not self._scan_running "
             "and not self._pending_auto_scan_candidates",
             source,
         )
@@ -1918,7 +1918,7 @@ class AutomaticReviewFreshnessTest(unittest.TestCase):
         from pathlib import Path
 
         source = (
-            Path(__file__).parent / "ui" / "pages" / "settings_page.py"
+            Path(__file__).parent / "ui" / "save_sync_panel.py"
         ).read_text(encoding="utf-8")
         method = source.split(
             "    def _review_auto_scan", 1

@@ -54,6 +54,7 @@ class NavigationBar:
 
         # Add tabs - CENTERED VERTICALLY AND HORIZONTALLY
         self._draw_tabs(nav_height)
+        self.nav_bar.bind("<Configure>", self._update_toggle_position)
 
         # Dynamic positioning for toggle
         if self.toggle_theme_callback:
@@ -105,16 +106,13 @@ class NavigationBar:
 
             self.moon_label.pack(side="left", padx=(10, 12))
 
-            # Bind to configure event to update position when window resizes
-            self.nav_bar.bind("<Configure>", self._update_toggle_position)
-
             # Initial position setup
             self.root.after(100, self._update_toggle_position)
 
 
     def _visible_tabs(self):
         """Return navigation tabs without making Planner a required feature."""
-        tabs = ["Dashboard", "Download", "Collection", "Planner", "Settings"]
+        tabs = ["Dashboard", "Download", "Collection", "Planner", "Data", "Settings"]
         if not self.planner_visible:
             tabs.remove("Planner")
         return tabs
@@ -126,8 +124,11 @@ class NavigationBar:
         colors = get_colors()
         self.nav_bar.delete("nav_tab")
         self.tab_refs = []
-        tab_width = 130
-        for i, tab in enumerate(self._visible_tabs()):
+        tabs = self._visible_tabs()
+        # Reserve the theme control's 128 px even at the 800 px minimum width.
+        available = max(1, self.nav_bar.winfo_width() - 168)
+        tab_width = min(130, available / len(tabs))
+        for i, tab in enumerate(tabs):
             x_pos = 20 + (i * tab_width)
             tab_id = self.nav_bar.create_text(
                 x_pos + (tab_width // 2),
@@ -276,7 +277,8 @@ class NavigationBar:
 
     # Method to update toggle position dynamically
     def _update_toggle_position(self, event=None):
-        """Update toggle position to stay on the right edge"""
+        """Keep the tabs and theme control separate as the window changes size."""
+        self._draw_tabs()
         if hasattr(self, 'theme_frame') and self.theme_frame:
             # Get current canvas width
             canvas_width = self.nav_bar.winfo_width()

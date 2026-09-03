@@ -63,8 +63,8 @@ class CollectionIngestionPlanPreviewDialogContractTest(unittest.TestCase):
             "self.config_manager.reload()",
             'getattr(layout, "setup_section", None)',
             "setup_config.reload()",
-            'getattr(layout, "settings_page", None)',
-            "settings_page._load_save_sync_settings()",
+            'getattr(layout, "data_page", None)',
+            "save_sync_panel._load_save_sync_settings()",
             'getattr(layout, "planner_page", None)',
             "planner_page.refresh(reload_planner=True)",
         ):
