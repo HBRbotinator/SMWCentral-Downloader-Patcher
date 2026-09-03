@@ -131,7 +131,7 @@ class CurrentSubmissionRefreshAcquisitionTests(unittest.TestCase):
         self.assertEqual(b"do-not-overwrite", occupied.read_bytes())
         self.assertTrue(result.primary_path.endswith("Quickie World (2).sfc"))
         self.assertTrue(Path(result.primary_path).is_file())
-        self.assertEqual(occupied.parent, Path(result.primary_path).parent)
+        self.assertEqual(occupied.parent.resolve(), Path(result.primary_path).parent)
 
         review = build_current_rom_disposition_review(
             self.processed, result.finalized, manager=self.manager,
@@ -195,7 +195,7 @@ class CurrentSubmissionRefreshAcquisitionTests(unittest.TestCase):
             organize_by_type_and_difficulty=False, participants=(), request_get=self._request_get,
             extract_patches=self._extract, patch_apply=patch_apply,
         )
-        self.assertEqual(output, Path(result.primary_path).parent)
+        self.assertEqual(output.resolve(), Path(result.primary_path).parent)
         self.assertFalse((output / "Kaizo").exists())
 
     def test_acquisition_rejects_collection_change_before_publish(self):
