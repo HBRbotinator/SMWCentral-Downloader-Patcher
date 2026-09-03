@@ -96,6 +96,8 @@ class CollectionIngestionReviewDialog:
         self.catalogue_label = None
         self.details = None
         self.detail_actions = None
+        self._item_canvas = None
+        self._personal_data_jump = None
         self.review_win = None
         self.review_button = None
         self.selection_label = None
@@ -457,13 +459,22 @@ class CollectionIngestionReviewDialog:
 
             workspace = ttk.Frame(self.review_win, padding=14)
             workspace.pack(fill="both", expand=True)
+            heading = ttk.Frame(workspace)
+            heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+            heading.columnconfigure(0, weight=1)
             ttk.Label(
-                workspace,
+                heading,
                 text="Review selected import item",
                 font=("Segoe UI", 14, "bold"),
-            ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+            ).grid(row=0, column=0, sticky="w")
+            self._personal_data_jump = ttk.Button(
+                heading, text="Personal data", command=self._show_personal_data,
+            )
+            self._personal_data_jump.grid(row=0, column=1, sticky="e", padx=(8, 0))
+            self._personal_data_jump.grid_remove()
 
             item_canvas = tk.Canvas(workspace, highlightthickness=0)
+            self._item_canvas = item_canvas
             item_scroll = ttk.Scrollbar(
                 workspace, orient="vertical", command=item_canvas.yview
             )
@@ -493,6 +504,8 @@ class CollectionIngestionReviewDialog:
             center_window_on_parent(self.review_win, self.win)
 
         self._render_group(group_id)
+        if self._item_canvas is not None:
+            self._item_canvas.yview_moveto(0)
         try:
             self.review_win.deiconify()
             self.review_win.lift()
@@ -509,10 +522,18 @@ class CollectionIngestionReviewDialog:
         except (tk.TclError, TypeError, ValueError):
             screen_width = int(self.review_win.winfo_screenwidth())
             screen_height = int(self.review_win.winfo_screenheight())
-        width = min(1180, max(760, screen_width - 80))
-        height = min(820, max(540, screen_height - 120))
+        width = min(1180, max(1, screen_width - 80))
+        height = min(960, max(1, screen_height - 100))
         self.review_win.geometry(f"{width}x{height}")
         self.review_win.minsize(min(760, width), min(540, height))
+
+    def _show_personal_data(self):
+        if self._item_canvas is None or self._user_conflicts_area is None:
+            return
+        self.review_win.update_idletasks()
+        height = max(1, self.details.winfo_height())
+        y = max(0, self._user_conflicts_area.winfo_y() - 8)
+        self._item_canvas.yview_moveto(y / height)
 
     def _item_review_is_open(self):
         try:
@@ -529,6 +550,8 @@ class CollectionIngestionReviewDialog:
         self.review_win = None
         self.details = None
         self.detail_actions = None
+        self._item_canvas = None
+        self._personal_data_jump = None
         self._current_group_id = None
 
     def _clear_details(self, message="Select an item to review."):
@@ -578,7 +601,10 @@ class CollectionIngestionReviewDialog:
             return
 
         frame = ttk.LabelFrame(self.details, text="Why this needs review", padding=6)
-        frame.pack(fill="x", pady=(0, 8))
+        frame.pack(fill="x", pady=(0, 6))
+        if len(lines) <= 2:
+            self._wrapped_label(frame, "\n".join(lines)).pack(anchor="w", fill="x")
+            return
         holder = ttk.Frame(frame)
         holder.pack(fill="x")
         text = tk.Text(
@@ -1090,7 +1116,6 @@ class CollectionIngestionReviewDialog:
                 values=(
                     suggestion.title,
                     suggestion.target_key,
-                    self.model.collection_status(suggestion.target_key),
                     suggestion.difficulty or "-",
                     ", ".join(suggestion.hack_types) or "-",
                     "-" if suggestion.exits is None else suggestion.exits,
@@ -1132,6 +1157,7 @@ class CollectionIngestionReviewDialog:
                 values=(
                     suggestion.title,
                     suggestion.target_key,
+                    self.model.collection_status(suggestion.target_key),
                     _catalogue_author_text(suggestion),
                     suggestion.difficulty or "-",
                     suggestion.hack_type or "-",
@@ -1348,6 +1374,14 @@ class CollectionIngestionReviewDialog:
         for child in self._user_conflicts_area.winfo_children():
             child.destroy()
         self._user_field_vars = {}
+        if self._personal_data_jump is not None:
+            if proposals:
+                count = sum(bool(item.conflict) for item in proposals)
+                suffix = f": {count} conflict{'s' if count != 1 else ''}" if count else ""
+                self._personal_data_jump.configure(text="Personal data" + suffix)
+                self._personal_data_jump.grid()
+            else:
+                self._personal_data_jump.grid_remove()
         if not proposals:
             return
         frame = ttk.LabelFrame(self._user_conflicts_area, text="Personal data review", padding=8)

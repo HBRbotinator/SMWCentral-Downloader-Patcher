@@ -131,6 +131,7 @@ class CurrentSubmissionRefreshAcquisitionTests(unittest.TestCase):
         self.assertEqual(b"do-not-overwrite", occupied.read_bytes())
         self.assertTrue(result.primary_path.endswith("Quickie World (2).sfc"))
         self.assertTrue(Path(result.primary_path).is_file())
+        self.assertEqual(occupied.parent, Path(result.primary_path).parent)
 
         review = build_current_rom_disposition_review(
             self.processed, result.finalized, manager=self.manager,
@@ -154,6 +155,48 @@ class CurrentSubmissionRefreshAcquisitionTests(unittest.TestCase):
         self.assertEqual(int(SOURCE_ID), new["smwc_submission_id"])
         self.assertTrue(new["primary"])
 
+
+    def test_alongside_download_creates_a_sibling_without_type_difficulty_folders(self):
+        from collection_update_current_output import (
+            ROM_DOWNLOAD_DESTINATION_ALONGSIDE_PRIMARY, resolve_current_rom_download_directory,
+        )
+        output = resolve_current_rom_download_directory(
+            self.output, self.manager.data[SOURCE_ID], ROM_DOWNLOAD_DESTINATION_ALONGSIDE_PRIMARY
+        )
+        occupied = output / "Quickie World.sfc"
+        occupied.write_bytes(b"keep occupied")
+        before = self.processed.read_bytes()
+
+        def patch_apply(patch, base, output, log=None):
+            Path(output).write_bytes(b"new sibling")
+            return True
+
+        result = acquire_current_submission_rom(
+            self.processed, self.finalized, base_rom_path=self.base_rom, output_dir=output,
+            organize_by_type_and_difficulty=False, participants=(), request_get=self._request_get,
+            extract_patches=self._extract, patch_apply=patch_apply,
+        )
+        self.assertEqual(output / "Quickie World (2).sfc", Path(result.primary_path))
+        self.assertEqual(b"keep occupied", occupied.read_bytes())
+        self.assertEqual(b"old-rom", self.old_rom.read_bytes())
+        self.assertFalse((output / "Kaizo").exists())
+        self.assertEqual(before, self.processed.read_bytes())
+
+    def test_exact_destination_does_not_repeat_existing_output_layout(self):
+        output = self.output / "Kaizo" / DIFFICULTY_SORTED["Intermediate"]
+        output.mkdir(parents=True)
+
+        def patch_apply(patch, base, output, log=None):
+            Path(output).write_bytes(b"new sibling")
+            return True
+
+        result = acquire_current_submission_rom(
+            self.processed, self.finalized, base_rom_path=self.base_rom, output_dir=output,
+            organize_by_type_and_difficulty=False, participants=(), request_get=self._request_get,
+            extract_patches=self._extract, patch_apply=patch_apply,
+        )
+        self.assertEqual(output, Path(result.primary_path).parent)
+        self.assertFalse((output / "Kaizo").exists())
 
     def test_acquisition_rejects_collection_change_before_publish(self):
         def patch_apply(patch, base, output, log=None):

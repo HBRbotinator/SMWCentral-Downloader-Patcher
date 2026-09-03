@@ -1651,10 +1651,31 @@ class SettingsPage:
             if not selected:
                 return
 
-            save_sync.add_save_directory(self.setup_section.config, selected)
-            self._populate_save_sync_directories(
-                save_sync.get_save_directories(self.setup_section.config)
+            # Re-adding an existing source selects it without resetting its options.
+            selected_id = os.path.normcase(os.path.realpath(selected))
+            for index, directory in enumerate(directories):
+                if os.path.normcase(os.path.realpath(directory)) == selected_id:
+                    self._populate_save_sync_directories(directories, select_index=index)
+                    return
+
+            from ui.save_sync_folder_dialog import ask_include_save_subfolders
+            import save_sync_sources
+
+            include_subfolders = ask_include_save_subfolders(
+                self.frame.winfo_toplevel(), selected
             )
+            if include_subfolders is None:
+                return
+            save_sync.add_save_directory(self.setup_section.config, selected)
+            save_sync_sources.set_save_directory_recursive(
+                self.setup_section.config, selected, include_subfolders
+            )
+            updated = save_sync.get_save_directories(self.setup_section.config)
+            index = next(
+                i for i, directory in enumerate(updated)
+                if os.path.normcase(os.path.realpath(directory)) == selected_id
+            )
+            self._populate_save_sync_directories(updated, select_index=index)
         except Exception as e:
             messagebox.showerror(
                 "Save Data Sync",

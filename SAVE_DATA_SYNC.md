@@ -9,10 +9,14 @@ until the user presses **Apply Selected**.
 Configure one or more emulator or console save folders in Settings.
 
 - Supported extensions are `.srm` and `.sav`, case-insensitively.
+- After **Add Folder...**, a centered prompt asks **Include folders inside this
+  folder?** Choose **Only this folder** (the default) or **This folder and all
+  folders inside it**, then press **Add Folder**. Cancelling adds nothing.
 - Each configured folder scans only its top level by default. Select a folder
-  in Settings and enable **Include subfolders** to make that source recursive.
+  in Settings and enable **Include subfolders** to change that source later.
   The option is per folder and is off by default for existing and newly added
-  sources.
+  sources unless explicitly enabled. Re-adding an existing source selects it
+  without changing its scan options.
 - Repeated folder entries and repeated paths to the same physical file are
   deduplicated. If configured roots overlap, the most-specific configured source
   owns the discovered file for review/association purposes.

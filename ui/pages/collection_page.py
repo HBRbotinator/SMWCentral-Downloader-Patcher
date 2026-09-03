@@ -2837,6 +2837,7 @@ class CollectionPage:
                     finalized,
                     base_rom_path=base_rom_path,
                     output_dir=output_dir,
+                    organize_by_type_and_difficulty=not alongside_current,
                     include_smwc_id_in_filename=bool(
                         config.get("include_smwc_id_in_filename", False)
                     ),

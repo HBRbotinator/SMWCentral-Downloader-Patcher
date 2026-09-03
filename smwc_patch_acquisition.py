@@ -46,6 +46,7 @@ def acquire_smwc_rom_assets(
     base_rom_path: str | Path,
     output_dir: str | Path,
     include_smwc_id_in_filename: bool = False,
+    organize_by_type_and_difficulty: bool = True,
     multi_patch_callback: Callable | None = None,
     request_get: Callable = requests.get,
     extract_patches: Callable | None = None,
@@ -88,7 +89,12 @@ def acquire_smwc_rom_assets(
     normalized_type = str(hack_types[0]).lower().replace("-", "_")
     display_type = TYPE_DISPLAY_LOOKUP.get(normalized_type, "Unknown")
     difficulty_folder = DIFFICULTY_SORTED.get(difficulty, "08 - No Difficulty")
-    target_directory = (output_root / display_type / difficulty_folder).resolve()
+    # An explicitly chosen existing ROM folder is an exact destination.
+    # Only the default-output flow requests automatic type/difficulty folders.
+    target_directory = (
+        output_root / display_type / difficulty_folder
+        if organize_by_type_and_difficulty else output_root
+    ).resolve()
     try:
         target_directory.relative_to(output_root)
     except ValueError as error:

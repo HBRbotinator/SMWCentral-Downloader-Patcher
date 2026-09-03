@@ -12,6 +12,11 @@ import statistics
 # Add path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+from dashboard_time_progression import (
+    DATE_FILTER_LABELS, build_time_progression, completion_in_period,
+)
+
+
 class DashboardAnalytics:
     def __init__(self, data_manager):
         self.data_manager = data_manager
@@ -21,6 +26,7 @@ class DashboardAnalytics:
     def load_analytics_data(self, date_filter="all_time"):
         """Load and calculate all analytics data with optional date filtering"""
         self.date_filter = date_filter
+        self._period_today = datetime.now().date()
         
         # Get different datasets for different metric types
         # Inventory metrics (exclude obsolete): Total Hacks, Total Exits, Completion Rate
@@ -69,35 +75,10 @@ class DashboardAnalytics:
         return self.analytics_data
     
     def _should_include_hack(self, hack_data):
-        """Check if hack should be included based on date filter"""
-        if self.date_filter == "all_time":
-            return True
-            
-        completed_date = hack_data.get('completed_date')
-        if not completed_date or not hack_data.get('completed', False):
-            return False
-            
-        try:
-            date_obj = datetime.strptime(completed_date, '%Y-%m-%d')
-            now = datetime.now()
-            
-            if self.date_filter == "last_week":
-                filter_date = now - timedelta(days=7)
-            elif self.date_filter == "last_month":
-                filter_date = now - timedelta(days=30)
-            elif self.date_filter == "3_months":
-                filter_date = now - timedelta(days=90)
-            elif self.date_filter == "6_months":
-                filter_date = now - timedelta(days=180)
-            elif self.date_filter == "1_year":
-                filter_date = now - timedelta(days=365)
-            else:
-                return True
-                
-            return date_obj >= filter_date
-        except ValueError:
-            return False
-    
+        """Use the same inclusive calendar-date range as the timeline."""
+        today = getattr(self, "_period_today", None) or datetime.now().date()
+        return completion_in_period(hack_data, self.date_filter, today)
+
     def _calculate_basic_stats(self):
         """Calculate basic completion statistics"""
         completed_hacks = []
@@ -365,80 +346,14 @@ class DashboardAnalytics:
         self.analytics_data['completion_streak'] = streak_from_today if streak_from_today > 0 else longest_streak
 
     def _calculate_time_progression(self):
-        """Calculate average completion time by difficulty per month for the last 6 months"""
-        from collections import defaultdict
-        import calendar
-        
-        # Calculate rolling 6 months from current date
-        now = datetime.now()
-        six_months_ago = now - timedelta(days=180)  # Approximate 6 months
-        
-        # Group completions by month and difficulty/type
-        monthly_data = defaultdict(lambda: defaultdict(list))  # month -> difficulty -> [times]
-        
-        # Use all data (including obsolete) for time progression since this is completion-based
-        for hack_id, hack_data in self.all_data.items():
-            if not hack_data.get('completed', False):
-                continue
-                
-            completed_date = hack_data.get('completed_date')
-            if not completed_date:
-                continue
-                
-            try:
-                date_obj = datetime.strptime(completed_date, '%Y-%m-%d')
-                if date_obj < six_months_ago:
-                    continue
-                    
-                # Get month key (YYYY-MM format)
-                month_key = date_obj.strftime('%Y-%m')
-                
-                difficulty = hack_data.get('current_difficulty', 'Unknown')
-                # Use new hack_types array - include hack in all its type categories for time progression
-                hack_types = hack_data.get('hack_types', [hack_data.get('hack_type', 'standard')])
-                time_to_beat = hack_data.get('time_to_beat', 0)
-                
-                if time_to_beat > 0:
-                    # Convert to hours
-                    time_hours = time_to_beat / 3600
-                    # Add entry for each hack type (so multi-type hacks appear in all relevant type filters)
-                    for hack_type in hack_types:
-                        monthly_data[month_key][difficulty].append({
-                            'time': time_hours,
-                            'type': hack_type
-                        })
-                    
-            except ValueError:
-                continue
-        
-        # Generate all months in the 6-month range
-        progression_data = {}
-        current_date = six_months_ago.replace(day=1)  # Start of month
-        
-        while current_date <= now:
-            month_key = current_date.strftime('%Y-%m')
-            month_name = current_date.strftime('%b %Y')  # e.g., "Jan 2025"
-            
-            progression_data[month_key] = {
-                'month_name': month_name,
-                'difficulties': {}
-            }
-            
-            # Calculate average time per difficulty for this month
-            if month_key in monthly_data:
-                for difficulty, completions in monthly_data[month_key].items():
-                    if completions:
-                        avg_time = sum(c['time'] for c in completions) / len(completions)
-                        progression_data[month_key]['difficulties'][difficulty] = {
-                            'avg_time': avg_time,
-                            'count': len(completions),
-                            'types': list(set(c['type'] for c in completions))
-                        }
-            
-            # Move to next month
-            if current_date.month == 12:
-                current_date = current_date.replace(year=current_date.year + 1, month=1)
-            else:
-                current_date = current_date.replace(month=current_date.month + 1)
-        
-        self.analytics_data['time_progression'] = progression_data
+        """Build completion-time averages for the selected Dashboard period."""
+        today = getattr(self, "_period_today", None) or datetime.now().date()
+        self.analytics_data['time_progression'] = build_time_progression(
+            self.all_data, self.date_filter, today
+        )
+        self.analytics_data['time_progression_period'] = DATE_FILTER_LABELS.get(
+            self.date_filter, "All Time"
+        )
+        self.analytics_data['time_progression_bucket'] = (
+            "Day" if self.date_filter in ("last_week", "last_month") else "Month"
+        )

@@ -231,6 +231,9 @@ class GiganticBucketReviewUITest(unittest.TestCase):
                 self.kwargs = kwargs
                 if parent is not None: parent.children.append(self)
             def pack(self, **kwargs): pass
+            def configure(self, **kwargs): self.kwargs.update(kwargs)
+            def grid(self, **kwargs): self.visible = True
+            def grid_remove(self): self.visible = False
             def winfo_children(self): return tuple(self.children)
             def destroy(self): self.parent.children.remove(self)
 
@@ -245,6 +248,7 @@ class GiganticBucketReviewUITest(unittest.TestCase):
         dialog._first_clear_var = Value("")
         dialog._first_clear_values = {"none": (None, None), "run:0": (IngestionSource.GIGANTIC_BUCKET, "1:0"), "run:1": (IngestionSource.GIGANTIC_BUCKET, "1:1")}
         dialog._user_conflicts_area = Widget()
+        dialog._personal_data_jump = Widget()
         dialog._displayed_user_proposals = None
         dialog._current_group_id = session.groups[0].group_id
         dialog._wrapped_label = lambda parent, text, **kwargs: Widget(parent, text=text, **kwargs)
@@ -258,6 +262,8 @@ class GiganticBucketReviewUITest(unittest.TestCase):
                          {k: v.get() for k, v in dialog._user_field_vars.items()})
         def texts(widget):
             return [widget.kwargs.get("text", "")] + [text for child in widget.children for text in texts(child)]
+        self.assertEqual("Personal data: 2 conflicts", dialog._personal_data_jump.kwargs["text"])
+        self.assertTrue(dialog._personal_data_jump.visible)
         copy = "\n".join(texts(dialog._user_conflicts_area))
         self.assertIn("Keep current Collection value: 2026-05-08", copy)
         self.assertIn("Use GiganticBucket first-clear value: 2026-05-01", copy)

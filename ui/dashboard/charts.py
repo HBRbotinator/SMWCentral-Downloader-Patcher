@@ -13,6 +13,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from colors import get_colors
 from ui_constants import get_dashboard_content_padding, get_labelframe_padding, SECTION_PADDING_Y
 
+from dashboard_time_progression import progression_average, timeline_label_indices
+
 class DashboardCharts:
     def __init__(self, parent, analytics_data):
         self.parent = parent
@@ -159,11 +161,12 @@ class DashboardCharts:
             progress_fill.place(x=0, y=0, relwidth=min(percentage/100, 1), relheight=1)
     
     def _create_time_progression_chart(self, parent):
-        """Create time progression line chart showing avg completion time by difficulty over 6 months"""
+        """Show time progression for the selected Dashboard period."""
         colors = get_colors()
         
         # Chart container
-        chart_frame = ttk.LabelFrame(parent, text="📈 Average Completion Time by Difficulty (Last 6 Months)", 
+        period_label = self.analytics_data.get('time_progression_period', 'All Time')
+        chart_frame = ttk.LabelFrame(parent, text=f"📈 Average Completion Time by Difficulty ({period_label})",
                                    padding=get_labelframe_padding())
         chart_frame.pack(fill="both", expand=True, pady=5)
         
@@ -219,6 +222,7 @@ class DashboardCharts:
         type_combo.bind('<<ComboboxSelected>>', lambda e: update_chart())
         
         # Initial chart draw - delay to ensure proper canvas sizing
+        canvas.bind('<Configure>', lambda _event: update_chart())
         canvas.after(50, update_chart)
         
         return chart_frame
@@ -245,8 +249,8 @@ class DashboardCharts:
             return
         
         # Ensure minimum width for proper chart display
-        if width < 300:
-            width = 800  # Use a reasonable default width
+        if width < 160:
+            return
         
         # Chart margins - reduced to give more space
         margin_left = 70
@@ -273,6 +277,8 @@ class DashboardCharts:
         }
         
         difficulty_order = ['Newcomer', 'Casual', 'Intermediate', 'Advanced', 'Expert', 'Master', 'Grandmaster']
+        present = {name for bucket in progression_data.values() for name in bucket['difficulties']}
+        difficulty_order.extend(sorted(present.difference(difficulty_order)))
         
         # Extract data for each difficulty
         difficulty_lines = {}
@@ -281,18 +287,11 @@ class DashboardCharts:
         for difficulty in difficulty_order:
             times = []
             for month in sorted_months:
-                month_data = progression_data[month]['difficulties'].get(difficulty)
-                if month_data:
-                    # Filter by type if needed
-                    if filter_type == 'All Types' or filter_type in month_data.get('types', []):
-                        avg_time = month_data['avg_time']
-                        times.append(avg_time)
-                        max_time = max(max_time, avg_time)
-                    else:
-                        times.append(None)  # No data for this filter
-                else:
-                    times.append(None)  # No data for this month
-            
+                avg_time = progression_average(progression_data[month], difficulty, filter_type)
+                times.append(avg_time)
+                if avg_time is not None:
+                    max_time = max(max_time, avg_time)
+
             if any(t is not None for t in times):
                 difficulty_lines[difficulty] = times
         
@@ -301,7 +300,7 @@ class DashboardCharts:
                              text=f"No data available for {filter_type}", 
                              font=("Segoe UI", 12), fill=colors.get("text_secondary"))
             canvas.create_text(width//2, height//2 + 15, 
-                             text="Enter your Time to Beat in Hack Collection to see stats appear here!", 
+                             text="No dated completions with Time to Beat match this period and type.",
                              font=("Segoe UI", 10), fill=colors.get("text_secondary"))
             return
         
@@ -322,7 +321,10 @@ class DashboardCharts:
         
         # X-axis (months)
         x_step = chart_width / max(1, len(sorted_months) - 1) if len(sorted_months) > 1 else chart_width
+        label_indices = set(timeline_label_indices(len(sorted_months), chart_width))
         for i, month in enumerate(sorted_months):
+            if i not in label_indices:
+                continue
             x_pos = margin_left + (i * x_step) if len(sorted_months) > 1 else margin_left + chart_width // 2
             
             # Grid line
@@ -385,7 +387,8 @@ class DashboardCharts:
                              font=("Segoe UI", 11), fill=colors.get("text"), anchor="w")
         
         # Chart title/labels
-        canvas.create_text(width//2, 15, text="Avg Hours per Hack per Month",
+        bucket_label = self.analytics_data.get('time_progression_bucket', 'Month')
+        canvas.create_text(width//2, 15, text=f"Avg Hours per Hack per {bucket_label}",
                          font=("Segoe UI", 11, "bold"), fill=colors.get("text"))
         
         # Y-axis title
