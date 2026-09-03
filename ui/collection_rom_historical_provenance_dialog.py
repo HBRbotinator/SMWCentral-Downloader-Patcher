@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import tkinter as tk
+from ui.window_positioning import reveal_window_on_parent
+
 from tkinter import ttk
 
 from collection_rom_historical_provenance import (
@@ -27,8 +29,8 @@ _STATUS_LABELS = {
 class HistoricalRomProvenanceProgressDialog:
     def __init__(self, parent):
         self.dialog = tk.Toplevel(parent)
+        self.dialog.withdraw()
         self.dialog.title("Historical ROM Provenance")
-        self.dialog.geometry("460x150")
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
         frame = ttk.Frame(self.dialog, padding=18)
@@ -48,7 +50,7 @@ class HistoricalRomProvenanceProgressDialog:
         progress.start(12)
         self._progress = progress
         self.dialog.protocol("WM_DELETE_WINDOW", lambda: None)
-        self.dialog.grab_set()
+        reveal_window_on_parent(self.dialog, parent, grab=True)
 
     def close(self):
         try:

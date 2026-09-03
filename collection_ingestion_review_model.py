@@ -25,6 +25,7 @@ from collection_reconciliation import (
     ReviewAction,
     ReviewDecision,
     ReviewState,
+    reviewed_user_field_proposals,
     validate_review_decision,
 )
 
@@ -88,6 +89,7 @@ class ReviewRow:
     rom_count: int
     unique_rom_hashes: int
     history_count: int
+    collection_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -268,6 +270,19 @@ class CollectionIngestionReviewModel:
     def search_catalogue(self, query: str, *, limit: int = 20) -> tuple[CatalogueSuggestion, ...]:
         return search_session_catalogue(self.session, query, limit=limit)
 
+    def collection_status(self, target_key: str) -> str:
+        if not target_key:
+            return ""
+        return "Already in Collection" if target_key in self.session.existing_collection_keys else "New"
+
+    def target_description(self, target_key: str) -> str:
+        return ("Matched existing Collection entry"
+                if target_key in self.session.existing_collection_keys
+                else "Proposed new Collection entry")
+
+    def user_field_proposals(self, group_id: str, decision: ReviewDecision | None = None):
+        return reviewed_user_field_proposals(self.get_group(group_id), decision)
+
     def _row_for_group(self, group: ReconciliationGroup) -> ReviewRow:
         decision = self._decisions.get(group.group_id)
         resolved = self.is_group_resolved(group.group_id)
@@ -303,6 +318,7 @@ class CollectionIngestionReviewModel:
             rom_count=len(group.rom_files),
             unique_rom_hashes=len(group.rom_hashes),
             history_count=len(group.user_history),
+            collection_status=self.collection_status(target_key),
         )
 
     def _target_title(self, group: ReconciliationGroup, target_key: str) -> str:

@@ -33,6 +33,7 @@ from collection_reconciliation import (
     ReviewState,
     RomSelectionDecision,
     UserFieldResolution,
+    selected_first_clear,
 )
 
 
@@ -61,6 +62,15 @@ def _catalogue_author_text(suggestion):
         if author:
             return author
     return "-"
+
+
+def _user_value_text(field, value):
+    if field == "time_to_beat" and isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds = int(value)
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours}:{minutes:02}:{seconds:02}"
+    return str(value)
 
 
 class CollectionIngestionReviewDialog:
@@ -95,6 +105,7 @@ class CollectionIngestionReviewDialog:
         self.search_status = None
         self.suggestion_tree = None
         self.suggestion_detail_label = None
+        self._identity_target_label = None
         self._suggestion_targets = {}
         self._suggestion_rows = {}
         self.local_tree = None
@@ -118,6 +129,8 @@ class CollectionIngestionReviewDialog:
         self._rom_detail_label = None
         self._first_clear_var = None
         self._first_clear_values = {}
+        self._user_conflicts_area = None
+        self._displayed_user_proposals = None
         self._remember_vars = []
         self._closed = False
         self._submitting = False
@@ -321,6 +334,8 @@ class CollectionIngestionReviewDialog:
             target = row.target_title
             if row.target_key and row.target_key.isdecimal():
                 target = f"{target} [{row.target_key}]" if target else f"SMWC {row.target_key}"
+            if row.collection_status:
+                target = f"{row.collection_status}: {target}"
             details = []
             if row.rom_count:
                 details.append(f"{row.rom_count} ROM")
@@ -584,6 +599,7 @@ class CollectionIngestionReviewDialog:
 
     def _action_changed(self, *_args):
         self._update_conditional_sections()
+        self._refresh_user_conflicts()
 
     def _update_conditional_sections(self):
         frame = self._local_metadata_frame
@@ -615,6 +631,7 @@ class CollectionIngestionReviewDialog:
         self.search_status = None
         self.suggestion_tree = None
         self.suggestion_detail_label = None
+        self._identity_target_label = None
         self._suggestion_targets = {}
         self._suggestion_rows = {}
         self.local_tree = None
@@ -637,6 +654,8 @@ class CollectionIngestionReviewDialog:
         self._rom_detail_label = None
         self._first_clear_var = None
         self._first_clear_values = {}
+        self._user_conflicts_area = None
+        self._displayed_user_proposals = None
         self._remember_vars = []
         for child in self.details.winfo_children():
             child.destroy()
@@ -685,8 +704,10 @@ class CollectionIngestionReviewDialog:
         self._support_area.bind("<Configure>", self._layout_support_sections)
         self._layout_support_sections()
 
-        self._render_user_conflicts(group, previous)
         self._render_first_clear(group, previous)
+        self._user_conflicts_area = ttk.Frame(self.details)
+        self._user_conflicts_area.pack(fill="x")
+        self._render_user_conflicts(group, previous)
         self._action_var.trace_add("write", self._action_changed)
         self._update_conditional_sections()
 
@@ -796,7 +817,13 @@ class CollectionIngestionReviewDialog:
         needs_identity = bool(states.intersection(_IDENTITY_REVIEW_STATES))
         proposed = group.proposed_target_key
         if proposed:
-            ttk.Label(frame, text=f"Proposed target: SMWC {proposed}").pack(anchor="w", pady=(0, 4))
+            identity = f"SMWC {proposed}" if proposed.isdecimal() else proposed
+            self._identity_target_label = self._wrapped_label(
+                frame,
+                f"{self.model.target_description(proposed)}\n{context.row.target_title} · {identity}",
+                font=("Segoe UI", 10, "bold"),
+            )
+            self._identity_target_label.pack(anchor="w", fill="x", pady=(0, 4))
 
         if context.suggestions or needs_identity:
             search = ttk.Frame(frame)
@@ -810,7 +837,7 @@ class CollectionIngestionReviewDialog:
             self.search_status.pack(anchor="w", pady=(0, 4))
 
             columns = (
-                "title", "id", "author", "difficulty", "type", "exits", "score"
+                "title", "id", "collection", "author", "difficulty", "type", "exits", "score"
             )
             holder = ttk.Frame(frame)
             holder.pack(fill="x")
@@ -818,6 +845,7 @@ class CollectionIngestionReviewDialog:
             specs = {
                 "title": ("Hack", 310),
                 "id": ("SMWC ID", 82),
+                "collection": ("Collection", 145),
                 "author": ("Author", 190),
                 "difficulty": ("Difficulty", 105),
                 "type": ("Type", 90),
@@ -1062,6 +1090,7 @@ class CollectionIngestionReviewDialog:
                 values=(
                     suggestion.title,
                     suggestion.target_key,
+                    self.model.collection_status(suggestion.target_key),
                     suggestion.difficulty or "-",
                     ", ".join(suggestion.hack_types) or "-",
                     "-" if suggestion.exits is None else suggestion.exits,
@@ -1149,7 +1178,13 @@ class CollectionIngestionReviewDialog:
                 text="Select a catalogue result to see its full details."
             )
             return
-        parts = [f"{suggestion.title} [SMWC {suggestion.target_key}]"]
+        if self._identity_target_label is not None:
+            self._identity_target_label.configure(
+                text=f"{self.model.target_description(suggestion.target_key)}\n"
+                     f"{suggestion.title} · SMWC {suggestion.target_key}"
+            )
+        parts = [self.model.target_description(suggestion.target_key),
+                 f"{suggestion.title} [SMWC {suggestion.target_key}]"]
         author = _catalogue_author_text(suggestion)
         if author != "-":
             parts.append(f"by {author}")
@@ -1284,51 +1319,104 @@ class CollectionIngestionReviewDialog:
         self._rom_detail_label.pack(anchor="w", fill="x", pady=(4, 0))
         self._show_rom_detail(default_primary or group.rom_files[0].path)
 
-    def _render_user_conflicts(self, group, previous):
-        conflicts = {}
-        for proposal in group.user_field_proposals:
-            if proposal.conflict:
-                conflicts.setdefault(proposal.field, proposal)
-        if not conflicts:
-            self._user_field_vars = {}
+    def _user_state_draft(self, group):
+        value = self._action_var.get() if self._action_var else ""
+        action = ReviewAction(value) if value else ReviewAction.ACCEPT
+        target = ""
+        if action is ReviewAction.USE_TARGET:
+            target = self._selected_target()
+        elif action is ReviewAction.ATTACH_LOCAL:
+            target = self._selected_local_target()
+        choice = None
+        token = self._first_clear_var.get() if self._first_clear_var else ""
+        if token in self._first_clear_values:
+            source, record_id = self._first_clear_values[token]
+            choice = FirstClearDecision(True, source, record_id)
+        return ReviewDecision(group.group_id, action, target_key=target, first_clear=choice)
+
+    def _refresh_user_conflicts(self, *_args):
+        if self._user_conflicts_area is None or not self._current_group_id:
             return
-        frame = ttk.LabelFrame(self.details, text="Personal data conflicts", padding=8)
+        self._render_user_conflicts(self.model.get_group(self._current_group_id), None)
+
+    def _render_user_conflicts(self, group, previous):
+        proposals = self.model.user_field_proposals(group.group_id, self._user_state_draft(group))
+        # A selection event for the same target must not reset a manual override.
+        if proposals == self._displayed_user_proposals:
+            return
+        self._displayed_user_proposals = proposals
+        for child in self._user_conflicts_area.winfo_children():
+            child.destroy()
+        self._user_field_vars = {}
+        if not proposals:
+            return
+        frame = ttk.LabelFrame(self._user_conflicts_area, text="Personal data review", padding=8)
         frame.pack(fill="x", pady=(0, 8))
+        conflicts = {item.field: item for item in proposals if item.conflict}
+        if conflicts:
+            self._wrapped_label(
+                frame,
+                "The current Collection value's original source may not be recorded. "
+                "It may come from Save Sync, manual editing, or an earlier import. "
+                "GiganticBucket first-clear evidence is preferred; you can keep the current value.",
+                foreground="gray",
+            ).pack(anchor="w", fill="x", pady=(0, 6))
         previous_values = {
             item.field: item.use_proposed
             for item in (previous.user_field_resolutions if previous else ())
         }
-        self._user_field_vars = {}
-        for field, proposal in sorted(conflicts.items()):
+        for proposal in proposals:
+            field = proposal.field
+            label = {"completed_date": "Completion Date", "time_to_beat": "Time to Beat"}.get(
+                field, field.replace("_", " ").title())
+            imported_label = ("GiganticBucket first-clear value"
+                              if proposal.source is IngestionSource.GIGANTIC_BUCKET and field != "completed"
+                              else f"{proposal.source.value.replace('_', ' ').title()} value")
+            if proposal.source is IngestionSource.GIGANTIC_BUCKET and field == "completed":
+                imported_label = "GiganticBucket completion record"
+            if not proposal.conflict:
+                self._wrapped_label(
+                    frame, f"{label}: {_user_value_text(field, proposal.proposed_value)} (from {imported_label})"
+                ).pack(anchor="w", fill="x", pady=(1, 4))
+                continue
             row = ttk.Frame(frame)
-            row.pack(fill="x", pady=(1, 5))
-            ttk.Label(row, text=field.replace("_", " ").title(), width=18).pack(side="left")
-            selected = "imported" if previous_values.get(field, False) else "existing"
+            row.pack(fill="x", pady=(1, 7))
+            ttk.Label(row, text=label, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+            preferred = proposal.source is IngestionSource.GIGANTIC_BUCKET
+            selected = "imported" if previous_values.get(field, preferred) else "existing"
             var = tk.StringVar(value=selected)
             self._user_field_vars[field] = var
             ttk.Radiobutton(
                 row,
-                text=f"Keep existing: {proposal.current_value!s}",
-                variable=var,
-                value="existing",
-            ).pack(side="left", padx=(0, 8))
+                text=f"Keep current Collection value: {_user_value_text(field, proposal.current_value)}",
+                variable=var, value="existing",
+            ).pack(anchor="w")
             ttk.Radiobutton(
                 row,
-                text=f"Use imported: {proposal.proposed_value!s}",
-                variable=var,
-                value="imported",
-            ).pack(side="left")
+                text=f"Use {imported_label}: {_user_value_text(field, proposal.proposed_value)}",
+                variable=var, value="imported",
+            ).pack(anchor="w")
 
     def _render_first_clear(self, group, previous):
+        if not group.user_history:
+            return
         if ReviewState.FIRST_CLEAR_VERIFICATION not in set(group.review_states):
-            self._first_clear_var = None
-            self._first_clear_values = {}
+            history = selected_first_clear(group, previous)
+            if history is not None:
+                frame = ttk.LabelFrame(self.details, text="First clear for statistics", padding=8)
+                frame.pack(fill="x", pady=(0, 8))
+                date = history.completed_date_iso or history.completed_date_text or "No date"
+                suffix = " (exact date unresolved)" if history.completed_date_text and not history.completed_date_iso else ""
+                self._wrapped_label(
+                    frame, f"GiganticBucket sole ordinary playthrough: {date}{suffix} · "
+                    f"{history.elapsed_text or 'No time'}. All imported playthroughs are retained.",
+                ).pack(anchor="w", fill="x")
             return
         frame = ttk.LabelFrame(self.details, text="First clear for statistics", padding=8)
         frame.pack(fill="x", pady=(0, 8))
         ttk.Label(
             frame,
-            text="Choose the playthrough that represents the first clear, or choose None if it cannot be established safely.",
+            text="Choose the first clear for Completion Date and Time to Beat, or None if unknown. All imported playthroughs are retained. Unresolved dates stay in history without guessing an exact date.",
             wraplength=520,
         ).pack(anchor="w", pady=(0, 5))
         self._first_clear_var = tk.StringVar(value="")
@@ -1342,7 +1430,10 @@ class CollectionIngestionReviewDialog:
         for index, history in enumerate(group.user_history):
             token = f"history:{index}"
             self._first_clear_values[token] = (history.source, history.source_record_id)
-            pieces = [history.completed_date_iso or history.completed_date_text or "No date"]
+            date = history.completed_date_iso or history.completed_date_text or "No date"
+            if history.completed_date_text and not history.completed_date_iso:
+                date += " (exact date unresolved)"
+            pieces = [date]
             pieces.append(history.elapsed_text or "No time")
             if history.play_kind:
                 pieces.append(history.play_kind)
@@ -1363,6 +1454,7 @@ class CollectionIngestionReviewDialog:
                     if value == wanted:
                         self._first_clear_var.set(token)
                         break
+        self._first_clear_var.trace_add("write", self._refresh_user_conflicts)
 
     def _render_remember_aliases(self, context, previous, *, parent=None):
         self._remember_vars = []

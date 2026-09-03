@@ -4,7 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from ui.window_positioning import center_window_on_parent
+from ui.window_positioning import center_window_on_parent, reveal_window_on_parent
 
 from collection_ingestion_entrypoint import (
     CollectionIngestionEntrypointError,
@@ -253,18 +253,9 @@ class CollectionIngestionProgressDialog:
         progress.pack(fill="x")
         progress.start(12)
 
-        self.win.update_idletasks()
-        center_window_on_parent(self.win, self.parent, lift=False)
-        self.win.deiconify()
-        self.win.after_idle(self._center_after_map)
+        reveal_window_on_parent(self.win, self.parent, grab=False)
         return self.win
 
-    def _center_after_map(self):
-        try:
-            if self.win and self.win.winfo_exists():
-                center_window_on_parent(self.win, self.parent)
-        except tk.TclError:
-            pass
 
     def close(self):
         try:

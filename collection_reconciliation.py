@@ -20,6 +20,11 @@ _SPEEDRUN_MARKERS = (
     "race",
     "rta",
     "practice",
+    "replay",
+    "re-play",
+    "re play",
+    "reclear",
+    "re-clear",
 )
 _USER_OWNED_FIELDS = frozenset(
     {
@@ -30,7 +35,7 @@ _USER_OWNED_FIELDS = frozenset(
         "time_to_beat",
     }
 )
-_GIGANTIC_BUCKET_AUTOMATIC_FIELDS = frozenset({"completed", "completed_date"})
+_GIGANTIC_BUCKET_AUTOMATIC_FIELDS = frozenset({"completed", "completed_date", "time_to_beat"})
 _SAVE_SCAN_AUTOMATIC_FIELDS = frozenset({"completed", "completed_date"})
 
 
@@ -204,8 +209,8 @@ class UserFieldProposal:
         if self.source is IngestionSource.GIGANTIC_BUCKET:
             if self.field not in _GIGANTIC_BUCKET_AUTOMATIC_FIELDS:
                 raise ReconciliationError(
-                    "GiganticBucket playthroughs do not overwrite general notes, "
-                    "ratings, or time_to_beat."
+                    "GiganticBucket playthroughs do not overwrite general notes "
+                    "or ratings. Time to Beat requires verified first-clear evidence."
                 )
         if self.source is IngestionSource.SAVE_SCAN:
             if self.field not in _SAVE_SCAN_AUTOMATIC_FIELDS:
@@ -287,6 +292,9 @@ class ReconciliationGroup:
     issues: tuple[ReviewIssue, ...]
     rom_hashes: tuple[str, ...]
     migration: IdentityMigrationProposal | None = None
+    # Shared immutable snapshot for real GiganticBucket sessions. None preserves
+    # explicit proposal-only callers; () means the reviewed Collection was empty.
+    giganticbucket_user_state: tuple[tuple[str, tuple[tuple[str, object], ...]], ...] | None = None
 
     @property
     def blocking(self) -> bool:
@@ -470,6 +478,86 @@ def automatic_first_clear(
     if _contains_speedrun_marker(only):
         return None
     return only
+
+
+def selected_first_clear(
+    group: ReconciliationGroup, decision: ReviewDecision | None = None,
+) -> UserPlaythroughEvidence | None:
+    """Resolve a source-scoped reviewed run, never an earliest/fastest guess."""
+
+    choice = decision.first_clear if decision is not None else None
+    if choice is not None:
+        if not choice.decided or choice.source_record_id is None:
+            return None
+        return next((item for item in group.user_history
+                     if (item.source, item.source_record_id) ==
+                     (choice.source, choice.source_record_id)), None)
+    if ReviewState.FIRST_CLEAR_VERIFICATION in group.review_states:
+        return None
+    return automatic_first_clear(group.user_history)
+
+
+def giganticbucket_user_field_proposals(
+    history: Sequence[UserPlaythroughEvidence],
+    current: Mapping[str, object],
+    first_clear: UserPlaythroughEvidence | None,
+) -> tuple[UserFieldProposal, ...]:
+    """Project completion evidence and only the verified first clear's scalars."""
+
+    history = tuple(item for item in history if item.source is IngestionSource.GIGANTIC_BUCKET)
+    proposed = {}
+    if any(item.completed_date_text or item.completed_date_iso for item in history):
+        proposed["completed"] = (True, "GiganticBucket records a completed playthrough; its exact date may be unknown.")
+    if first_clear is not None and first_clear.source is IngestionSource.GIGANTIC_BUCKET:
+        if first_clear.completed_date_iso:
+            proposed["completed_date"] = (
+                first_clear.completed_date_iso,
+                "GiganticBucket verified first clear supplies the completion date.",
+            )
+        duration = first_clear.elapsed_seconds
+        if duration is None and first_clear.duration_milliseconds is not None:
+            duration = first_clear.duration_milliseconds / 1000
+        if duration is not None and duration > 0:
+            proposed["time_to_beat"] = (duration, "GiganticBucket verified first-clear duration supplies Time to Beat.")
+    result = []
+    for field, (value, reason) in proposed.items():
+        existing = current.get(field)
+        if field == "completed":
+            existing = bool(existing)
+        elif field == "completed_date":
+            existing = str(existing or "")
+        else:
+            existing = existing if existing is not None else 0
+        if existing != value:
+            result.append(UserFieldProposal(
+                field=field, current_value=existing, proposed_value=value,
+                source=IngestionSource.GIGANTIC_BUCKET, reason=reason,
+                conflict=field != "completed" and existing not in (None, "", 0),
+            ))
+    return tuple(result)
+
+
+def reviewed_user_field_proposals(
+    group: ReconciliationGroup, decision: ReviewDecision | None = None,
+) -> tuple[UserFieldProposal, ...]:
+    """Reconcile selected target/run against frozen state before review or planning."""
+
+    if group.giganticbucket_user_state is None:
+        return group.user_field_proposals
+    target = group.proposed_target_key
+    if decision is not None:
+        if decision.action in {ReviewAction.USE_TARGET, ReviewAction.ATTACH_LOCAL}:
+            target = decision.target_key
+        elif decision.action is ReviewAction.IMPORT_LOCAL:
+            target = ""
+        elif decision.action in {ReviewAction.SKIP, ReviewAction.IGNORE}:
+            return ()
+    current = dict(dict(group.giganticbucket_user_state).get(target, ()))
+    other = tuple(proposal for proposal in group.user_field_proposals
+                  if proposal.source is not IngestionSource.GIGANTIC_BUCKET)
+    return other + giganticbucket_user_field_proposals(
+        group.user_history, current, selected_first_clear(group, decision)
+    )
 
 
 def _issues_for_group(members: tuple[CandidateResolution, ...]) -> tuple[ReviewIssue, ...]:
@@ -695,19 +783,20 @@ def validate_review_decision(
     elif decision.rom_selection is not None:
         _validate_rom_selection(group, decision.rom_selection)
 
-    if ReviewState.USER_DATA_CONFLICT in states:
+    proposals = reviewed_user_field_proposals(group, decision)
+    if any(proposal.conflict for proposal in proposals) or decision.user_field_resolutions:
         conflict_fields = {
             proposal.field
-            for proposal in group.user_field_proposals
+            for proposal in proposals
             if proposal.conflict
         }
         resolutions = {item.field: item for item in decision.user_field_resolutions}
-        if set(resolutions) != conflict_fields:
+        if set(resolutions) != conflict_fields or len(resolutions) != len(decision.user_field_resolutions):
             raise ReconciliationError(
                 "Every conflicting user-owned field requires exactly one resolution."
             )
 
-    if ReviewState.FIRST_CLEAR_VERIFICATION in states:
+    if ReviewState.FIRST_CLEAR_VERIFICATION in states or decision.first_clear is not None:
         if decision.first_clear is None or not decision.first_clear.decided:
             raise ReconciliationError("First-clear review requires an explicit decision.")
         if decision.first_clear.source_record_id is not None:

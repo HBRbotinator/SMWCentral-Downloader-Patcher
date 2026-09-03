@@ -175,5 +175,68 @@ class GiganticBucketIngestionTest(unittest.TestCase):
             )
 
 
+class GiganticBucketDateNormalizationTest(unittest.TestCase):
+    def parse_dates(self, *dates):
+        records = []
+        for index, date in enumerate(dates):
+            record = _record(index + 1, f"Hack {index}", None, "External")
+            record["playthroughs"] = [_playthrough(completed=date)]
+            records.append(record)
+        return tuple(item.candidate.user_history[0].completed_date_iso
+                     for item in parse_giganticbucket_export(_export(*records)).hacks)
+
+    def test_explicit_forms_and_valid_time_suffixes(self):
+        for value in (
+            "May 1, 2026", "1st of May 2026", "1 May 2026", "may 1, 2026",
+            "2026-05-01", "2026/5/1", "2026.05.01", "2026-05-01 21:14:03",
+            "2026-05-01T21:14:03Z", "2026-05-01T23:14:03-05:00",
+            "2026-05-01T21:14:03.123+02:00", "1 May 2026 9:14 PM",
+            "1st of May 2026 21:14", "2026-05-01T00:01:00+14:00",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(("2026-05-01",), self.parse_dates(value))
+        self.assertEqual(("2026-10-01",), self.parse_dates("1st of October 2026"))
+        self.assertEqual(("2026-09-02",), self.parse_dates("Sept. 2, 2026"))
+
+    def test_ambiguous_order_requires_export_evidence_across_records(self):
+        self.assertEqual(("", ""), self.parse_dates("1/5/2026", "5/1/2026"))
+        self.assertEqual(("2026-05-01", "2026-05-13"), self.parse_dates("1/5/2026", "13/5/2026"))
+        self.assertEqual(("2026-05-01", "2026-05-13"), self.parse_dates("5/1/2026", "5/13/2026"))
+        # Explicit month text and year-first ISO do not establish numeric ordering.
+        self.assertEqual(("2026-05-13", "2026-05-13", ""), self.parse_dates("May 13, 2026", "2026-05-13", "1/5/2026"))
+
+    def test_each_separator_uses_the_same_safe_export_order(self):
+        for sep in ("/", "-", "."):
+            with self.subTest(separator=sep):
+                self.assertEqual(("2026-05-13", "2026-05-01"), self.parse_dates("13/5/2026", f"1{sep}5{sep}2026"))
+                self.assertEqual(("2026-05-13", "2026-05-01"), self.parse_dates("5/13/2026", f"5{sep}1{sep}2026"))
+
+    def test_conflicting_evidence_keeps_only_individually_unambiguous_dates(self):
+        self.assertEqual(("2026-05-13", "2026-05-13", "", "2026-05-05"),
+                         self.parse_dates("13/5/2026", "5/13/2026", "1/5/2026", "5/5/2026"))
+
+    def test_invalid_dates_do_not_supply_numeric_order(self):
+        for invalid in ("31/2/2026", "13/0/2026", "2/30/2026", "29/2/2026", "99/2/2026", "13/5/2026 25:00"):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(("", ""), self.parse_dates(invalid, "1/5/2026"))
+        self.assertEqual(("2024-02-29", "2024-05-01"), self.parse_dates("29/2/2024", "1/5/2024"))
+
+    def test_unsupported_or_malformed_forms_fail_closed(self):
+        for value in ("", "not a date", "2026-02-30", "1/5/26", "2026-05/01", "May 1, 2026 garbage", "May 1, 2026 25:00", "May 1, 2026 13:00 PM"):
+            with self.subTest(value=value):
+                self.assertEqual(("",), self.parse_dates(value))
+
+    def test_order_never_leaks_to_another_export(self):
+        self.parse_dates("13/5/2026", "1/5/2026")
+        self.assertEqual(("",), self.parse_dates("1/5/2026"))
+
+    def test_date_text_is_kept_even_when_normalized(self):
+        record = _record(1, "Example", None, "External")
+        record["playthroughs"] = [_playthrough(completed="1st of May 2026")]
+        history = parse_giganticbucket_export(_export(record)).hacks[0].candidate.user_history[0]
+        self.assertEqual("1st of May 2026", history.completed_date_text)
+        self.assertEqual("2026-05-01", history.completed_date_iso)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

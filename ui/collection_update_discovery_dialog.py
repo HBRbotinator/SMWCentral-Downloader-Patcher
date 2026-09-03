@@ -10,7 +10,7 @@ from collection_update_discovery import (
     search_collection_update_catalogue,
     select_possible_collection_replacement,
 )
-from ui.window_positioning import center_window_on_parent
+from ui.window_positioning import center_window_on_parent, reveal_window_on_parent
 
 
 class CollectionUpdateDiscoveryProgressDialog:
@@ -24,6 +24,7 @@ class CollectionUpdateDiscoveryProgressDialog:
         if self.win:
             return self.win
         self.win = tk.Toplevel(self.parent)
+        self.win.withdraw()
         self.win.title("Checking SMWC Entry")
         self.win.resizable(False, False)
         self.win.transient(self.parent)
@@ -46,11 +47,7 @@ class CollectionUpdateDiscoveryProgressDialog:
         progress = ttk.Progressbar(body, mode="indeterminate", length=460)
         progress.pack(fill="x")
         progress.start(12)
-        try:
-            self.win.grab_set()
-        except tk.TclError:
-            pass
-        center_window_on_parent(self.win, self.parent)
+        reveal_window_on_parent(self.win, self.parent, grab=True)
         return self.win
 
     def close(self):

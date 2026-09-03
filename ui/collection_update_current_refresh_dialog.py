@@ -17,7 +17,7 @@ from collection_update_current_output import (
     ROM_DOWNLOAD_DESTINATION_ALONGSIDE_PRIMARY,
     ROM_DOWNLOAD_DESTINATION_DEFAULT,
 )
-from ui.window_positioning import center_window_on_parent
+from ui.window_positioning import center_window_on_parent, reveal_window_on_parent
 
 
 def _friendly_progress_title(title):
@@ -40,6 +40,7 @@ class CollectionCurrentRefreshProgressDialog:
         if self.win:
             return self.win
         self.win = tk.Toplevel(self.parent)
+        self.win.withdraw()
         self.win.title(self.title)
         self.win.resizable(False, False)
         self.win.transient(self.parent)
@@ -51,11 +52,7 @@ class CollectionCurrentRefreshProgressDialog:
         progress = ttk.Progressbar(body, mode="indeterminate", length=500)
         progress.pack(fill="x")
         progress.start(12)
-        try:
-            self.win.grab_set()
-        except tk.TclError:
-            pass
-        center_window_on_parent(self.win, self.parent)
+        reveal_window_on_parent(self.win, self.parent, grab=True)
         return self.win
 
     def close(self):

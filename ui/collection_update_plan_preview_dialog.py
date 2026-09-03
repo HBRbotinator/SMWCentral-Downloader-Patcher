@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime
 import tkinter as tk
+from ui.window_positioning import reveal_window_on_parent
+
 from tkinter import messagebox, ttk
 
 from collection_ingestion_plan_preview import CollectionIngestionPlanPreviewModel
@@ -389,6 +391,7 @@ class CollectionUpdatePlanProgressDialog:
         if self.win:
             return self.win
         self.win = tk.Toplevel(self.parent)
+        self.win.withdraw()
         self.win.title("Preparing SMWC Replacement Preview")
         self.win.resizable(False, False)
         self.win.transient(self.parent)
@@ -412,11 +415,7 @@ class CollectionUpdatePlanProgressDialog:
         progress = ttk.Progressbar(body, mode="indeterminate", length=480)
         progress.pack(fill="x")
         progress.start(12)
-        try:
-            self.win.grab_set()
-        except tk.TclError:
-            pass
-        self._center()
+        reveal_window_on_parent(self.win, self.parent, grab=True)
         return self.win
 
     def close(self):
@@ -431,20 +430,6 @@ class CollectionUpdatePlanProgressDialog:
             pass
         self.win = None
 
-    def _center(self):
-        try:
-            self.win.update_idletasks()
-            x = self.parent.winfo_rootx() + max(
-                0,
-                (self.parent.winfo_width() - self.win.winfo_width()) // 2,
-            )
-            y = self.parent.winfo_rooty() + max(
-                0,
-                (self.parent.winfo_height() - self.win.winfo_height()) // 2,
-            )
-            self.win.geometry(f"+{x}+{y}")
-        except (tk.TclError, AttributeError):
-            pass
 
 
 class CollectionUpdateRomAcquisitionProgressDialog:
@@ -458,6 +443,7 @@ class CollectionUpdateRomAcquisitionProgressDialog:
         if self.win:
             return self.win
         self.win = tk.Toplevel(self.parent)
+        self.win.withdraw()
         self.win.title("Acquiring Replacement ROM")
         self.win.resizable(False, False)
         self.win.transient(self.parent)
@@ -481,11 +467,7 @@ class CollectionUpdateRomAcquisitionProgressDialog:
         progress = ttk.Progressbar(body, mode="indeterminate", length=520)
         progress.pack(fill="x")
         progress.start(12)
-        try:
-            self.win.grab_set()
-        except tk.TclError:
-            pass
-        self._center()
+        reveal_window_on_parent(self.win, self.parent, grab=True)
         return self.win
 
     def close(self):
@@ -500,18 +482,6 @@ class CollectionUpdateRomAcquisitionProgressDialog:
             pass
         self.win = None
 
-    def _center(self):
-        try:
-            self.win.update_idletasks()
-            x = self.parent.winfo_rootx() + max(
-                0, (self.parent.winfo_width() - self.win.winfo_width()) // 2
-            )
-            y = self.parent.winfo_rooty() + max(
-                0, (self.parent.winfo_height() - self.win.winfo_height()) // 2
-            )
-            self.win.geometry(f"+{x}+{y}")
-        except (tk.TclError, AttributeError):
-            pass
 
 
 class CollectionUpdateApplyProgressDialog:
@@ -526,6 +496,7 @@ class CollectionUpdateApplyProgressDialog:
         if self.win:
             return self.win
         self.win = tk.Toplevel(self.parent)
+        self.win.withdraw()
         self.win.title(
             "Recovering Collection Transaction"
             if self.recovery
@@ -556,11 +527,7 @@ class CollectionUpdateApplyProgressDialog:
         progress = ttk.Progressbar(body, mode="indeterminate", length=500)
         progress.pack(fill="x")
         progress.start(12)
-        try:
-            self.win.grab_set()
-        except tk.TclError:
-            pass
-        self._center()
+        reveal_window_on_parent(self.win, self.parent, grab=True)
         return self.win
 
     def close(self):
@@ -575,18 +542,6 @@ class CollectionUpdateApplyProgressDialog:
             pass
         self.win = None
 
-    def _center(self):
-        try:
-            self.win.update_idletasks()
-            x = self.parent.winfo_rootx() + max(
-                0, (self.parent.winfo_width() - self.win.winfo_width()) // 2
-            )
-            y = self.parent.winfo_rooty() + max(
-                0, (self.parent.winfo_height() - self.win.winfo_height()) // 2
-            )
-            self.win.geometry(f"+{x}+{y}")
-        except (tk.TclError, AttributeError):
-            pass
 
 
 def _provider_freshness(finalized):

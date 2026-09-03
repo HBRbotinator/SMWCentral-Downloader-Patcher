@@ -48,4 +48,29 @@ def center_window_on_parent(win, parent, *, lift=True) -> None:
         pass
 
 
-__all__ = ["center_window_on_parent"]
+def reveal_window_on_parent(win, parent, *, grab=False) -> None:
+    """Size and center an already withdrawn progress window, then reveal it."""
+
+    if win is None or parent is None:
+        return
+
+    def recenter_after_map():
+        try:
+            if win.winfo_exists():
+                center_window_on_parent(win, parent)
+        except tk.TclError:
+            pass
+
+    try:
+        win.update_idletasks()
+        win.geometry(f"{max(1, win.winfo_reqwidth())}x{max(1, win.winfo_reqheight())}")
+        center_window_on_parent(win, parent, lift=False)
+        win.deiconify()
+        win.after_idle(recenter_after_map)
+        if grab:
+            win.grab_set()
+    except tk.TclError:
+        pass
+
+
+__all__ = ["center_window_on_parent", "reveal_window_on_parent"]

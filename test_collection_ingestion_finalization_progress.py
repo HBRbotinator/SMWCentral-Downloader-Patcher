@@ -19,22 +19,13 @@ class CollectionIngestionFinalizationProgressContractTest(unittest.TestCase):
         cls.progress_tree = ast.parse(cls.progress_source)
         cls.page_tree = ast.parse(cls.page_source)
 
-    def test_finalization_window_is_hidden_until_positioned_then_recentred(self):
-        required = (
-            "self.win.withdraw()",
-            "self.win.update_idletasks()",
-            "center_window_on_parent(self.win, self.parent, lift=False)",
-            "self.win.deiconify()",
-            "self.win.after_idle(self._center_after_map)",
-            "center_window_on_parent(self.win, self.parent)",
-        )
-        for value in required:
-            with self.subTest(value=value):
-                self.assertIn(value, self.progress_source)
-        self.assertLess(
-            self.progress_source.index("self.win.withdraw()"),
-            self.progress_source.index("self.win.deiconify()"),
-        )
+    def test_finalization_window_is_hidden_until_shared_reveal(self):
+        self.assertIn("self.win.withdraw()", self.progress_source)
+        self.assertIn("reveal_window_on_parent(self.win, self.parent, grab=True)", self.progress_source)
+        self.assertLess(self.progress_source.index("self.win.withdraw()"),
+                        self.progress_source.index("reveal_window_on_parent(self.win"))
+        # Behavioral sizing/mapping/idle checks live in the shared positioning tests.
+
 
     def test_progress_copy_explains_user_task_not_provider_internals(self):
         self.assertIn("Preparing your final Collection preview", self.progress_source)

@@ -32,8 +32,8 @@ from collection_reconciliation import (
     ReconciliationGroup,
     ReviewAction,
     ReviewDecision,
-    UserFieldProposal,
     automatic_first_clear,
+    giganticbucket_user_field_proposals,
     build_reconciliation_groups,
     is_local_collection_key,
     is_numeric_collection_key,
@@ -254,6 +254,18 @@ def build_collection_ingestion_session(
             reviews.append(built.review)
 
     groups = build_reconciliation_groups(resolutions)
+    if giganticbucket is not None:
+        user_state = tuple(
+            (key, tuple((field, copy.deepcopy(record.get(field)))
+                        for field in ("completed", "completed_date", "time_to_beat")))
+            for key, record in sorted(state.records.items())
+        )
+        groups = tuple(
+            replace(group, giganticbucket_user_state=user_state)
+            if any(item.source is IngestionSource.GIGANTIC_BUCKET for item in group.user_history)
+            else group
+            for group in groups
+        )
     return CollectionIngestionSession(
         catalogue_fetched_at=float(catalogue.fetched_at),
         catalogue_source=str(catalogue.source),
@@ -706,33 +718,9 @@ def _with_giganticbucket_user_state(
     resolution = built.resolution
     current = records.get(resolution.target_key, {}) if resolution.target_key else {}
     history = resolution.candidate.user_history
-    proposals = []
-    dated = tuple(item for item in history if item.completed_date_iso)
-    if dated and not bool(current.get("completed", False)):
-        proposals.append(
-            UserFieldProposal(
-                field="completed",
-                current_value=bool(current.get("completed", False)),
-                proposed_value=True,
-                source=IngestionSource.GIGANTIC_BUCKET,
-                reason="GiganticBucket contains completion-dated playthrough history.",
-            )
-        )
-    first_clear = automatic_first_clear(history)
-    if first_clear is not None and first_clear.completed_date_iso:
-        current_date = str(current.get("completed_date") or "")
-        proposed_date = first_clear.completed_date_iso
-        if current_date != proposed_date:
-            proposals.append(
-                UserFieldProposal(
-                    field="completed_date",
-                    current_value=current_date,
-                    proposed_value=proposed_date,
-                    source=IngestionSource.GIGANTIC_BUCKET,
-                    reason="GiganticBucket sole ordinary playthrough supplies a completion date.",
-                    conflict=bool(current_date),
-                )
-            )
+    proposals = giganticbucket_user_field_proposals(
+        history, current, automatic_first_clear(history)
+    )
     updated = replace(
         resolution,
         user_field_proposals=tuple(proposals),

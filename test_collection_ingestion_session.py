@@ -379,7 +379,7 @@ class CollectionIngestionSessionTest(unittest.TestCase):
         self.assertEqual(MatchBasis.DIRECT, direct.match_basis)
         self.assertEqual("19279", direct.target_key)
         self.assertEqual(
-            {"completed", "completed_date"},
+            {"completed", "completed_date", "time_to_beat"},
             {item.field for item in direct.user_field_proposals},
         )
         self.assertNotEqual("19279", external.target_key)

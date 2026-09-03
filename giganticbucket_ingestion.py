@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -107,10 +108,11 @@ def parse_giganticbucket_export(payload: Any) -> GiganticBucketImport:
     if not isinstance(played, list):
         raise GiganticBucketImportError("GiganticBucket playedHacks must be a list.")
 
+    numeric_order = _export_numeric_date_order(played)
     hacks = []
     seen_ids = set()
     for index, raw in enumerate(played):
-        item = _parse_hack(raw, index)
+        item = _parse_hack(raw, index, numeric_order)
         if item.hack_id in seen_ids:
             raise GiganticBucketImportError(
                 f"GiganticBucket contains duplicate hackId: {item.hack_id}"
@@ -173,7 +175,7 @@ def resolve_giganticbucket_hack_against_catalogue(
     )
 
 
-def _parse_hack(value: Any, index: int) -> GiganticBucketHack:
+def _parse_hack(value: Any, index: int, numeric_order: str = "") -> GiganticBucketHack:
     if not isinstance(value, Mapping):
         raise GiganticBucketImportError(
             f"GiganticBucket playedHacks[{index}] must be an object."
@@ -189,7 +191,7 @@ def _parse_hack(value: Any, index: int) -> GiganticBucketHack:
         f"playedHacks[{index}].link_Id",
     )
     creators = _parse_creators(value.get("creators"), index)
-    playthroughs = _parse_playthroughs(value.get("playthroughs"), hack_id, index)
+    playthroughs = _parse_playthroughs(value.get("playthroughs"), hack_id, index, numeric_order)
 
     identity = [
         IdentityEvidence(
@@ -259,6 +261,7 @@ def _parse_playthroughs(
     value: Any,
     hack_id: int,
     hack_index: int,
+    numeric_order: str = "",
 ) -> tuple[UserPlaythroughEvidence, ...]:
     if value in (None, []):
         return ()
@@ -286,7 +289,7 @@ def _parse_playthroughs(
                 elapsed_seconds=_parse_elapsed_seconds(elapsed_text),
                 version=str(raw.get("version") or "").strip(),
                 completed_date_text=completed_text,
-                completed_date_iso=_parse_completion_date(completed_text),
+                completed_date_iso=_parse_completion_date(completed_text, numeric_order),
                 notes=str(raw.get("notes") or "").strip(),
                 counts_as_hack=_optional_bool(
                     raw.get("countsAsHack"),
@@ -325,14 +328,105 @@ def _parse_elapsed_seconds(value: str) -> int | None:
     return hours * 3600 + minutes * 60 + seconds
 
 
-def _parse_completion_date(value: str) -> str:
-    if not value:
+_NUMERIC_DATE = re.compile(r"^(\d{1,2})([/.-])(\d{1,2})\2(\d{4})$")
+_YEAR_FIRST_DATE = re.compile(r"^(\d{4})([/.-])(\d{1,2})\2(\d{1,2})$")
+_MONTHS = {
+    name: month
+    for month, names in enumerate((
+        ("jan", "january"), ("feb", "february"), ("mar", "march"),
+        ("apr", "april"), ("may",), ("jun", "june"), ("jul", "july"),
+        ("aug", "august"), ("sep", "sept", "september"),
+        ("oct", "october"), ("nov", "november"), ("dec", "december"),
+    ), 1)
+    for name in names
+}
+
+
+def _date_part(value: str) -> str:
+    """Remove only a valid time suffix; keep the date in its stated local day."""
+
+    text = str(value or "").strip()
+    parts = re.split(r"(?<=\d)[Tt](?=\d)|\s+(?=\d{1,2}:)", text, maxsplit=1)
+    if len(parts) == 1:
+        return text
+    day, clock = parts
+    clock = clock.strip()
+    twelve_hour = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M)", clock, re.I)
+    if twelve_hour:
+        hour, minute, second, period = twelve_hour.groups()
+        if not 1 <= int(hour) <= 12:
+            return ""
+        hour = int(hour) % 12 + (12 if period.upper() == "PM" else 0)
+        clock = f"{hour:02}:{minute}:{second or '00'}"
+    if not re.fullmatch(r"\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?", clock):
         return ""
-    for pattern in ("%b %d, %Y", "%B %d, %Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(value, pattern).date().isoformat()
-        except ValueError:
+    clock = clock[0:clock.index(":")].zfill(2) + clock[clock.index(":"):]
+    try:
+        datetime.fromisoformat("2000-01-01T" + clock.replace("z", "Z").replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return day.strip()
+
+
+def _iso_date(year: int, month: int, day: int) -> str:
+    try:
+        return datetime(year, month, day).date().isoformat()
+    except ValueError:
+        return ""
+
+
+def _export_numeric_date_order(played: list) -> str:
+    """Use only valid, unambiguous year-last dates in this export as evidence."""
+
+    evidence = set()
+    for hack in played:
+        runs = hack.get("playthroughs") if isinstance(hack, Mapping) else None
+        if not isinstance(runs, list):
             continue
+        for run in runs:
+            if not isinstance(run, Mapping):
+                continue
+            match = _NUMERIC_DATE.fullmatch(_date_part(run.get("date_Completed")))
+            if match is None:
+                continue
+            first, _, second, year = match.groups()
+            first, second, year = int(first), int(second), int(year)
+            if first > 12 and _iso_date(year, second, first):
+                evidence.add("dmy")
+            elif second > 12 and _iso_date(year, first, second):
+                evidence.add("mdy")
+    return next(iter(evidence)) if len(evidence) == 1 else ""
+
+
+def _parse_completion_date(value: str, numeric_order: str = "") -> str:
+    text = _date_part(value)
+    match = _YEAR_FIRST_DATE.fullmatch(text)
+    if match:
+        year, _, month, day = match.groups()
+        return _iso_date(int(year), int(month), int(day))
+    match = _NUMERIC_DATE.fullmatch(text)
+    if match:
+        first, _, second, year = match.groups()
+        first, second, year = int(first), int(second), int(year)
+        if first > 12:
+            return _iso_date(year, second, first)
+        if second > 12 or first == second:
+            return _iso_date(year, first, second)
+        if numeric_order == "dmy":
+            return _iso_date(year, second, first)
+        if numeric_order == "mdy":
+            return _iso_date(year, first, second)
+        return ""
+    # English month names are explicit evidence and do not depend on OS locale.
+    text = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", text, flags=re.I)
+    text = re.sub(r"\bof\b", " ", text, flags=re.I)
+    pieces = text.lower().replace(",", " ").replace(".", " ").split()
+    if len(pieces) == 3 and pieces[2].isdigit() and len(pieces[2]) == 4:
+        first, second, year = pieces
+        if first in _MONTHS and second.isdigit():
+            return _iso_date(int(year), _MONTHS[first], int(second))
+        if second in _MONTHS and first.isdigit():
+            return _iso_date(int(year), _MONTHS[second], int(first))
     return ""
 
 

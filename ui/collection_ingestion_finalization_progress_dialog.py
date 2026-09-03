@@ -4,7 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from ui.window_positioning import center_window_on_parent
+from ui.window_positioning import reveal_window_on_parent
 
 
 class CollectionIngestionFinalizationProgressDialog:
@@ -19,8 +19,6 @@ class CollectionIngestionFinalizationProgressDialog:
             return self.win
 
         self.win = tk.Toplevel(self.parent)
-        # Keep the window hidden until Tk knows its requested size. This avoids the
-        # transient top-left placement seen on Windows for short-lived progress UI.
         self.win.withdraw()
         self.win.title("Preparing Final Collection Preview")
         self.win.resizable(False, False)
@@ -47,22 +45,8 @@ class CollectionIngestionFinalizationProgressDialog:
         progress.pack(fill="x")
         progress.start(12)
 
-        self.win.update_idletasks()
-        center_window_on_parent(self.win, self.parent, lift=False)
-        self.win.deiconify()
-        try:
-            self.win.grab_set()
-        except tk.TclError:
-            pass
-        self.win.after_idle(self._center_after_map)
+        reveal_window_on_parent(self.win, self.parent, grab=True)
         return self.win
-
-    def _center_after_map(self):
-        try:
-            if self.win and self.win.winfo_exists():
-                center_window_on_parent(self.win, self.parent)
-        except tk.TclError:
-            pass
 
     def close(self):
         try:

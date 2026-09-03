@@ -26,6 +26,8 @@ from collection_reconciliation import (
     ReviewDecision,
     UserFieldProposal,
     automatic_first_clear,
+    reviewed_user_field_proposals,
+    selected_first_clear,
     is_local_collection_key,
     is_numeric_collection_key,
     resolved_target_key,
@@ -706,7 +708,17 @@ def _user_state_operations(
     decision: ReviewDecision | None,
 ) -> tuple[UserStateOperation, ...]:
     proposals: dict[str, UserFieldProposal] = {}
-    for proposal in group.user_field_proposals:
+    for proposal in reviewed_user_field_proposals(group, decision):
+        if proposal.source is IngestionSource.GIGANTIC_BUCKET and proposal.field == "time_to_beat":
+            first_clear = selected_first_clear(group, decision)
+            duration = first_clear.elapsed_seconds if first_clear is not None else None
+            if duration is None and first_clear is not None and first_clear.duration_milliseconds is not None:
+                duration = first_clear.duration_milliseconds / 1000
+            if (first_clear is None or first_clear.source is not IngestionSource.GIGANTIC_BUCKET
+                    or duration is None or duration <= 0 or proposal.proposed_value != duration):
+                raise PlanFinalizationError(
+                    "GiganticBucket Time to Beat must match the selected first-clear duration."
+                )
         previous = proposals.get(proposal.field)
         if previous is not None and previous.proposed_value != proposal.proposed_value:
             raise PlanFinalizationError(

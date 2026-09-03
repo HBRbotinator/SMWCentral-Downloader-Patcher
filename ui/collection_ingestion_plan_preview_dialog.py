@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from collection_ingestion_plan_preview import CollectionIngestionPlanPreviewModel
-from ui.window_positioning import center_window_on_parent
+from ui.window_positioning import center_window_on_parent, reveal_window_on_parent
 
 
 class CollectionIngestionPlanPreviewDialog:
@@ -262,6 +262,7 @@ class CollectionIngestionApplyProgressDialog:
         if self.win:
             return self.win
         self.win = tk.Toplevel(self.parent)
+        self.win.withdraw()
         self.win.title(
             "Recovering Collection Import"
             if self.recovery
@@ -270,10 +271,6 @@ class CollectionIngestionApplyProgressDialog:
         self.win.resizable(False, False)
         self.win.transient(self.parent)
         self.win.protocol("WM_DELETE_WINDOW", lambda: None)
-        try:
-            self.win.grab_set()
-        except tk.TclError:
-            pass
 
         body = ttk.Frame(self.win, padding=18)
         body.pack(fill="both", expand=True)
@@ -299,8 +296,7 @@ class CollectionIngestionApplyProgressDialog:
         progress = ttk.Progressbar(body, mode="indeterminate", length=470)
         progress.pack(fill="x")
         progress.start(12)
-        self.win.update_idletasks()
-        self._center()
+        reveal_window_on_parent(self.win, self.parent, grab=True)
         return self.win
 
     def close(self):
@@ -315,8 +311,6 @@ class CollectionIngestionApplyProgressDialog:
             pass
         self.win = None
 
-    def _center(self):
-        center_window_on_parent(self.win, self.parent)
 class CollectionIngestionFinalizationProgressDialog:
     """Non-cancellable progress while required detail hydration finalizes a plan."""
 
@@ -328,14 +322,11 @@ class CollectionIngestionFinalizationProgressDialog:
         if self.win:
             return self.win
         self.win = tk.Toplevel(self.parent)
+        self.win.withdraw()
         self.win.title("Preparing Final Collection Preview")
         self.win.resizable(False, False)
         self.win.transient(self.parent)
         self.win.protocol("WM_DELETE_WINDOW", lambda: None)
-        try:
-            self.win.grab_set()
-        except tk.TclError:
-            pass
 
         body = ttk.Frame(self.win, padding=18)
         body.pack(fill="both", expand=True)
@@ -356,7 +347,7 @@ class CollectionIngestionFinalizationProgressDialog:
         progress = ttk.Progressbar(body, mode="indeterminate", length=460)
         progress.pack(fill="x")
         progress.start(12)
-        center_window_on_parent(self.win, self.parent)
+        reveal_window_on_parent(self.win, self.parent, grab=True)
         return self.win
 
     def close(self):
