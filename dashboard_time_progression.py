@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import math
 
@@ -14,6 +15,55 @@ DATE_FILTER_LABELS = {
     "all_time": "All Time", "last_week": "Last Week", "last_month": "Last Month",
     "3_months": "Last 3 Months", "6_months": "Last 6 Months", "1_year": "Last Year",
 }
+
+
+@dataclass
+class TimeChartViewState:
+    """Session-only display choices; never changes recorded completion data."""
+    metric: str = "per_exit"
+    smoothing: int = 0
+    filter_type: str = "All Types"
+    hidden_difficulties: set[str] = field(default_factory=set)
+
+
+def positive_duration_seconds(record):
+    raw = record.get("time_to_beat")
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def known_exit_count(record):
+    """Only positive, whole recorded exit counts qualify; never guess a count."""
+    raw = record.get("exits")
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return int(value) if math.isfinite(value) and value > 0 and value.is_integer() else None
+
+
+def _time_totals(completions):
+    """Keep numerators/denominators so smoothing never averages averages."""
+    total_hours = sum(row[0] for row in completions)
+    with_exits = [row for row in completions if row[2] is not None]
+    exit_hours = sum(row[0] for row in with_exits)
+    exits = sum(row[2] for row in with_exits)
+    return {
+        "avg_time": total_hours / len(completions),
+        "count": len(completions),
+        "total_hours": total_hours,
+        "avg_time_per_exit": exit_hours / exits if exits else None,
+        "exit_hours": exit_hours,
+        "exits": exits,
+        "excluded_exit_count": len(completions) - len(with_exits),
+    }
 
 
 def period_start(date_filter, today):
@@ -51,21 +101,17 @@ def build_time_progression(records, date_filter, today):
         completed = completion_date(record)
         if completed is None:
             continue  # An undated completion cannot be placed on a timeline.
-        raw_duration = record.get("time_to_beat", 0)
-        if isinstance(raw_duration, bool):
-            continue
-        try:
-            duration = float(raw_duration)
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if not math.isfinite(duration) or duration <= 0:
+        duration = positive_duration_seconds(record)
+        if duration is None:
             continue
         types = record.get("hack_types") or [record.get("hack_type") or "standard"]
         if isinstance(types, str):
             types = [types]
         types = tuple(sorted({str(value).strip().lower() for value in types if str(value).strip()}))
         difficulty = record.get("current_difficulty") or "Unknown"
-        grouped[completed.strftime(key_format)][difficulty].append((duration / 3600, types))
+        grouped[completed.strftime(key_format)][difficulty].append(
+            (duration / 3600, types, known_exit_count(record))
+        )
         earliest = completed if earliest is None else min(earliest, completed)
 
     start = period_start(date_filter, today) or earliest
@@ -78,15 +124,14 @@ def build_time_progression(records, date_filter, today):
         difficulties = {}
         for difficulty, completions in grouped.get(key, {}).items():
             by_type = defaultdict(list)
-            for duration, types in completions:
+            for duration, types, exits in completions:
                 for kind in types:
-                    by_type[kind].append(duration)
+                    by_type[kind].append((duration, types, exits))
             difficulties[difficulty] = {
-                "avg_time": sum(row[0] for row in completions) / len(completions),
-                "count": len(completions),
+                **_time_totals(completions),
                 "types": sorted(by_type),
                 "by_type": {
-                    kind: {"avg_time": sum(times) / len(times), "count": len(times)}
+                    kind: _time_totals(times)
                     for kind, times in by_type.items()
                 },
             }
@@ -102,13 +147,65 @@ def build_time_progression(records, date_filter, today):
     return result
 
 
-def progression_average(bucket, difficulty, filter_type="All Types"):
+def progression_values(bucket, difficulty, filter_type="All Types"):
     values = bucket.get("difficulties", {}).get(difficulty)
     if not values:
         return None
     if filter_type == "All Types":
-        return values["avg_time"]
-    return values.get("by_type", {}).get(filter_type, {}).get("avg_time")
+        return values
+    return values.get("by_type", {}).get(filter_type)
+
+
+def progression_average(bucket, difficulty, filter_type="All Types", metric="per_hack"):
+    """Return hours per hack/exit; the UI converts per-exit hours to minutes."""
+    if metric not in {"per_hack", "per_exit"}:
+        raise ValueError(f"Unknown time metric: {metric}")
+    values = progression_values(bucket, difficulty, filter_type)
+    if not values:
+        return None
+    return values.get("avg_time" if metric == "per_hack" else "avg_time_per_exit")
+
+
+def progression_series(progression, difficulty, filter_type="All Types", *,
+                       metric="per_exit", smoothing=0):
+    """Trailing calendar-bucket average, weighted by hacks or known exits.
+
+    A missing current observation stays a gap, even if older samples exist.
+    Only supplied (already period-filtered) buckets participate. Early windows
+    use available buckets; no future values or out-of-range history leak in.
+    """
+    if smoothing not in (0, 3, 5):
+        raise ValueError("Smoothing must be off, 3 periods or 5 periods")
+    buckets = [progression[key] for key in sorted(progression)]
+    raw = [progression_average(bucket, difficulty, filter_type, metric) for bucket in buckets]
+    if not smoothing:
+        return raw
+    result = []
+    for index, observation in enumerate(raw):
+        if observation is None:
+            result.append(None)
+            continue
+        numerator = denominator = 0
+        for bucket in buckets[max(0, index - smoothing + 1):index + 1]:
+            values = progression_values(bucket, difficulty, filter_type)
+            if not values:
+                continue
+            if metric == "per_exit":
+                numerator += values.get("exit_hours", 0)
+                denominator += values.get("exits", 0)
+            else:
+                numerator += values["total_hours"]
+                denominator += values["count"]
+        result.append(numerator / denominator if denominator else None)
+    return result
+
+
+def excluded_exit_count(progression, filter_type="All Types"):
+    """Timed, dated completions excluded only from the per-exit view."""
+    return sum(
+        (progression_values(bucket, difficulty, filter_type) or {}).get("excluded_exit_count", 0)
+        for bucket in progression.values() for difficulty in bucket.get("difficulties", {})
+    )
 
 
 def timeline_label_indices(count, width, minimum_spacing=90):

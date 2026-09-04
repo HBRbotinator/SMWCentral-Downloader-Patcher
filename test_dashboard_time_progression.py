@@ -9,6 +9,7 @@ from unittest.mock import patch
 from dashboard_time_progression import (
     DATE_FILTER_DAYS, build_time_progression, completion_in_period,
     period_start, progression_average, timeline_label_indices,
+    TimeChartViewState,
 )
 
 ROOT = Path(__file__).parent
@@ -115,6 +116,7 @@ class DashboardTimeProgressionTest(unittest.TestCase):
         chart = build_time_progression(rows, 'last_month', TODAY)
         class Canvas:
             def __init__(self): self.labels = []; self.points = []
+            def delete(self, *_args): self.labels.clear(); self.points.clear()
             def update_idletasks(self): pass
             def winfo_width(self): return 500
             def winfo_height(self): return 520
@@ -122,7 +124,7 @@ class DashboardTimeProgressionTest(unittest.TestCase):
             def create_line(self, *args, **kwargs): pass
             def create_oval(self, *args, **kwargs): self.points.append(args)
         canvas = Canvas()
-        instance = module.DashboardCharts(None, {'time_progression': chart, 'time_progression_bucket': 'Day'})
+        instance = module.DashboardCharts(None, {'time_progression': chart, 'time_progression_bucket': 'Day'}, TimeChartViewState(metric='per_hack'))
         with patch.object(module, 'get_colors', return_value={}):
             instance._draw_time_progression_lines(canvas, 'kaizo')
         self.assertEqual(30, len(canvas.points))

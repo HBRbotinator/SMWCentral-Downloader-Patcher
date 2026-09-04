@@ -17,6 +17,7 @@ from ui_constants import get_page_padding
 from .analytics import DashboardAnalytics
 from .widgets import DashboardMetrics
 from .charts import DashboardCharts
+from dashboard_time_progression import TimeChartViewState
 
 class DashboardPage:
     """Simplified dashboard page with proper scrolling"""
@@ -29,6 +30,7 @@ class DashboardPage:
         self.analytics = DashboardAnalytics(self.data_manager)
         self.analytics_data = {}
         self.date_filter = "all_time"
+        self.time_chart_view_state = TimeChartViewState()
         
         # Scrolling components
         self.canvas = None
@@ -145,7 +147,7 @@ class DashboardPage:
         metrics = DashboardMetrics(self.scrollable_frame, self.analytics_data, self)
         # Set the current filter on the metrics instance
         metrics.current_filter = self.date_filter
-        charts = DashboardCharts(self.scrollable_frame, self.analytics_data)
+        charts = DashboardCharts(self.scrollable_frame, self.analytics_data, self.time_chart_view_state)
         
         # Create sections with proper spacing
         metrics.create_filter_section()

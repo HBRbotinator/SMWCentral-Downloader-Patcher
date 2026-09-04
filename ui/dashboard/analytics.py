@@ -14,6 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from dashboard_time_progression import (
     DATE_FILTER_LABELS, build_time_progression, completion_in_period,
+    known_exit_count, positive_duration_seconds,
 )
 
 
@@ -88,14 +89,7 @@ class DashboardAnalytics:
         # Calculate total exits from current (non-obsolete) hacks only
         total_exits = 0
         for hack_id, hack_data in self.current_data.items():
-            exits = hack_data.get('exits', 0)
-            if isinstance(exits, str):
-                try:
-                    exits = int(exits)
-                except (ValueError, TypeError):
-                    exits = 0
-            if exits > 0:
-                total_exits += exits
+            total_exits += known_exit_count(hack_data) or 0
         
         # Calculate completion rate using current (non-obsolete) hacks only
         total_completed_current = 0
@@ -210,87 +204,25 @@ class DashboardAnalytics:
             self.analytics_data['favorite_type'] = max_type[0]
     
     def _calculate_time_metrics(self):
-        """Calculate time-based performance metrics"""
-        total_time = 0
-        completed_count = 0
-        
-        # Separate tracking for exit calculations
-        exit_based_total_time = 0
-        exit_based_total_exits = 0
-        
-        # Calculate completed exits SEPARATELY from time metrics (don't require time_to_beat)
-        completed_exits = 0
-        for hack_id, hack_data in self.all_data.items():
-            if not hack_data.get('completed', False):
+        """Use the same recorded-time/known-exit rules as the progression chart."""
+        total_time = exit_time = 0
+        completed_count = timed_exits = completed_exits = 0
+        for record in self.all_data.values():
+            if not record.get("completed") or not self._should_include_hack(record):
                 continue
-                
-            # Only include if it passes the date filter
-            if not self._should_include_hack(hack_data):
+            exits = known_exit_count(record)
+            completed_exits += exits or 0
+            duration = positive_duration_seconds(record)
+            if duration is None:
                 continue
-                
-            # Count exits from ALL completed hacks (regardless of time_to_beat)
-            exits = hack_data.get('exits', 0)
-            if isinstance(exits, str):
-                try:
-                    exits = int(exits)
-                except (ValueError, TypeError):
-                    exits = 0
-            
-            if exits > 0:
-                completed_exits += exits
-        
-        # Now calculate time-based metrics (these DO require time_to_beat > 0)
-        for hack_id, hack_data in self.all_data.items():
-            if not hack_data.get('completed', False):
-                continue
-                
-            # Only include if it passes the date filter
-            if not self._should_include_hack(hack_data):
-                continue
-                
-            time_to_beat = hack_data.get('time_to_beat', 0)
-            exits = hack_data.get('exits', 0)
-            
-            # Convert to numeric
-            if isinstance(time_to_beat, str):
-                try:
-                    time_to_beat = float(time_to_beat)
-                except (ValueError, TypeError):
-                    time_to_beat = 0
-            
-            if isinstance(exits, str):
-                try:
-                    exits = int(exits)
-                except (ValueError, TypeError):
-                    exits = 0
-            
-            # Only include in time calculations if hack has time_to_beat data
-            if time_to_beat > 0:
-                total_time += time_to_beat
-                completed_count += 1
-                
-                # For exit calculations: if hack has both time and exit data, use actual exits
-                # If hack has time but no exit data (exits = 0), use a reasonable default of 50 exits
-                # This allows time-based hacks to contribute to avg_time_per_exit calculations
-                if exits > 0:
-                    exit_based_total_time += time_to_beat
-                    exit_based_total_exits += exits
-                else:
-                    # Use default exit count for completed hacks with time but no exit data
-                    default_exits = 50  # Reasonable average for most SMW hacks
-                    exit_based_total_time += time_to_beat
-                    exit_based_total_exits += default_exits
-        
-        # Store completed exits (calculated independently of time_to_beat)
-        self.analytics_data['completed_exits'] = completed_exits
-        
-        # Calculate averages (convert to hours)
-        if completed_count > 0:
-            self.analytics_data['avg_time_per_hack'] = (total_time / completed_count) / 3600
-            
-            # Use only time and exits from hacks that have both pieces of data
-            if exit_based_total_exits > 0:
-                self.analytics_data['avg_time_per_exit'] = (exit_based_total_time / exit_based_total_exits) / 3600
+            total_time += duration
+            completed_count += 1
+            if exits is not None:
+                exit_time += duration
+                timed_exits += exits
+        self.analytics_data["completed_exits"] = completed_exits
+        self.analytics_data["avg_time_per_hack"] = total_time / completed_count / 3600 if completed_count else 0.0
+        self.analytics_data["avg_time_per_exit"] = exit_time / timed_exits / 3600 if timed_exits else 0.0
     
     def _calculate_streaks(self):
         """Calculate completion streaks"""

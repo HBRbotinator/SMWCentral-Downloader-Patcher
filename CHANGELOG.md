@@ -7,6 +7,14 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Interactive Dashboard clear-time trends
+
+- Default the difficulty chart to recorded time per known exit; retain the time-per-hack view and report excluded unknown exit counts.
+- Make the difficulty legend interactive, with hide/show controls, rescaling and a Show all action.
+- Add optional trailing 3-/5-calendar-period averages, weighted by exits or hacks, retaining raw points and missing-data gaps.
+- Preserve chart choices during Dashboard refreshes and remove assumed 50-exit values from the summary calculation.
+- Document chart interpretation and clarify that ROM Layout Audit is an optional, read-only organization check.
+
 ### Data Management workspace
 
 - Add Data navigation with separate ROM and GiganticBucket import setup; keep combined imports under Advanced import options.

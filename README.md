@@ -16,6 +16,7 @@ Developer documentation: [CONTRIBUTING.md](CONTRIBUTING.md), [Build and Release 
 - [📥 Download & Install](#-download--install)
 - [🚀 How to Use](#-how-to-use)
 - [🗂️ Planner](PLANNER.md)
+- [Dashboard clear-time trends](DASHBOARD.md)
 - [🛠️ Troubleshooting](#️-troubleshooting)
 - [📝 What You Need](#-what-you-need)
 - [📝 Changelog](#-changelog)
@@ -157,6 +158,7 @@ When separate review items are explicitly resolved to the same **new** SMWC Coll
    - Retained modern ROM rows preserve explicit SMWC submission provenance in the plan, so an old/source ROM does not silently become attributed to the newly selected numeric submission after a future migration
    - Existing explicit per-ROM provenance is preserved; contradictory provenance for the same retained path fails closed instead of being guessed
 12. **Audit and preview ROM library organization**: Click **Audit ROM Layout...** to compare recorded modern ROM assets with the configured output directory and type/difficulty folder layout
+   - This is an optional organization check, not a requirement that all Collection ROMs live in the Output Folder. A deliberately external ROM (including a same-ID update placed alongside its original) may be reported as **Would move**; leave it where it is unless you explicitly want to reorganize it
    - The audit is read-only: it does not move, rename, copy, delete, hash, or modify ROM/save files or Collection metadata
    - Assets already in place and safe future move candidates are shown separately from missing files, occupied targets, target collisions, and metadata/provenance review states
    - A ROM becomes **Would move** only when modern `files[]` contains exact SHA-256 + byte-size identity and the current non-symlink source still matches its recorded size
@@ -596,6 +598,14 @@ See [PLANNER.md](PLANNER.md) for the complete workflow, persistence contract,
 filter behavior, compatibility rules, and the intended filter-driven Wheel
 design.
 <!-- planner-guide:end -->
+
+## Dashboard clear-time trends
+
+The difficulty chart defaults to **Time per exit**, with **Time per hack** also
+available. Click legend entries to hide/show difficulties, or choose a 3-/5-period
+trailing average under **Smoothing**. Raw points and missing-data gaps remain
+visible, and the calculations follow the selected Dashboard period and Type.
+See [DASHBOARD.md](DASHBOARD.md) for weighting, exclusions and view-state behavior.
 
 <!-- save-data-sync-guide:start -->
 ## Data Management

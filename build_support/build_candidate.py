@@ -49,6 +49,7 @@ BUILD_DIR = ROOT / "build" / "pyinstaller"
 
 _SUPPORT_FILES = (
     "README.md",
+    "DASHBOARD.md",
     "LICENSE",
     "config.template.json",
     "product_manifest.json",
