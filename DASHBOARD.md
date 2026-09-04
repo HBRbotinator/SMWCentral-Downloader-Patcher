@@ -39,18 +39,39 @@ interaction.
 
 ## Smoothing
 
-Smoothing starts **Off**. Choose a **3-day / 5-day average** for daily periods,
-or a **3-month / 5-month average** for monthly periods.
+Smoothing starts **Off**, which connects the actual day/month averages. Choose
+**Light**, **Medium** or **Strong** for exponential smoothing. These replace the
+old calendar-window averages, which often had too few observations to smooth
+sparse histories effectively.
 
-The line uses a trailing window ending at each observed date bucket. It combines
-the underlying time and exit totals (or time and hack counts), rather than
-averaging bucket averages. Early windows use the available in-period data;
-future dates and records outside the selected Dashboard period never contribute.
+Each difficulty's first observed average seeds its trend. Each later observed
+average updates it as `trend = alpha * current + (1 - alpha) * previous trend`.
+Light uses alpha 0.50, Medium 0.30 and Strong 0.15. Stronger smoothing responds
+more slowly to changes; it can help reveal the broader trend but can also lag a
+real improvement or setback. It does not guarantee a monotonically rising or
+falling line, nor is it a fitted skill rating.
 
-Faint dots preserve the actual unsmoothed bucket averages. A period without a
-valid observation stays a gap; neither the raw nor smoothed line connects across
-it. Smoothing is a display calculation only, not interpolation, an estimate of
-missing completions, or a change to your saved history.
+Smoothing operates on the displayed day/month averages. Each observed bucket
+updates the trend once, regardless of the number of hacks within it. The raw
+bucket averages retain their original exit weighting (or per-hack averaging);
+neither the summary cards nor saved completion records are changed.
+
+Only observations within the selected Dashboard period and Type participate.
+Changing the period starts the calculation from its first eligible observation;
+no earlier history or future observation leaks into the trend. A day/month with
+no eligible observation neither updates nor resets the smoother. The next
+observation blends with the previous trend even after a long interval.
+
+The x-axis keeps actual calendar spacing. Both raw and smoothed lines connect
+successive observations; **dashed segments** distinguish intervals containing
+one or more missing periods for that difficulty and metric. These connectors
+are visual guides, not measurements of what happened in the gap. No artificial
+data points or zero-valued completions are inserted, and the lines are not
+extended before the first or after the last observation.
+
+Faint dots preserve the unsmoothed averages when smoothing is enabled. A single
+observation appears as a point, without a connecting line. Axis labels use
+ordinary decimal numbers (for example, `180m` rather than `1.8e+02m`).
 
 ## View choices
 

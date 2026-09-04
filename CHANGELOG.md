@@ -7,6 +7,13 @@ All notable changes to SMWC Downloader & Patcher will be documented in this file
 
 ## [Unreleased]
 
+### Connected Dashboard trends
+
+- Restore lines between successive difficulty observations in both time metrics, with dashed connectors across missing periods and no invented data points.
+- Replace short calendar-window smoothing with Light, Medium and Strong observation-based exponential smoothing, retaining raw averages and actual calendar spacing.
+- Display ordinary decimal time-axis labels instead of scientific notation.
+- Add sparse-history, smoothing-strength, gap, filter and rendering regressions without changing saved statistics or raw averaging rules.
+
 ### Interactive Dashboard clear-time trends
 
 - Default the difficulty chart to recorded time per known exit; retain the time-per-hack view and report excluded unknown exit counts.

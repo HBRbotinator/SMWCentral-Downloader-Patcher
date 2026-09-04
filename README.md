@@ -602,9 +602,11 @@ design.
 ## Dashboard clear-time trends
 
 The difficulty chart defaults to **Time per exit**, with **Time per hack** also
-available. Click legend entries to hide/show difficulties, or choose a 3-/5-period
-trailing average under **Smoothing**. Raw points and missing-data gaps remain
-visible, and the calculations follow the selected Dashboard period and Type.
+available. Click legend entries to hide/show difficulties, or choose **Light**,
+**Medium** or **Strong** exponential smoothing. Lines connect successive
+observations, with dashed connectors across periods without data. Faint raw
+points remain visible when smoothing is enabled, and calculations follow the
+selected Dashboard period and Type without changing recorded statistics.
 See [DASHBOARD.md](DASHBOARD.md) for weighting, exclusions and view-state behavior.
 
 <!-- save-data-sync-guide:start -->

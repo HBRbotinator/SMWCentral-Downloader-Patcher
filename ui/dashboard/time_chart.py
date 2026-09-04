@@ -1,4 +1,5 @@
 """Interactive, read-only completion-time chart for the Dashboard."""
+import math
 import tkinter as tk
 from tkinter import ttk
 
@@ -16,6 +17,18 @@ DIFFICULTY_COLORS = {
     "Master": "diff_master", "Grandmaster": "diff_grandmaster",
 }
 METRIC_LABELS = {"Time per exit": "per_exit", "Time per hack": "per_hack"}
+SMOOTHING_LABELS = {"Off": "off", "Light": "light", "Medium": "medium", "Strong": "strong"}
+
+
+def format_time_tick(value, unit, step):
+    """Readable decimal labels, including small rates, without scientific notation."""
+    if value == 0:
+        return f"0{unit}"
+    places = max(0, 1 - math.floor(math.log10(step)))
+    label = f"{value:,.{places}f}"
+    if places:
+        label = label.rstrip("0").rstrip(".")
+    return label + unit
 
 
 class TimeProgressionChart:
@@ -69,8 +82,7 @@ class TimeProgressionChart:
 
         trend_controls = ttk.Frame(frame)
         trend_controls.pack(fill="x", pady=(0, 8))
-        bucket = self.data.get("time_progression_bucket", "Month").lower()
-        self._smoothing_values = {"Off": 0, f"3-{bucket} average": 3, f"5-{bucket} average": 5}
+        self._smoothing_values = SMOOTHING_LABELS
         trend_label = next(label for label, value in self._smoothing_values.items() if value == self.state.smoothing)
         ttk.Label(trend_controls, text="Smoothing:").pack(side="left", padx=(0, 5))
         self.smoothing_var = tk.StringVar(master=frame, value=trend_label)
@@ -155,11 +167,10 @@ class TimeProgressionChart:
             text += f"Excluded: {excluded} timed completion(s) with missing/invalid exit counts. "
         else:
             text = "Hours per hack = total recorded time ÷ number of timed completions. "
-        if self.state.smoothing:
-            unit = self.data.get("time_progression_bucket", "Month").lower()
-            text += (f"Line: trailing {self.state.smoothing}-{unit} average; early windows use available data. "
-                     "Faint dots: actual period averages. ")
-        text += "Dated completions only; missing periods stay gaps."
+        if self.state.smoothing != "off":
+            text += (f"Line: {self.state.smoothing} exponential smoothing of observed period averages. "
+                     "Stronger smoothing reacts more slowly. Faint dots: actual averages. ")
+        text += "Dated completions only. Dashed lines connect observations across periods without data; they are not measured values."
         return text
 
     def _redraw(self, _event=None):
@@ -174,6 +185,7 @@ class TimeProgressionChart:
             return  # Mapping/resizing triggers Configure; no orphan retry timers.
         filter_type = self.state.filter_type if filter_type is None else filter_type
         metric, smoothing = self.state.metric, self.state.smoothing
+        smoothed = smoothing != "off"
         colors = self.colors
         names = self._difficulties(filter_type)
         visible = [name for name in names if name not in self.state.hidden_difficulties]
@@ -203,7 +215,7 @@ class TimeProgressionChart:
             value = max_time * index / 5
             y = top + chart_height * (1 - index / 5)
             canvas.create_line(left, y, left + chart_width, y, fill=colors.get("border"), dash=(2, 2))
-            canvas.create_text(left - 10, y, text=f"{value:.2g}{unit}", anchor="e", font=("Segoe UI", 9), fill=colors.get("text_secondary"))
+            canvas.create_text(left - 10, y, text=format_time_tick(value, unit, max_time / 5), anchor="e", font=("Segoe UI", 9), fill=colors.get("text_secondary"))
         keys = sorted(self.progression)
         step = chart_width / max(1, len(keys) - 1)
 
@@ -218,22 +230,28 @@ class TimeProgressionChart:
                                anchor="n", font=("Segoe UI", 9), fill=colors.get("text_secondary"))
         for name, values in lines.items():
             color = self._color(name)
-            if smoothing:
+            if smoothed:
                 for index, value in enumerate(raw[name]):
                     if value is not None:
                         x, y = point(index, value)
                         canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=color, outline="", stipple="gray50", tags=("time_raw", name))
             previous = None
+            previous_index = None
             for index, value in enumerate(values):
                 if value is None:
-                    previous = None  # Never bridge an unobserved day/month.
                     continue
                 x, y = point(index, value)
                 if previous is not None:
-                    canvas.create_line(*previous, x, y, fill=color, width=3, tags=("time_line", name))
-                radius = 3 if smoothing else 4
+                    gap = index - previous_index > 1
+                    canvas.create_line(
+                        *previous, x, y, fill=color, width=3,
+                        dash=(6, 4) if gap else (),
+                        tags=("time_line", name, "time_gap" if gap else "time_observed"),
+                    )
+                radius = 3 if smoothed else 4
                 canvas.create_oval(x - radius, y - radius, x + radius, y + radius,
                                    fill=color, outline=colors.get("chart_bg"), width=1, tags=("time_point", name))
                 previous = (x, y)
+                previous_index = index
         axis_title = "Minutes per exit" if metric == "per_exit" else "Hours per hack"
         canvas.create_text(15, height // 2, text=axis_title, angle=90, font=("Segoe UI", 10), fill=colors.get("text_secondary"))

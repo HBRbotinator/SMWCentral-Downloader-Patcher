@@ -16,12 +16,15 @@ DATE_FILTER_LABELS = {
     "3_months": "Last 3 Months", "6_months": "Last 6 Months", "1_year": "Last Year",
 }
 
+# Weight of the current observed bucket, not a calendar-time decay rate.
+SMOOTHING_ALPHA = {"light": 0.5, "medium": 0.3, "strong": 0.15}
+
 
 @dataclass
 class TimeChartViewState:
     """Session-only display choices; never changes recorded completion data."""
     metric: str = "per_exit"
-    smoothing: int = 0
+    smoothing: str = "off"
     filter_type: str = "All Types"
     hidden_difficulties: set[str] = field(default_factory=set)
 
@@ -50,7 +53,7 @@ def known_exit_count(record):
 
 
 def _time_totals(completions):
-    """Keep numerators/denominators so smoothing never averages averages."""
+    """Aggregate recorded durations once, retaining the underlying totals."""
     total_hours = sum(row[0] for row in completions)
     with_exits = [row for row in completions if row[2] is not None]
     exit_hours = sum(row[0] for row in with_exits)
@@ -167,36 +170,31 @@ def progression_average(bucket, difficulty, filter_type="All Types", metric="per
 
 
 def progression_series(progression, difficulty, filter_type="All Types", *,
-                       metric="per_exit", smoothing=0):
-    """Trailing calendar-bucket average, weighted by hacks or known exits.
+                       metric="per_exit", smoothing="off"):
+    """Exponentially smooth observed bucket averages, keeping empty slots None.
 
-    A missing current observation stays a gap, even if older samples exist.
-    Only supplied (already period-filtered) buckets participate. Early windows
-    use available buckets; no future values or out-of-range history leak in.
+    The first observation seeds the trend. Each subsequent observation blends
+    with the previous trend; missing calendar slots neither update nor reset it.
+    Only supplied, period-filtered observations participate. This changes the
+    display series, never the underlying exit-weighted or per-hack averages.
     """
-    if smoothing not in (0, 3, 5):
-        raise ValueError("Smoothing must be off, 3 periods or 5 periods")
+    if smoothing not in ("off", *SMOOTHING_ALPHA):
+        raise ValueError("Smoothing must be off, light, medium or strong")
+    if metric not in {"per_hack", "per_exit"}:
+        raise ValueError(f"Unknown time metric: {metric}")
     buckets = [progression[key] for key in sorted(progression)]
     raw = [progression_average(bucket, difficulty, filter_type, metric) for bucket in buckets]
-    if not smoothing:
+    if smoothing == "off":
         return raw
+    alpha = SMOOTHING_ALPHA[smoothing]
     result = []
-    for index, observation in enumerate(raw):
+    previous = None
+    for observation in raw:
         if observation is None:
             result.append(None)
             continue
-        numerator = denominator = 0
-        for bucket in buckets[max(0, index - smoothing + 1):index + 1]:
-            values = progression_values(bucket, difficulty, filter_type)
-            if not values:
-                continue
-            if metric == "per_exit":
-                numerator += values.get("exit_hours", 0)
-                denominator += values.get("exits", 0)
-            else:
-                numerator += values["total_hours"]
-                denominator += values["count"]
-        result.append(numerator / denominator if denominator else None)
+        previous = observation if previous is None else alpha * observation + (1 - alpha) * previous
+        result.append(previous)
     return result
 
 
